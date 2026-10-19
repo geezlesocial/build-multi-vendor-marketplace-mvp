@@ -1,0 +1,14 @@
+# Affiliate program
+
+Affiliate applications are pending until an administrator approves them. Approved affiliates receive a stable referral code and can create script-free internal product/store links. Link targets are validated as same-site paths; arbitrary redirects and affiliate-submitted HTML/JavaScript are rejected.
+
+A click requires explicit consent (`consent: true` for the API or `?consent=1` for the redirect), then creates a server-side record containing only a hashed signed-attribution token, link/product scope, a hashed request IP, an optional hashed visitor key, and an expiry. The checkout API verifies the signature and server record, rejects self-referrals, requires the referred product/store to be in the order, and consumes the click only after an authoritative paid/COD-collected event. A browser query parameter is not conversion proof. The global admin attribution rule and window are persisted in `MarketplaceSettings`.
+
+Paid orders create idempotent `CommissionLedger` entries with a snapshot of the rule and eligible item base. COD entries are created only after an authorized cash-collection action. The default is `AFFILIATE_DEFAULT_BASIS_POINTS` (500 = 5%) and administrators can add product/category rules with effective dates. Commission base is the item subtotal from the authoritative order line; tax, shipping, tips, and seller payouts are not included. Refund, chargeback, and cancellation events create append-only negative reversal entries; partial refunds are prorated in integer minor units and duplicate event IDs are ignored.
+
+Affiliate commissions are a platform-funded liability. This project does not implement seller split payouts, escrow, money transmission, or automatic affiliate settlement. Affiliates may request a payout only after the admin marks ledger entries payable and configures the funding policy/threshold. An administrator must approve and manually record a confirmed payout reference; the API refuses to mark a payout paid without that reference and configured funding. The owner must approve a payout rail, identity/tax process, jurisdiction, threshold, and budget before any real payout.
+
+Important routes: `/api/affiliate/apply`, `/api/affiliate/links`, `/api/affiliate/clicks/:code`, `/r/:code`, `/api/affiliate/commissions`, `/api/affiliate/payouts`, `/api/admin/affiliate-settings`, `/api/admin/affiliate-rules`, `/api/admin/affiliates`, `/api/admin/affiliate-commissions`, `/api/admin/affiliate-adjustments`, and `/api/admin/affiliate-payouts`.
+
+The signing secret is server-only (`AFFILIATE_SIGNING_SECRET`, falling back to the password pepper for local development). It is never stored in the database or returned to browsers. The generated link/card contains only a same-site redirect and no script, iframe, or affiliate-supplied HTML.
+

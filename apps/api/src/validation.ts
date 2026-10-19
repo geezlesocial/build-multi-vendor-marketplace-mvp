@@ -1,0 +1,12 @@
+import { z } from 'zod';
+
+export const registerSchema = z.object({ email: z.string().email(), password: z.string().min(10).max(128), name: z.string().trim().min(2).max(100) });
+export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1).max(128) });
+export const addressSchema = z.object({ line1: z.string().trim().min(2).max(150), line2: z.string().trim().max(150).optional(), city: z.string().trim().min(2).max(80), region: z.string().trim().min(2).max(80), postalCode: z.string().trim().min(2).max(20), country: z.string().trim().length(2) });
+export const checkoutSchema = z.object({ buyerEmail: z.string().email(), buyerName: z.string().trim().min(2).max(100), address: addressSchema, method: z.enum(['STRIPE', 'PAYPAL', 'COD']), affiliateToken: z.string().min(20).max(200).optional() });
+export const productSchema = z.object({ name: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(5000), priceMinor: z.number().int().positive(), categoryId: z.string().cuid().nullable().optional(), stock: z.number().int().nonnegative(), barcode: z.string().trim().max(80).optional() });
+export const variantSchema = z.object({ name: z.string().trim().min(1).max(120), sku: z.string().trim().min(2).max(80), priceMinor: z.number().int().positive(), stock: z.number().int().nonnegative(), imageUrl: z.string().url().max(2000).optional() });
+export const posSchema = z.object({ items: z.array(z.object({ productId: z.string().cuid(), quantity: z.number().int().positive() })).min(1), register: z.string().trim().min(1).max(50), buyerName: z.string().trim().max(100).default('POS Customer') });
+export const settingSchema = z.object({ multiVendorEnabled: z.boolean().optional(), liveShoppingEnabled: z.boolean().optional(), method: z.enum(['STRIPE', 'PAYPAL', 'COD', 'POS']).optional(), enabled: z.boolean().optional(), reason: z.string().trim().max(500).optional() });
+export const liveSessionSchema = z.object({ title: z.string().trim().min(3).max(160), description: z.string().trim().max(5000).optional(), coverImageUrl: z.string().url().max(2000).optional(), scheduledAt: z.string().datetime().optional(), timezone: z.string().trim().min(1).max(80), productIds: z.array(z.string().cuid()).max(50).default([]), featuredProductId: z.string().cuid().optional() });
+export const liveReportSchema = z.object({ reason: z.string().trim().min(3).max(500) });

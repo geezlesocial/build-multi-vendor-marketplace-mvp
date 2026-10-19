@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+coverage/
+playwright-report/
+test-results/
+uploads/
+*.log
+*.tsbuildinfo
+
+# Runtime CMS uploads
+/apps/api/storage/content/

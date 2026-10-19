@@ -1,0 +1,1319 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  BUYER
+  SELLER
+  CASHIER
+  ADMIN
+  CONTENT_EDITOR
+}
+
+enum SellerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum ProductStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum PaymentMethod {
+  STRIPE
+  PAYPAL
+  COD
+  POS
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  FULFILLED
+  CANCELLED
+}
+
+enum LiveSessionStatus {
+  DRAFT
+  SCHEDULED
+  STARTING
+  LIVE
+  PAUSED
+  ENDED
+  CANCELLED
+  FAILED
+}
+
+enum LiveReportStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+}
+
+enum ContentStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ContentPageType {
+  STANDARD
+  ABOUT
+  TERMS
+  PRIVACY
+  POLICY
+  HELP
+  LANDING
+}
+
+enum NavigationPlacement {
+  NONE
+  HEADER
+  FOOTER
+  BOTH
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+  CAPTION
+  DOCUMENT
+}
+
+enum MediaScanStatus {
+  QUARANTINED
+  APPROVED
+  REJECTED
+}
+
+enum AffiliateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAUSED
+  TERMINATED
+}
+enum AffiliateAttributionRule {
+  LAST_VALID_CLICK
+  FIRST_VALID_CLICK
+}
+enum CommissionEntryType {
+  EARNED
+  REVERSAL
+  ADJUSTMENT
+}
+enum AffiliateAdjustmentType {
+  REFUND
+  CHARGEBACK
+  CANCELLATION
+}
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  REVERSED
+  PAYABLE
+  PAID
+}
+enum AffiliatePayoutStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PAID
+}
+enum WholesaleStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  WEB_PUSH
+  ANDROID_PUSH
+}
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+  SUPPRESSED
+}
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  PAUSED
+  ARCHIVED
+}
+enum ConversationStatus {
+  OPEN
+  CLOSED
+  BLOCKED
+}
+
+enum TaxonomyStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum ApprovalPolicy {
+  MANUAL
+  AUTOMATIC
+}
+
+enum PayoutMethodType {
+  MANUAL_BANK
+  MANUAL_EWALLET
+  STRIPE_CONNECT
+  PAYPAL_PAYOUTS
+}
+
+enum PayoutMethodStatus {
+  NOT_STARTED
+  ACTION_REQUIRED
+  READY
+  DISABLED
+}
+
+enum SellerPayoutStatus {
+  PENDING
+  ELIGIBLE
+  HELD
+  REQUESTED
+  APPROVED
+  REJECTED
+  SUBMITTED
+  PROCESSING
+  PAID
+  FAILED
+  RETURNED
+  REVERSED
+  CANCELLED
+}
+
+enum SellerPayoutLedgerType {
+  SALE_FUNDING
+  REFUND
+  REVERSAL
+  PLATFORM_FEE
+  AFFILIATE_FUNDING
+  ADJUSTMENT
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  name         String
+  role         Role         @default(BUYER)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  sessions     Session[]
+  seller       Seller?
+  auditLogs    AuditLog[]
+  posSessions  POSSession[]
+  orders       ParentOrder[] @relation("BuyerOrders")
+  staffMemberships SellerStaff[]
+  cart         Cart?
+  liveReports  LiveSessionReport[]
+  reviewedLiveReports LiveSessionReport[] @relation("ReviewedLiveReports")
+  authoredBlogPosts BlogPost[] @relation("BlogPostAuthors")
+  editedBlogPosts BlogPost[] @relation("BlogPostEditors")
+  editedContentPages ContentPage[]
+  blogRevisions BlogPostRevision[]
+  pageRevisions ContentPageRevision[]
+  uploadedMedia MediaAsset[]
+  contentAuditPreviews ContentPreviewToken[]
+  slugRedirects SlugRedirect[]
+  favorites Favorite[]
+  affiliateProfile AffiliateProfile?
+  wholesaleApplication WholesaleApplication?
+  notifications Notification[]
+  notificationPreferences NotificationPreference[]
+  pushSubscriptions PushSubscription[]
+  conversationsAsBuyer Conversation[] @relation("ConversationBuyer")
+  sentMessages Message[]
+  aiUsageLogs AiUsageLog[]
+  createdCampaigns MarketingCampaign[]
+  emailOutbox EmailOutbox[]
+  platformBrandingRevisions PlatformBrandingRevision[]
+  storeThemeRevisions StoreThemeRevision[]
+  sellerAdminNotes SellerAdminNote[]
+  sellerModerationEvents SellerModerationEvent[]
+  payoutMethodsCreated SellerPayoutMethod[] @relation("PayoutMethodCreator")
+  payoutLedgerEntriesCreated SellerPayoutLedgerEntry[] @relation("PayoutLedgerCreator")
+  payoutRequestsCreated SellerPayout[] @relation("PayoutRequester")
+  payoutReviews SellerPayout[] @relation("PayoutReviewer")
+  brandingUpdates PlatformBranding[] @relation("BrandingUpdater")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, expiresAt])
+}
+
+model Seller {
+  id        String       @id @default(cuid())
+  userId    String       @unique
+  status    SellerStatus @default(PENDING)
+  reason    String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  user      User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  store     Store?
+  products  Product[]
+  staff     SellerStaff[]
+  orders    SellerOrder[]
+  posSessions POSSession[]
+  liveSessions LiveSession[]
+  affiliateLinks AffiliateLink[]
+  conversations Conversation[] @relation("ConversationSeller")
+  adminNotes SellerAdminNote[]
+  moderationEvents SellerModerationEvent[]
+  payoutMethods SellerPayoutMethod[]
+  payoutLedgerEntries SellerPayoutLedgerEntry[]
+  payouts SellerPayout[]
+}
+
+model Store {
+  id          String @id @default(cuid())
+  sellerId    String @unique
+  name        String
+  description String?
+  slug        String @unique @default(cuid())
+  logoMediaId String?
+  bannerMediaId String?
+  contactJson Json?
+  policyLinksJson Json?
+  themeDraftJson Json?
+  themePublishedJson Json?
+  themePublishedAt DateTime?
+  seller      Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  logoMedia MediaAsset? @relation("StoreLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
+  bannerMedia MediaAsset? @relation("StoreBanner", fields: [bannerMediaId], references: [id], onDelete: SetNull)
+  themeRevisions StoreThemeRevision[]
+}
+
+model SellerStaff {
+  id       String @id @default(cuid())
+  sellerId String
+  userId   String
+  canPos   Boolean @default(true)
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@unique([sellerId, userId])
+}
+
+model Category {
+  id       String @id @default(cuid())
+  name     String @unique
+  slug     String @unique
+  description String?
+  imageUrl String?
+  status TaxonomyStatus @default(ACTIVE)
+  displayOrder Int @default(0)
+  parentId String?
+  parent Category? @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+  affiliateCommissionRules AffiliateCommissionRule[]
+  @@index([parentId, status, displayOrder])
+}
+
+model Brand {
+  id          String @id @default(cuid())
+  name        String @unique
+  slug        String @unique
+  description String?
+  imageUrl    String?
+  status      TaxonomyStatus @default(ACTIVE)
+  displayOrder Int @default(0)
+  products    Product[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([status, displayOrder])
+}
+
+model Product {
+  id          String        @id @default(cuid())
+  sellerId    String?
+  categoryId  String?
+  brandId     String?
+  name        String
+  slug        String        @unique
+  description String
+  priceMinor  Int
+  currency    String        @default("USD")
+  status      ProductStatus @default(PENDING)
+  barcode     String?
+  wholesaleEnabled Boolean @default(false)
+  wholesaleMinQuantity Int?
+  wholesalePackSize Int?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  seller      Seller?       @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  category    Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  brand       Brand?        @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  images      ProductImage[]
+  inventory   Inventory?
+  cartItems   CartItem[]
+  orderItems OrderItem[]
+  liveSessionProducts LiveSessionProduct[]
+  variants ProductVariant[]
+  favorites Favorite[]
+  wholesaleTiers WholesaleTierPrice[]
+  affiliateLinks AffiliateLink[]
+  affiliateClicks AffiliateClick[]
+  affiliateCommissionRules AffiliateCommissionRule[]
+  campaignProducts MarketingCampaignProduct[]
+  conversationProducts Conversation[]
+  @@index([status, categoryId])
+  @@index([sellerId, status])
+  @@index([brandId, status])
+  @@index([barcode])
+}
+
+model ProductImage {
+  id        String @id @default(cuid())
+  productId String
+  url       String
+  alt       String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Inventory {
+  id        String @id @default(cuid())
+  productId String @unique
+  quantity  Int    @default(0)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+}
+
+model ProductVariant {
+  id          String   @id @default(cuid())
+  productId   String
+  name        String
+  sku         String   @unique
+  priceMinor  Int
+  currency    String   @default("USD")
+  stock       Int      @default(0)
+  status      ProductStatus @default(APPROVED)
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  cartItems   CartItem[]
+  orderItems  OrderItem[]
+  wholesaleTiers WholesaleTierPrice[]
+  @@index([productId, status])
+}
+
+model Cart {
+  id        String @id @default(cuid())
+  userId    String @unique
+  updatedAt DateTime @updatedAt
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+}
+
+model CartItem {
+  id        String @id @default(cuid())
+  cartId    String
+  productId String
+  quantity  Int
+  variantId String?
+  cart      Cart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  @@unique([cartId, productId])
+  @@index([variantId])
+}
+
+model ParentOrder {
+  id             String        @id @default(cuid())
+  orderNumber    String        @unique
+  buyerId        String?
+  buyerEmail     String
+  buyerName      String
+  addressJson    Json
+  totalMinor     Int
+  currency       String
+  status         OrderStatus   @default(PENDING)
+  createdAt      DateTime      @default(now())
+  affiliateClickId String? @unique
+  buyer          User?         @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: SetNull)
+  sellerOrders   SellerOrder[]
+  conversations Conversation[]
+  payment        Payment?
+  affiliateClick AffiliateClick? @relation("AffiliateConversion", fields: [affiliateClickId], references: [id], onDelete: SetNull)
+  affiliateAdjustments AffiliateAdjustment[]
+  @@index([buyerId, createdAt])
+}
+
+model SellerOrder {
+  id         String @id @default(cuid())
+  parentId   String
+  sellerId   String?
+  status     OrderStatus @default(PENDING)
+  totalMinor Int
+  parent     ParentOrder @relation(fields: [parentId], references: [id], onDelete: Restrict)
+  seller     Seller? @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  items      OrderItem[]
+  payoutLedgerEntries SellerPayoutLedgerEntry[]
+  @@index([sellerId, status])
+}
+
+model OrderItem {
+  id            String @id @default(cuid())
+  sellerOrderId String
+  productId     String
+  productName   String
+  unitPriceMinor Int
+  quantity      Int
+  variantId     String?
+  variantName   String?
+  sellerOrder   SellerOrder @relation(fields: [sellerOrderId], references: [id], onDelete: Restrict)
+  product       Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant       ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  affiliateCommissions CommissionLedger[]
+  affiliateAdjustments AffiliateAdjustment[]
+  payoutLedgerEntries SellerPayoutLedgerEntry[]
+  @@index([variantId])
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  parentId    String        @unique
+  method      PaymentMethod
+  status      PaymentStatus @default(PENDING)
+  providerRef String?
+  paidAt      DateTime?
+  parent      ParentOrder @relation(fields: [parentId], references: [id], onDelete: Restrict)
+  attempts    PaymentAttempt[]
+  @@index([method, status])
+}
+
+model PaymentAttempt {
+  id          String @id @default(cuid())
+  paymentId   String
+  provider    PaymentMethod
+  providerRef String?
+  idempotencyKey String?
+  status      PaymentStatus
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  @@unique([provider, providerRef])
+  @@index([idempotencyKey])
+}
+
+model ProcessedWebhookEvent {
+  id         String @id @default(cuid())
+  provider   PaymentMethod
+  eventId    String
+  receivedAt DateTime @default(now())
+  @@unique([provider, eventId])
+}
+
+model MarketplaceSettings {
+  id               String  @id @default("default")
+  multiVendorEnabled Boolean @default(true)
+  liveShoppingEnabled Boolean @default(false)
+  affiliateEnabled Boolean @default(false)
+  affiliateFundingConfigured Boolean @default(false)
+  affiliateAttributionRule AffiliateAttributionRule @default(LAST_VALID_CLICK)
+  affiliateAttributionWindowDays Int @default(30)
+  affiliateMinimumPayoutMinor Int @default(0)
+  codMaxMinor      Int?
+  sellerApprovalPolicy ApprovalPolicy @default(MANUAL)
+  productApprovalPolicy ApprovalPolicy @default(MANUAL)
+  sellerPayoutsEnabled Boolean @default(false)
+  payoutFundingConfigured Boolean @default(false)
+  manualBankPayoutsEnabled Boolean @default(false)
+  manualEwalletPayoutsEnabled Boolean @default(false)
+  stripeConnectPayoutsEnabled Boolean @default(false)
+  paypalPayoutsEnabled Boolean @default(false)
+  payoutHoldDays Int @default(7)
+  payoutMinimumMinor Int @default(0)
+  updatedAt         DateTime @updatedAt
+}
+
+model LiveSession {
+  id                 String            @id @default(cuid())
+  sellerId           String
+  title              String
+  description        String?
+  coverImageUrl      String?
+  scheduledAt        DateTime?
+  timezone           String
+  provider           String?
+  providerSessionRef String?           @unique
+  playbackRef        String?
+  status             LiveSessionStatus @default(DRAFT)
+  providerStatus     String?
+  errorMessage       String?
+  startedAt          DateTime?
+  endedAt            DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  seller             Seller            @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  products           LiveSessionProduct[]
+  reports            LiveSessionReport[]
+  providerEvents     LiveProviderEvent[]
+  @@index([status, scheduledAt])
+  @@index([sellerId, status])
+}
+
+model LiveSessionProduct {
+  id        String      @id @default(cuid())
+  sessionId String
+  productId String
+  sortOrder Int
+  featured  Boolean     @default(false)
+  session   LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  product   Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+  @@unique([sessionId, productId])
+  @@unique([sessionId, sortOrder])
+  @@index([productId])
+}
+
+model LiveSessionReport {
+  id         String           @id @default(cuid())
+  sessionId  String
+  reporterId String?
+  reason     String
+  status     LiveReportStatus @default(OPEN)
+  reviewedById String?
+  reviewedAt DateTime?
+  createdAt  DateTime         @default(now())
+  session    LiveSession      @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  reporter   User?            @relation(fields: [reporterId], references: [id], onDelete: SetNull)
+  reviewedBy User?            @relation("ReviewedLiveReports", fields: [reviewedById], references: [id], onDelete: SetNull)
+  @@index([sessionId, status, createdAt])
+}
+
+model LiveProviderEvent {
+  id         String      @id @default(cuid())
+  provider   String
+  eventId    String
+  sessionId  String?
+  eventType  String
+  payloadJson Json?
+  receivedAt DateTime    @default(now())
+  session    LiveSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  @@unique([provider, eventId])
+  @@index([sessionId, receivedAt])
+}
+
+model PaymentMethodSettings {
+  id        String @id
+  method    PaymentMethod @unique
+  enabled   Boolean @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+model POSSession {
+  id        String @id @default(cuid())
+  sellerId  String
+  cashierId String
+  register  String
+  openedAt  DateTime @default(now())
+  closedAt  DateTime?
+  seller    Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  cashier   User @relation(fields: [cashierId], references: [id], onDelete: Restrict)
+}
+
+model AuditLog {
+  id        String @id @default(cuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  actor     User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  @@index([entity, entityId, createdAt])
+}
+
+model PlatformBranding {
+  id             String @id @default("default")
+  draftJson      Json
+  publishedJson  Json?
+  draftVersion   Int @default(1)
+  publishedVersion Int?
+  updatedById    String?
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  updatedBy      User? @relation("BrandingUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  revisions      PlatformBrandingRevision[]
+}
+
+model PlatformBrandingRevision {
+  id          String @id @default(cuid())
+  brandingId  String
+  version     Int
+  brandingJson Json
+  editorId    String
+  changeNote  String?
+  createdAt   DateTime @default(now())
+  branding    PlatformBranding @relation(fields: [brandingId], references: [id], onDelete: Cascade)
+  editor      User @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  @@unique([brandingId, version])
+  @@index([brandingId, createdAt])
+}
+
+model StoreThemeRevision {
+  id          String @id @default(cuid())
+  storeId     String
+  version     Int
+  themeJson   Json
+  editorId    String
+  changeNote  String?
+  createdAt   DateTime @default(now())
+  store       Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  editor      User @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  @@unique([storeId, version])
+  @@index([storeId, createdAt])
+}
+
+model SellerAdminNote {
+  id        String @id @default(cuid())
+  sellerId  String
+  authorId  String
+  note      String
+  createdAt DateTime @default(now())
+  seller    Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  author    User @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  @@index([sellerId, createdAt])
+}
+
+model SellerModerationEvent {
+  id        String @id @default(cuid())
+  sellerId  String
+  actorId   String
+  fromStatus SellerStatus?
+  toStatus   SellerStatus
+  reason     String?
+  createdAt  DateTime @default(now())
+  seller     Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  actor      User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  @@index([sellerId, createdAt])
+}
+
+model SellerPayoutMethod {
+  id                String @id @default(cuid())
+  sellerId          String
+  type              PayoutMethodType
+  status            PayoutMethodStatus @default(NOT_STARTED)
+  country           String
+  currency          String
+  label             String
+  maskedIdentifier  String?
+  encryptedDetails  String?
+  providerAccountRef String?
+  providerRecipientRef String?
+  providerStatus    String?
+  isDefault         Boolean @default(false)
+  createdById       String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  seller            Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  createdBy         User @relation("PayoutMethodCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  payouts           SellerPayout[]
+  @@unique([sellerId, type])
+  @@index([status, type])
+}
+
+model SellerPayoutLedgerEntry {
+  id             String @id @default(cuid())
+  sellerId       String
+  sellerOrderId  String?
+  orderItemId    String?
+  type           SellerPayoutLedgerType
+  amountMinor    Int
+  currency       String
+  idempotencyKey String @unique
+  sourceEventId  String?
+  description    String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  seller         Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  sellerOrder    SellerOrder? @relation(fields: [sellerOrderId], references: [id], onDelete: Restrict)
+  orderItem      OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  createdBy      User? @relation("PayoutLedgerCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  payoutItems    SellerPayoutItem[]
+  @@index([sellerId, createdAt])
+  @@index([sellerOrderId])
+  @@index([orderItemId])
+}
+
+model SellerPayout {
+  id              String @id @default(cuid())
+  sellerId        String
+  payoutMethodId  String
+  amountMinor     Int
+  currency        String
+  status          SellerPayoutStatus @default(REQUESTED)
+  requestedById   String
+  reviewedById    String?
+  requestedAt     DateTime @default(now())
+  reviewedAt      DateTime?
+  submittedAt     DateTime?
+  paidAt          DateTime?
+  manualReference String?
+  evidenceNote    String?
+  failureReason   String?
+  providerBatchRef String?
+  providerItemRef  String?
+  idempotencyKey  String @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  seller          Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  payoutMethod    SellerPayoutMethod @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
+  requestedBy     User @relation("PayoutRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  reviewedBy      User? @relation("PayoutReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  items           SellerPayoutItem[]
+  providerEvents  SellerPayoutProviderEvent[]
+  @@index([sellerId, status, createdAt])
+}
+
+model SellerPayoutItem {
+  payoutId  String
+  ledgerId  String
+  amountMinor Int
+  payout    SellerPayout @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  ledger    SellerPayoutLedgerEntry @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+  @@id([payoutId, ledgerId])
+}
+
+model SellerPayoutProviderEvent {
+  id          String @id @default(cuid())
+  provider    PayoutMethodType
+  eventId     String
+  eventType   String
+  payoutId    String?
+  payloadJson Json?
+  receivedAt  DateTime @default(now())
+  payout      SellerPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  @@unique([provider, eventId])
+  @@index([payoutId, receivedAt])
+}
+
+model BlogCategory {
+  id        String     @id @default(cuid())
+  name      String
+  slug      String     @unique
+  createdAt DateTime   @default(now())
+  posts     BlogPost[]
+}
+
+model BlogTag {
+  id        String          @id @default(cuid())
+  name      String
+  slug      String          @unique
+  posts     BlogPostTag[]
+}
+
+model BlogPost {
+  id             String             @id @default(cuid())
+  slug           String             @unique
+  title          String
+  excerpt        String?
+  bodyJson       Json
+  status         ContentStatus      @default(DRAFT)
+  categoryId     String?
+  authorId       String
+  editorId       String
+  featuredImageId String?
+  seoTitle       String?
+  seoDescription String?
+  ogImageId      String?
+  canonicalUrl   String?
+  noIndex        Boolean            @default(false)
+  noFollow       Boolean            @default(false)
+  scheduledAt    DateTime?
+  publishedAt    DateTime?
+  archivedAt     DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  category       BlogCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author         User               @relation("BlogPostAuthors", fields: [authorId], references: [id], onDelete: Restrict)
+  editor         User               @relation("BlogPostEditors", fields: [editorId], references: [id], onDelete: Restrict)
+  featuredImage  MediaAsset?        @relation("BlogFeaturedImage", fields: [featuredImageId], references: [id], onDelete: SetNull)
+  ogImage        MediaAsset?        @relation("BlogOgImage", fields: [ogImageId], references: [id], onDelete: SetNull)
+  tags           BlogPostTag[]
+  revisions      BlogPostRevision[]
+  previewTokens  ContentPreviewToken[]
+  @@index([status, publishedAt])
+  @@index([categoryId, status])
+}
+
+model BlogPostTag {
+  postId String
+  tagId  String
+  post   BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag    BlogTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  @@id([postId, tagId])
+}
+
+model BlogPostRevision {
+  id             String   @id @default(cuid())
+  postId         String
+  revisionNumber Int
+  title          String
+  slug           String
+  excerpt        String?
+  bodyJson       Json
+  metadataJson   Json?
+  editorId       String
+  changeNote     String?
+  createdAt      DateTime @default(now())
+  post           BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  editor         User     @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  @@unique([postId, revisionNumber])
+  @@index([postId, createdAt])
+}
+
+model ContentPage {
+  id             String             @id @default(cuid())
+  slug           String             @unique
+  title          String
+  bodyJson       Json
+  pageType       ContentPageType    @default(STANDARD)
+  status         ContentStatus      @default(DRAFT)
+  parentId       String?
+  editorId       String
+  navPlacement   NavigationPlacement @default(NONE)
+  navLabel       String?
+  navOrder       Int                @default(0)
+  seoTitle       String?
+  seoDescription String?
+  ogImageId      String?
+  canonicalUrl   String?
+  noIndex        Boolean            @default(false)
+  noFollow       Boolean            @default(false)
+  scheduledAt    DateTime?
+  publishedAt    DateTime?
+  archivedAt     DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  parent         ContentPage?      @relation("PageTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children       ContentPage[]    @relation("PageTree")
+  editor         User             @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  ogImage        MediaAsset?      @relation("PageOgImage", fields: [ogImageId], references: [id], onDelete: SetNull)
+  revisions      ContentPageRevision[]
+  previewTokens  ContentPreviewToken[]
+  @@index([status, publishedAt])
+  @@index([parentId, navPlacement, navOrder])
+}
+
+model ContentPageRevision {
+  id             String      @id @default(cuid())
+  pageId         String
+  revisionNumber Int
+  slug           String
+  title          String
+  bodyJson       Json
+  metadataJson   Json?
+  editorId       String
+  changeNote     String?
+  createdAt      DateTime    @default(now())
+  page           ContentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  editor         User        @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  @@unique([pageId, revisionNumber])
+  @@index([pageId, createdAt])
+}
+
+model MediaAsset {
+  id            String          @id @default(cuid())
+  storageKey    String          @unique
+  originalName  String
+  safeName      String
+  kind          MediaKind
+  detectedMime  String
+  sizeBytes     Int
+  width         Int?
+  height        Int?
+  durationMs    Int?
+  checksum      String
+  uploaderId    String
+  altText       String?
+  caption       String?
+  scanStatus    MediaScanStatus @default(QUARANTINED)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  uploader      User            @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+  featuredPosts BlogPost[]      @relation("BlogFeaturedImage")
+  blogOgPosts   BlogPost[]      @relation("BlogOgImage")
+  pageOgPages   ContentPage[]   @relation("PageOgImage")
+  storeLogos    Store[]         @relation("StoreLogo")
+  storeBanners  Store[]         @relation("StoreBanner")
+  @@index([scanStatus, kind, createdAt])
+}
+
+model SlugRedirect {
+  id             String   @id @default(cuid())
+  fromPath       String   @unique
+  destinationPath String
+  statusCode     Int      @default(301)
+  createdById    String
+  createdAt      DateTime @default(now())
+  createdBy      User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  @@index([destinationPath])
+}
+
+model ContentPreviewToken {
+  id         String      @id @default(cuid())
+  tokenHash  String      @unique
+  postId     String?
+  pageId     String?
+  createdById String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime    @default(now())
+  post       BlogPost?   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  page       ContentPage? @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  createdBy  User        @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  @@index([expiresAt])
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  @@unique([userId, productId])
+  @@index([productId, createdAt])
+}
+
+model WholesaleApplication {
+  id        String         @id @default(cuid())
+  userId    String         @unique
+  status    WholesaleStatus @default(PENDING)
+  note      String?
+  reviewedById String?
+  reviewedAt DateTime?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  user      User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([status, createdAt])
+}
+
+model WholesaleTierPrice {
+  id          String   @id @default(cuid())
+  productId   String
+  variantId   String?
+  minQuantity Int
+  unitPriceMinor Int
+  currency    String   @default("USD")
+  createdAt   DateTime @default(now())
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  @@unique([productId, variantId, minQuantity])
+  @@index([productId, minQuantity])
+}
+
+model AffiliateProfile {
+  id                  String          @id @default(cuid())
+  userId              String          @unique
+  status              AffiliateStatus @default(PENDING)
+  referralCode        String          @unique
+  termsAcceptedAt     DateTime?
+  attributionWindowDays Int            @default(30)
+  reviewNote          String?
+  reviewedById        String?
+  reviewedAt          DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  user                User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  links               AffiliateLink[]
+  clicks              AffiliateClick[]
+  commissions         CommissionLedger[]
+  payouts             AffiliatePayout[]
+  @@index([status, createdAt])
+}
+
+model AffiliateLink {
+  id          String   @id @default(cuid())
+  affiliateId String
+  productId   String?
+  sellerId    String?
+  targetPath  String
+  code        String   @unique
+  createdAt   DateTime @default(now())
+  affiliate   AffiliateProfile @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  seller      Seller?  @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  clicks      AffiliateClick[]
+  @@index([affiliateId, createdAt])
+}
+
+model AffiliateClick {
+  id            String   @id @default(cuid())
+  affiliateId   String
+  linkId        String
+  productId     String?
+  tokenHash     String   @unique
+  ipHash        String?
+  clickedAt     DateTime @default(now())
+  expiresAt     DateTime
+  convertedAt   DateTime?
+  consentGivenAt DateTime?
+  visitorKeyHash String?
+  affiliate     AffiliateProfile @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  link          AffiliateLink @relation(fields: [linkId], references: [id], onDelete: Restrict)
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  order         ParentOrder? @relation("AffiliateConversion")
+  @@index([affiliateId, clickedAt])
+  @@index([expiresAt, convertedAt])
+  @@index([affiliateId, visitorKeyHash, clickedAt])
+}
+
+model AffiliateCommissionRule {
+  id          String   @id @default(cuid())
+  name        String
+  basisPoints Int?
+  fixedMinor  Int?
+  currency    String   @default("USD")
+  productId   String?
+  categoryId  String?
+  effectiveFrom DateTime
+  effectiveTo DateTime?
+  createdAt   DateTime @default(now())
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  commissions CommissionLedger[]
+  @@index([effectiveFrom, effectiveTo])
+}
+
+model CommissionLedger {
+  id            String           @id @default(cuid())
+  affiliateId   String
+  orderItemId   String?
+  ruleId        String?
+  amountMinor   Int
+  currency      String
+  status        CommissionStatus @default(PENDING)
+  entryType     CommissionEntryType @default(EARNED)
+  eligibleBaseMinor Int
+  ruleName      String?
+  basisPointsSnapshot Int?
+  fixedMinorSnapshot Int?
+  idempotencyKey String          @unique
+  sourceEventId String?
+  reversalOfId String?
+  reason        String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  affiliate     AffiliateProfile @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  orderItem     OrderItem?       @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  rule          AffiliateCommissionRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  reversalOf    CommissionLedger? @relation("CommissionReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals     CommissionLedger[] @relation("CommissionReversal")
+  payoutItems   AffiliatePayoutItem[]
+  @@index([affiliateId, status, createdAt])
+  @@index([orderItemId])
+  @@index([sourceEventId])
+  @@index([reversalOfId])
+}
+
+model AffiliatePayout {
+  id          String               @id @default(cuid())
+  affiliateId String
+  amountMinor Int
+  currency    String
+  status      AffiliatePayoutStatus @default(REQUESTED)
+  method      String?
+  reference   String?
+  reviewedById String?
+  reviewedAt  DateTime?
+  paidAt      DateTime?
+  reviewNote  String?
+  createdAt   DateTime             @default(now())
+  affiliate   AffiliateProfile    @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
+  items       AffiliatePayoutItem[]
+  @@index([affiliateId, status, createdAt])
+}
+
+model AffiliatePayoutItem {
+  payoutId     String
+  commissionId String
+  amountMinor  Int
+  payout       AffiliatePayout @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  commission   CommissionLedger @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+  @@id([payoutId, commissionId])
+}
+
+model AffiliateAdjustment {
+  id              String                  @id @default(cuid())
+  orderId         String
+  orderItemId     String?
+  type            AffiliateAdjustmentType
+  quantity        Int?
+  amountMinor     Int
+  currency        String
+  idempotencyKey  String                  @unique
+  providerEventId String?
+  reason          String?
+  createdById     String?
+  createdAt       DateTime                @default(now())
+  order           ParentOrder             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItem       OrderItem?              @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  @@index([orderId, createdAt])
+  @@index([providerEventId])
+}
+
+model MarketingCampaign {
+  id          String         @id @default(cuid())
+  name        String
+  status      CampaignStatus @default(DRAFT)
+  placements  String[]
+  contentJson Json
+  priority    Int            @default(0)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  createdBy   User           @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  products    MarketingCampaignProduct[]
+  @@index([status, startsAt, endsAt])
+}
+
+model MarketingCampaignProduct {
+  campaignId String
+  productId  String
+  campaign   MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  product    Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  @@id([campaignId, productId])
+}
+
+model Notification {
+  id             String                    @id @default(cuid())
+  userId         String
+  channel        NotificationChannel       @default(IN_APP)
+  eventType      String
+  title          String
+  body           String
+  link           String?
+  payloadJson    Json?
+  deliveryStatus NotificationDeliveryStatus @default(PENDING)
+  readAt         DateTime?
+  createdAt      DateTime                  @default(now())
+  user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, readAt, createdAt])
+}
+
+model NotificationPreference {
+  id       String              @id @default(cuid())
+  userId   String
+  channel  NotificationChannel
+  category String
+  enabled  Boolean             @default(true)
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, channel, category])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, expiresAt])
+}
+
+model EmailOutbox {
+  id              String                    @id @default(cuid())
+  recipientEmail  String
+  recipientUserId  String?
+  templateKey     String
+  payloadJson     Json
+  idempotencyKey  String                    @unique
+  status          NotificationDeliveryStatus @default(PENDING)
+  attempts        Int                       @default(0)
+  nextAttemptAt   DateTime                  @default(now())
+  providerMessageId String?
+  lastError       String?
+  createdById     String?
+  createdAt       DateTime                  @default(now())
+  recipientUser   User?                     @relation(fields: [recipientUserId], references: [id], onDelete: SetNull)
+  @@index([status, nextAttemptAt])
+}
+
+model Conversation {
+  id        String             @id @default(cuid())
+  buyerId   String
+  sellerId  String
+  productId String?
+  orderId   String?
+  status    ConversationStatus @default(OPEN)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  buyer     User               @relation("ConversationBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  seller    Seller             @relation("ConversationSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  product   Product?           @relation(fields: [productId], references: [id], onDelete: SetNull)
+  order     ParentOrder?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  messages  Message[]
+  @@index([buyerId, updatedAt])
+  @@index([sellerId, updatedAt])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  attachmentId   String?
+  sentAt         DateTime @default(now())
+  readAt         DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  sender         User     @relation(fields: [senderId], references: [id], onDelete: Restrict)
+  @@index([conversationId, sentAt])
+}
+
+model AiUsageLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  feature     String
+  provider    String
+  inputTokens Int?
+  outputTokens Int?
+  costMinor   Int?
+  createdAt   DateTime @default(now())
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([feature, createdAt])
+}
