@@ -32,6 +32,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run db:generate
       - run: npm run db:deploy
       - run: npm run db:seed
       - run: npm run typecheck
