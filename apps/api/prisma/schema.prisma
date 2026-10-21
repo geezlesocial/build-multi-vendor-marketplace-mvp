@@ -221,6 +221,102 @@ enum SellerPayoutLedgerType {
   ADJUSTMENT
 }
 
+enum WalletAccountType {
+  USER
+  TREASURY
+}
+
+enum WalletAccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum WalletLedgerStatus {
+  POSTED
+  REVERSED
+}
+
+enum WalletLedgerEntryType {
+  FUNDING
+  TRANSFER
+  CHECKOUT
+  REFUND
+  CASHBACK
+  WITHDRAWAL_RESERVE
+  WITHDRAWAL_RELEASE
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum WalletPostingDirection {
+  DEBIT
+  CREDIT
+}
+
+enum WalletBalanceState {
+  AVAILABLE
+  PENDING
+  HELD
+  FROZEN
+}
+
+enum WalletFundingStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REVERSED
+  REVIEW
+}
+
+enum WalletTransferStatus {
+  PENDING
+  COMPLETED
+  REJECTED
+  FAILED
+  REVERSED
+}
+
+enum WalletWithdrawalStatus {
+  REQUESTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PROCESSING
+  PAID
+  FAILED
+  RELEASED
+}
+
+enum ClubCoinAccountStatus {
+  ACTIVE
+  FROZEN
+}
+
+enum ClubCoinEntryType {
+  AWARD
+  REDEMPTION
+  EXPIRY
+  REVERSAL
+  ADJUSTMENT
+}
+
+enum ClubCoinEventType {
+  ACCOUNT_VERIFIED
+  PURCHASE_COMPLETED
+  REVIEW_SUBMITTED
+  LIVE_ATTENDANCE
+  CUSTOM
+}
+
+enum ClubCoinRedemptionStatus {
+  RESERVED
+  APPLIED
+  REVERSED
+  EXPIRED
+}
+
 model User {
   id           String       @id @default(cuid())
   email        String       @unique
@@ -234,6 +330,8 @@ model User {
   auditLogs    AuditLog[]
   posSessions  POSSession[]
   orders       ParentOrder[] @relation("BuyerOrders")
+  addresses    SavedAddress[]
+  preference   UserPreference?
   staffMemberships SellerStaff[]
   cart         Cart?
   liveReports  LiveSessionReport[]
@@ -266,6 +364,42 @@ model User {
   payoutRequestsCreated SellerPayout[] @relation("PayoutRequester")
   payoutReviews SellerPayout[] @relation("PayoutReviewer")
   brandingUpdates PlatformBranding[] @relation("BrandingUpdater")
+  walletAccount WalletAccount?
+  clubCoinAccount ClubCoinAccount?
+  walletFundingIntents WalletFundingIntent[]
+  walletTransfersSent WalletTransfer[] @relation("WalletTransferSender")
+  walletTransfersReceived WalletTransfer[] @relation("WalletTransferRecipient")
+  walletWithdrawalRequests WalletWithdrawalRequest[]
+  clubCoinEntries ClubCoinEntry[]
+  clubCoinRedemptions ClubCoinRedemption[]
+  clubCoinRulesCreated ClubCoinRule[] @relation("ClubCoinRuleCreator")
+}
+
+model SavedAddress {
+  id         String   @id @default(cuid())
+  userId     String
+  label      String
+  line1      String
+  line2      String?
+  city       String
+  region     String
+  postalCode String
+  country    String
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, isDefault, updatedAt])
+}
+
+model UserPreference {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  language        String   @default("en")
+  displayCurrency String   @default("USD")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Session {
@@ -537,7 +671,10 @@ model ProcessedWebhookEvent {
   provider   PaymentMethod
   eventId    String
   receivedAt DateTime @default(now())
+  eventType  String?
+  reviewReason String?
   @@unique([provider, eventId])
+  @@index([provider, reviewReason])
 }
 
 model MarketplaceSettings {
@@ -560,6 +697,21 @@ model MarketplaceSettings {
   paypalPayoutsEnabled Boolean @default(false)
   payoutHoldDays Int @default(7)
   payoutMinimumMinor Int @default(0)
+  walletEnabled Boolean @default(false)
+  walletFundingEnabled Boolean @default(false)
+  walletTransfersEnabled Boolean @default(false)
+  walletCheckoutEnabled Boolean @default(false)
+  walletWithdrawalsEnabled Boolean @default(false)
+  walletEmergencyPause Boolean @default(true)
+  clubCoinsEnabled Boolean @default(false)
+  clubCoinsEarnEnabled Boolean @default(false)
+  clubCoinsRedeemEnabled Boolean @default(false)
+  clubCoinTransfersEnabled Boolean @default(false)
+  clubCoinConversionEnabled Boolean @default(false)
+  clubCoinRedemptionRatio Int @default(100)
+  clubCoinMaxDiscountMinor Int @default(0)
+  clubCoinName String @default("Club Coins")
+  clubCoinIconUrl String?
   updatedAt         DateTime @updatedAt
 }
 
@@ -746,6 +898,7 @@ model SellerPayoutMethod {
   seller            Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   createdBy         User @relation("PayoutMethodCreator", fields: [createdById], references: [id], onDelete: Restrict)
   payouts           SellerPayout[]
+  walletWithdrawalRequests WalletWithdrawalRequest[]
   @@unique([sellerId, type])
   @@index([status, type])
 }
@@ -823,6 +976,227 @@ model SellerPayoutProviderEvent {
   payout      SellerPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
   @@unique([provider, eventId])
   @@index([payoutId, receivedAt])
+}
+
+model WalletAccount {
+  id                    String              @id @default(cuid())
+  userId                String?             @unique
+  type                  WalletAccountType
+  status                WalletAccountStatus @default(ACTIVE)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  user                  User?               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  balances              WalletBalance[]
+  postings              WalletLedgerPosting[]
+  allocations           WalletBalanceAllocation[]
+  fundingIntents        WalletFundingIntent[]
+  outgoingTransfers     WalletTransfer[]     @relation("WalletTransferSource")
+  incomingTransfers     WalletTransfer[]     @relation("WalletTransferDestination")
+  withdrawalRequests    WalletWithdrawalRequest[]
+  @@index([type, status])
+}
+
+model WalletBalance {
+  id             String        @id @default(cuid())
+  accountId      String
+  currency       String
+  availableMinor Int           @default(0)
+  pendingMinor   Int           @default(0)
+  heldMinor      Int           @default(0)
+  frozenMinor    Int           @default(0)
+  updatedAt      DateTime      @updatedAt
+  account        WalletAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@unique([accountId, currency])
+  @@index([currency, updatedAt])
+}
+
+model WalletLedgerTransaction {
+  id             String                 @id @default(cuid())
+  idempotencyKey String                 @unique
+  entryType      WalletLedgerEntryType
+  status         WalletLedgerStatus     @default(POSTED)
+  currency       String
+  referenceType  String?
+  referenceId    String?
+  metadataJson   Json?
+  createdAt      DateTime               @default(now())
+  postings       WalletLedgerPosting[]
+  allocations    WalletBalanceAllocation[]
+  @@index([referenceType, referenceId, createdAt])
+  @@index([currency, createdAt])
+}
+
+model WalletLedgerPosting {
+  id            String                 @id @default(cuid())
+  transactionId String
+  accountId     String
+  direction     WalletPostingDirection
+  amountMinor   Int
+  currency      String
+  createdAt     DateTime               @default(now())
+  transaction   WalletLedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  account       WalletAccount           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@index([accountId, currency, createdAt])
+  @@index([transactionId, direction])
+}
+
+model WalletBalanceAllocation {
+  id                 String              @id @default(cuid())
+  accountId          String
+  transactionId      String?
+  currency           String
+  state              WalletBalanceState
+  deltaMinor         Int
+  idempotencyKey     String              @unique
+  referenceType      String?
+  referenceId        String?
+  isOpeningBaseline  Boolean             @default(false)
+  baselineEvidenceRef String?
+  baselineVerified   Boolean             @default(false)
+  createdAt          DateTime            @default(now())
+  account            WalletAccount       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  transaction        WalletLedgerTransaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  @@index([accountId, currency, state, createdAt])
+  @@index([transactionId])
+  @@index([referenceType, referenceId])
+}
+
+model WalletFundingIntent {
+  id              String              @id @default(cuid())
+  userId          String
+  accountId       String
+  amountMinor     Int
+  currency        String
+  provider        String
+  providerIntentId String?             @unique
+  disputeId        String?
+  idempotencyKey  String              @unique
+  status          WalletFundingStatus @default(PENDING)
+  failureReason   String?
+  refundObservedMinor  Int             @default(0)
+  refundAppliedMinor   Int             @default(0)
+  refundShortfallMinor Int             @default(0)
+  disputeAmountMinor   Int             @default(0)
+  disputeHeldMinor     Int             @default(0)
+  disputeShortfallMinor Int            @default(0)
+  disputeStatus        String?
+  createdAt       DateTime            @default(now())
+  resolvedAt      DateTime?
+  user            User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  account         WalletAccount       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@index([userId, status, createdAt])
+}
+
+model WalletTransfer {
+  id                String               @id @default(cuid())
+  senderId          String
+  recipientId       String
+  sourceAccountId   String
+  destinationAccountId String
+  amountMinor       Int
+  currency          String
+  status            WalletTransferStatus @default(PENDING)
+  idempotencyKey    String               @unique
+  ledgerTransactionId String?             @unique
+  failureReason     String?
+  createdAt         DateTime             @default(now())
+  completedAt       DateTime?
+  sender            User                 @relation("WalletTransferSender", fields: [senderId], references: [id], onDelete: Restrict)
+  recipient         User                 @relation("WalletTransferRecipient", fields: [recipientId], references: [id], onDelete: Restrict)
+  sourceAccount     WalletAccount        @relation("WalletTransferSource", fields: [sourceAccountId], references: [id], onDelete: Restrict)
+  destinationAccount WalletAccount       @relation("WalletTransferDestination", fields: [destinationAccountId], references: [id], onDelete: Restrict)
+  @@index([senderId, status, createdAt])
+  @@index([recipientId, status, createdAt])
+}
+
+model WalletWithdrawalRequest {
+  id              String                 @id @default(cuid())
+  userId          String
+  accountId       String
+  payoutMethodId  String?
+  amountMinor     Int
+  currency        String
+  status          WalletWithdrawalStatus @default(REQUESTED)
+  idempotencyKey  String                 @unique
+  destinationType String
+  destinationRef  String?
+  failureReason   String?
+  createdAt       DateTime               @default(now())
+  resolvedAt      DateTime?
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  account         WalletAccount          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  payoutMethod    SellerPayoutMethod?   @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
+  @@index([userId, status, createdAt])
+}
+
+model ClubCoinAccount {
+  id        String              @id @default(cuid())
+  userId    String              @unique
+  balance   Int                 @default(0)
+  status    ClubCoinAccountStatus @default(ACTIVE)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  user      User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  entries   ClubCoinEntry[]
+  redemptions ClubCoinRedemption[]
+  @@index([status, updatedAt])
+}
+
+model ClubCoinEntry {
+  id              String           @id @default(cuid())
+  accountId       String
+  userId          String
+  entryType       ClubCoinEntryType
+  amount          Int
+  idempotencyKey  String           @unique
+  referenceType   String?
+  referenceId     String?
+  policyVersion   String?
+  expiresAt       DateTime?
+  reversalOfId    String?
+  reason          String?
+  createdAt       DateTime         @default(now())
+  account         ClubCoinAccount  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  user            User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([accountId, createdAt])
+  @@index([userId, referenceType, referenceId])
+  @@index([expiresAt])
+}
+
+model ClubCoinRule {
+  id               String           @id @default(cuid())
+  code             String           @unique
+  eventType        ClubCoinEventType
+  enabled          Boolean          @default(false)
+  awardAmount      Int
+  perUserCap       Int?
+  perOrderCap      Int?
+  dailyCap         Int?
+  expiresAfterDays Int?
+  effectiveFrom    DateTime?
+  effectiveTo      DateTime?
+  eligibleGroupsJson Json?
+  createdById      String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  createdBy        User?            @relation("ClubCoinRuleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  @@index([eventType, enabled, effectiveFrom])
+}
+
+model ClubCoinRedemption {
+  id             String                  @id @default(cuid())
+  userId         String
+  accountId      String
+  coins          Int
+  discountMinor  Int
+  currency       String
+  status         ClubCoinRedemptionStatus @default(RESERVED)
+  idempotencyKey String                  @unique
+  orderReference String?
+  createdAt      DateTime                @default(now())
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  account        ClubCoinAccount         @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@index([userId, status, createdAt])
 }
 
 model BlogCategory {

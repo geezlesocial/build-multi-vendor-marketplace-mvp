@@ -1,0 +1,1 @@
+ALTER TYPE "WalletFundingStatus" ADD VALUE IF NOT EXISTS 'REVIEW';

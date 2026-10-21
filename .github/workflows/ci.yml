@@ -6,7 +6,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://marketplace:marketplace@127.0.0.1:5432/marketplace?schema=public
+      DATABASE_URL: postgresql://marketplace:marketplace@127.0.0.1:5432/marketplace_e2e_ci?schema=public
+      E2E_DATABASE_URL: postgresql://marketplace:marketplace@127.0.0.1:5432/marketplace_e2e_ci?schema=public
       PASSWORD_PEPPER: ci-test-only-placeholder-pepper-123456
       CONTENT_SCAN_REQUIRED: 'true'
       SITE_URL: http://127.0.0.1:4000
@@ -17,11 +18,11 @@ jobs:
         env:
           POSTGRES_USER: marketplace
           POSTGRES_PASSWORD: marketplace
-          POSTGRES_DB: marketplace
+          POSTGRES_DB: marketplace_e2e_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U marketplace -d marketplace"
+          --health-cmd "pg_isready -U marketplace -d marketplace_e2e_ci"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5

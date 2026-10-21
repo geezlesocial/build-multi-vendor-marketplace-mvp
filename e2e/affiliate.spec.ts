@@ -4,6 +4,7 @@ const password = 'LocalDemoOnly-ChangeMe-123!';
 const adminEmail = 'admin.local@example.test';
 const buyerEmail = 'buyer.local@example.test';
 const sellerEmail = 'seller.local@example.test';
+const e2eBaseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${process.env.E2E_WEB_PORT ?? 5173}`;
 
 async function login(page: Page, email: string) {
   const response = await page.request.post('/api/auth/login', { data: { email, password } });
@@ -23,7 +24,7 @@ test('admin controls attribution and a consented COD conversion creates one pend
   const settings = await page.request.patch('/api/admin/affiliate-settings', { data: { affiliateEnabled: true, affiliateFundingConfigured: false, affiliateAttributionWindowDays: 30, reason: 'Local E2E' }, headers: await csrf(page) });
   expect(settings.ok()).toBeTruthy();
 
-  const sellerContext = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  const sellerContext = await browser.newContext({ baseURL: e2eBaseURL });
   const sellerPage = await sellerContext.newPage();
   await login(sellerPage, sellerEmail);
   const sellerApplication = await sellerPage.request.post('/api/affiliate/apply', { data: { termsAccepted: true }, headers: await csrf(sellerPage) });
@@ -40,17 +41,27 @@ test('admin controls attribution and a consented COD conversion creates one pend
   expect(link.htmlLink).not.toMatch(/<script|on\w+\s*=|javascript:/i);
   expect(link.htmlCard).toContain('/r/');
 
-  const buyerContext = await browser.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  const buyerContext = await browser.newContext({ baseURL: e2eBaseURL });
   const buyerPage = await buyerContext.newPage();
   await login(buyerPage, buyerEmail);
+  const buyerCart = await buyerPage.request.get('/api/cart');
+  expect(buyerCart.ok()).toBeTruthy();
+  const buyerCartBody = await buyerCart.json() as { items: { productId: string }[] };
+  for (const item of buyerCartBody.items) {
+    const removed = await buyerPage.request.patch(`/api/cart/items/${item.productId}`, { data: { quantity: 0 }, headers: await csrf(buyerPage) });
+    expect(removed.status()).toBe(204);
+  }
+  const addReferredProduct = await buyerPage.request.post('/api/cart/items', { data: { productId: product.id, quantity: 1 }, headers: await csrf(buyerPage) });
+  expect(addReferredProduct.status()).toBe(201);
   const withoutConsent = await buyerPage.request.post(`/api/affiliate/clicks/${link.code}`, { data: { consent: false }, headers: await csrf(buyerPage) });
   expect(withoutConsent.status()).toBe(400);
   const click = await buyerPage.request.post(`/api/affiliate/clicks/${link.code}`, { data: { consent: true, visitorKey: 'local-e2e-visitor-0001' }, headers: await csrf(buyerPage) });
   expect(click.status()).toBe(200);
   const clickBody = await click.json() as { token: string };
   const checkout = await buyerPage.request.post('/api/orders/checkout', { data: { buyerEmail, buyerName: 'Local Buyer', address: { line1: '1 Test Street', city: 'Test City', region: 'TS', postalCode: '1000', country: 'US' }, method: 'COD', affiliateToken: clickBody.token }, headers: await csrf(buyerPage) });
-  expect(checkout.status()).toBe(201);
-  const order = await checkout.json() as { orderId: string };
+  const checkoutBody = await checkout.text();
+  expect(checkout.status(), checkoutBody).toBe(201);
+  const order = JSON.parse(checkoutBody) as { orderId: string };
   const collected = await page.request.post(`/api/orders/${order.orderId}/cod-collect`, { data: {}, headers: await csrf(page) });
   expect(collected.status()).toBe(200);
   const duplicateCollection = await page.request.post(`/api/orders/${order.orderId}/cod-collect`, { data: {}, headers: await csrf(page) });
