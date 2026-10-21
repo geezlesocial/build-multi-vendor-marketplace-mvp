@@ -16,6 +16,9 @@ import { registerContentRoutes } from './content-routes.js';
 import { publishDueContent } from './content-scheduler.js';
 import { registerGrowthRoutes } from './growth-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
+import { registerDashboardRoutes } from './dashboard-routes.js';
+import { registerMarketplaceRoutes } from './marketplace-routes.js';
+import { registerWalletRoutes } from './wallet-routes.js';
 import { reverseAffiliateForOrder, settleAffiliateForPaidOrder } from './affiliate-ledger.js';
 import { referralTokenHash, verifySignedReferralToken } from './growth-domain.js';
 
@@ -36,7 +39,10 @@ app.use('/api', rateLimit({ windowMs: 60 * 1000, limit: 300 }));
 app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf); } }));
 registerContentRoutes(app);
 registerGrowthRoutes(app);
+registerMarketplaceRoutes(app);
 registerPlatformRoutes(app);
+registerDashboardRoutes(app);
+registerWalletRoutes(app);
 if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => console.error(error instanceof Error ? error.message : 'Content scheduler failed')), 60_000);
 
 const asyncRoute = (handler: express.RequestHandler): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -66,7 +72,7 @@ app.get('/api/auth/me', asyncRoute(async (req, res) => { const user = await curr
 app.get('/api/settings/public', asyncRoute(async (_req, res) => {
   const [marketplace, methods, branding] = await Promise.all([prisma.marketplaceSettings.findUnique({ where: { id: 'default' } }), prisma.paymentMethodSettings.findMany({ select: { method: true, enabled: true } }), prisma.platformBranding.findUnique({ where: { id: 'default' }, select: { publishedJson: true } })]);
   const live = await liveShoppingState();
-  res.json({ multiVendorEnabled: marketplace?.multiVendorEnabled ?? true, paymentMethods: methods, branding: branding?.publishedJson ?? null, liveShopping: { enabled: live.effectiveEnabled, deploymentGate: live.deploymentGate, reason: live.reason } });
+  res.json({ multiVendorEnabled: marketplace?.multiVendorEnabled ?? true, paymentMethods: methods, branding: branding?.publishedJson ?? null, languages: ['en', 'fil'], baseCurrency: env.CURRENCY, availableDisplayCurrencies: [env.CURRENCY], fxRatesConfigured: false, liveShopping: { enabled: live.effectiveEnabled, deploymentGate: live.deploymentGate, reason: live.reason } });
 }));
 
 app.get('/api/live-shopping/status', asyncRoute(async (_req, res) => res.json(await liveShoppingState())));
@@ -191,7 +197,22 @@ app.patch('/api/products/:id/variants/:variantId', requireAuth, requireRole(Role
 
 app.get('/api/cart', requireAuth, asyncRoute(async (_req, res) => { const user = res.locals.user as { id: string }; const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { inventory: true, seller: { include: { store: true } } } } } } } }); res.json(cart ?? { items: [] }); }));
 app.post('/api/cart/items', requireAuth, asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const body = z.object({ productId: z.string().cuid(), variantId: z.string().cuid().optional(), quantity: z.number().int().positive().max(99) }).parse(req.body); const product = await prisma.product.findFirst({ where: { id: body.productId, status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] }, include: { variants: true } }); if (!product) return res.status(404).json({ error: 'Product unavailable' }); const variant = body.variantId ? product.variants.find(v => v.id === body.variantId && v.status === ProductStatus.APPROVED) : null; if (body.variantId && !variant) return res.status(409).json({ error: 'Variant unavailable' }); const available = variant?.stock ?? (await prisma.inventory.findUnique({ where: { productId: product.id } }))?.quantity ?? 0; if (available < body.quantity) return res.status(409).json({ error: 'Insufficient stock' }); const cart = await prisma.cart.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id } }); const item = await prisma.cartItem.upsert({ where: { cartId_productId: { cartId: cart.id, productId: body.productId } }, update: { quantity: { increment: body.quantity }, variantId: body.variantId }, create: { cartId: cart.id, productId: body.productId, variantId: body.variantId, quantity: body.quantity } }); res.status(201).json(item); }));
-app.patch('/api/cart/items/:productId', requireAuth, asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const qty = z.object({ quantity: z.number().int().nonnegative().max(99) }).parse(req.body).quantity; const productId = routeParam(req.params.productId); const cart = await prisma.cart.findUnique({ where: { userId: user.id } }); if (!cart) return res.status(404).json({ error: 'Cart not found' }); if (qty === 0) await prisma.cartItem.deleteMany({ where: { cartId: cart.id, productId } }); else await prisma.cartItem.update({ where: { cartId_productId: { cartId: cart.id, productId } }, data: { quantity: qty } }); res.status(204).send(); }));
+app.patch('/api/cart/items/:productId', requireAuth, asyncRoute(async (req, res) => {
+  const user = res.locals.user as { id: string };
+  const qty = z.object({ quantity: z.number().int().nonnegative().max(99) }).parse(req.body).quantity;
+  const productId = routeParam(req.params.productId);
+  const cart = await prisma.cart.findUnique({ where: { userId: user.id } });
+  if (!cart) return res.status(404).json({ error: 'Cart not found' });
+  const item = await prisma.cartItem.findUnique({ where: { cartId_productId: { cartId: cart.id, productId } }, include: { variant: true, product: { include: { inventory: true } } } });
+  if (!item) return res.status(404).json({ error: 'Cart item not found' });
+  if (qty === 0) await prisma.cartItem.delete({ where: { id: item.id } });
+  else {
+    const available = item.variant?.stock ?? item.product.inventory?.quantity ?? 0;
+    if (qty > available) return res.status(409).json({ error: `Only ${available} available for ${item.product.name}` });
+    await prisma.cartItem.update({ where: { id: item.id }, data: { quantity: qty } });
+  }
+  res.status(204).send();
+}));
 
 app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   const user = res.locals.user as { id: string };

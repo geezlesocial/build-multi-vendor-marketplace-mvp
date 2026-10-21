@@ -1,0 +1,8 @@
+ALTER TABLE "WalletFundingIntent"
+  ADD COLUMN "refundObservedMinor" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "refundAppliedMinor" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "refundShortfallMinor" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "disputeAmountMinor" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "disputeHeldMinor" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "disputeShortfallMinor" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "disputeStatus" TEXT;

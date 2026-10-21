@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import { clubCoinsHardDisabledSchema, isDisposableWalletFundingDatabaseUrl } from './wallet-safety.js';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -26,7 +27,18 @@ const envSchema = z.object({
   CONTENT_MAX_DOCUMENT_BYTES: z.coerce.number().int().positive().default(10_000_000),
   AFFILIATE_DEFAULT_BASIS_POINTS: z.coerce.number().int().min(0).max(10000).default(500),
   AFFILIATE_SIGNING_SECRET: z.string().min(32).optional(),
-  PAYOUT_ENCRYPTION_KEY: z.string().min(32).optional()
+  PAYOUT_ENCRYPTION_KEY: z.string().min(32).optional(),
+  MONEY_MOVEMENT_HARD_DISABLED: z.string().optional().default('true').transform(value => !['false', '0', 'no', 'off'].includes(value.toLowerCase())),
+  WALLET_FUNDING_PROVIDER_READY: z.string().optional().default('false').transform(value => ['true', '1', 'yes', 'on'].includes(value.toLowerCase())),
+  WALLET_FUNDING_SANDBOX_MODE: z.string().optional().default('false').transform(value => ['true', '1', 'yes', 'on'].includes(value.toLowerCase())),
+  WALLET_FUNDING_DISPOSABLE_DATABASE_ALLOWLIST: z.string().optional().default(''),
+  WALLET_FUNDING_SANDBOX_ID: z.string().optional().default(''),
+  WALLET_FUNDING_TREASURY_ACCOUNT_ID: z.string().trim().min(1).optional(),
+  CLUB_COINS_HARD_DISABLED: clubCoinsHardDisabledSchema
 });
 
 export const env = envSchema.parse(process.env);
+
+export function isDisposableDatabaseUrl(databaseUrl: string, allowlist = env.WALLET_FUNDING_DISPOSABLE_DATABASE_ALLOWLIST) {
+  return isDisposableWalletFundingDatabaseUrl(databaseUrl, env.WALLET_FUNDING_SANDBOX_ID, allowlist);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decryptPayoutDetails, encryptPayoutDetails, maskIdentifier, payoutStatusTransitionAllowed, reservedStoreSlug, storeThemeSchema } from './platform-domain.js';
+import { decryptPayoutDetails, encryptPayoutDetails, maskIdentifier, payoutStatusTransitionAllowed, reservedStoreSlug, storeSlugFromName, storeThemeSchema } from './platform-domain.js';
 
 describe('platform administration domain rules', () => {
   it('accepts only the allowlisted store theme shape', () => {
@@ -20,5 +20,11 @@ describe('platform administration domain rules', () => {
     expect(payoutStatusTransitionAllowed('REQUESTED', 'PAID')).toBe(false);
     expect(reservedStoreSlug('admin')).toBe(true);
     expect(reservedStoreSlug('local-makers')).toBe(false);
+  });
+
+  it('normalizes store names into public slugs without empty punctuation URLs', () => {
+    expect(storeSlugFromName('Tech & Appliances')).toBe('tech-appliances');
+    expect(storeSlugFromName('  Café---Tools!  ')).toBe('cafe-tools');
+    expect(storeSlugFromName('***')).toBe('');
   });
 });

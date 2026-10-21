@@ -35,6 +35,10 @@ export const storeThemeSchema = z.object({
   contactLinks: z.array(z.object({ label: z.string().trim().min(1).max(80), url: z.string().url().max(1000) }).strict()).max(10).default([])
 }).strict();
 
+export const storeSettingsSchema = storeThemeSchema.extend({
+  name: z.string().trim().min(1).max(120).optional()
+}).strict();
+
 export const taxonomySchema = z.object({
   name: z.string().trim().min(1).max(120),
   slug: z.string().trim().min(1).max(160).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
@@ -115,6 +119,10 @@ export function payoutStatusTransitionAllowed(current: string, next: string) {
 
 export function reservedStoreSlug(slug: string) {
   return new Set(['admin', 'api', 'login', 'checkout', 'cart', 'seller', 'stores', 'content', 'blog', 'pages']).has(slug);
+}
+
+export function storeSlugFromName(name: string) {
+  return name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 export function safePayoutMethod(method: { id: string; type: string; status: string; country: string; currency: string; label: string; maskedIdentifier: string | null; providerAccountRef: string | null; providerRecipientRef: string | null; providerStatus: string | null; isDefault: boolean; createdAt: Date; updatedAt: Date }) {
