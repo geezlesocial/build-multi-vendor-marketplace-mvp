@@ -66,5 +66,15 @@
 .storeAssignmentPanel{margin:1.5rem 0}
 .storeAssignmentForm{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;align-items:end;gap:.8rem;margin:1rem 0}
 .storeAssignmentRow{grid-template-columns:minmax(0,1fr) auto minmax(0,1.3fr) minmax(0,1fr)}
+.storePlanForm .storePlanPricingFields{display:grid;grid-template-columns:minmax(0,1fr);gap:.8rem;border-color:#cbd8ce;padding:1rem}
+.storePlanPricingFields textarea{width:100%;min-height:5.5rem;resize:vertical;border:1px solid #c6d0c7;border-radius:.6rem;padding:.75rem;font:inherit;color:#18211d}
+.storePlanPricePreview{background:#f7f8f4;border-radius:.8rem;padding:.9rem}
+.storePlanPricePreview p{margin:.4rem 0}
+.storePlanAdminCard>.muted{line-height:1.55;overflow-wrap:anywhere}
+.sellerBillingSummary,.sellerPlanBillingSection{margin:1.2rem 0}
+.planOfferGrid{margin:1rem 0}
+.planOfferGrid .card{display:grid;align-content:start;gap:.25rem}
+.planOfferGrid button{justify-self:start}
+.sellerPlanBillingSection ul{padding-left:1.3rem}
 @media(max-width:850px){.storePlanAdminGrid{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:720px){.storePlanNumberGrid,.storeAssignmentForm{grid-template-columns:minmax(0,1fr)}.storePlanVersion{align-items:flex-start;flex-direction:column}.storeAssignmentRow{grid-template-columns:minmax(0,1fr) auto}.storeAssignmentRow span:nth-child(3),.storeAssignmentRow span:nth-child(4){color:#68736b;font-size:.85rem}}
+@media(max-width:720px){.storePlanNumberGrid,.storeAssignmentForm{grid-template-columns:minmax(0,1fr)}.storePlanVersion{align-items:flex-start;flex-direction:column}.storeAssignmentRow{grid-template-columns:minmax(0,1fr) auto}.storeAssignmentRow span:nth-child(3),.storeAssignmentRow span:nth-child(4){color:#68736b;font-size:.85rem}.storePlanPricingFields{padding:.75rem}.planOfferGrid{grid-template-columns:minmax(0,1fr)}}
