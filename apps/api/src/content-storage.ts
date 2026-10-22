@@ -1,11 +1,12 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { env } from './config.js';
 
 export interface ContentStorage {
   put(key: string, bytes: Buffer): Promise<void>;
   open(key: string): ReturnType<typeof createReadStream>;
+  remove(key: string): Promise<void>;
 }
 
 function safePath(key: string) {
@@ -25,6 +26,11 @@ export class LocalContentStorage implements ContentStorage {
   }
 
   open(key: string) { return createReadStream(safePath(key)); }
+
+  async remove(key: string) {
+    try { await unlink(safePath(key)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  }
 }
 
 export const contentStorage = new LocalContentStorage();
