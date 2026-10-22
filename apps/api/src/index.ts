@@ -19,6 +19,8 @@ import { registerDashboardRoutes } from './dashboard-routes.js';
 import { registerMarketplaceRoutes } from './marketplace-routes.js';
 import { registerWalletRoutes } from './wallet-routes.js';
 import { registerAvatarRoutes } from './avatar-routes.js';
+import { registerStorePlanRoutes } from './store-plan-routes.js';
+import { asStorePlanEntitlements, effectiveStorePlan, isAtLimit } from './store-plan-domain.js';
 import { reverseAffiliateForOrder, settleAffiliateForPaidOrder } from './affiliate-ledger.js';
 import { referralTokenHash, verifySignedReferralToken } from './growth-domain.js';
 import { createApiRateLimiters, resolveApiRateLimitOptions } from './api-rate-limits.js';
@@ -52,6 +54,7 @@ registerPlatformRoutes(app);
 registerDashboardRoutes(app);
 registerWalletRoutes(app);
 registerAvatarRoutes(app);
+registerStorePlanRoutes(app);
 if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => console.error(error instanceof Error ? error.message : 'Content scheduler failed')), 60_000);
 
 const asyncRoute = (handler: express.RequestHandler): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -172,7 +175,23 @@ app.post('/api/products', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asy
   if (user.role !== Role.ADMIN && !seller) return res.status(403).json({ error: 'Approved seller required' });
   const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
   if (seller && !settings?.multiVendorEnabled) return res.status(409).json({ error: 'Multi-vendor mode is disabled' });
-  const product = await prisma.product.create({ data: { sellerId: seller?.id, categoryId: input.categoryId ?? null, name: input.name, slug: `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 7)}`, description: input.description, priceMinor: input.priceMinor, barcode: input.barcode, status: user.role === Role.ADMIN || settings?.productApprovalPolicy === ApprovalPolicy.AUTOMATIC ? ProductStatus.APPROVED : ProductStatus.PENDING, inventory: { create: { quantity: input.stock } } } });
+  const productData = { sellerId: seller?.id, categoryId: input.categoryId ?? null, name: input.name, slug: `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 7)}`, description: input.description, priceMinor: input.priceMinor, barcode: input.barcode, status: user.role === Role.ADMIN || settings?.productApprovalPolicy === ApprovalPolicy.AUTOMATIC ? ProductStatus.APPROVED : ProductStatus.PENDING, inventory: { create: { quantity: input.stock } } };
+  if (seller) {
+    const store = await prisma.store.findUnique({ where: { sellerId: seller.id }, select: { id: true } });
+    if (!store) return res.status(409).json({ error: 'Complete Store setup before adding products.' });
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
+      const effective = await effectiveStorePlan(tx, store.id);
+      const entitlements = asStorePlanEntitlements(effective.version);
+      const usage = await tx.product.count({ where: { sellerId: seller.id, status: { not: ProductStatus.ARCHIVED } } });
+      if (isAtLimit(usage, entitlements.productLimit)) return { limitReached: true as const, usage, limit: entitlements.productLimit };
+      return { product: await tx.product.create({ data: productData }) };
+    });
+    if ('limitReached' in result) return res.status(409).json({ code: 'PLAN_LIMIT_REACHED', entitlement: 'productLimit', upgradeRequired: true, error: 'Your Store has reached its product limit. Archive a listing or ask an administrator about a plan change.', usage: result.usage, limit: result.limit, planUrl: '/seller/plan' });
+    res.status(201).json(result.product);
+    return;
+  }
+  const product = await prisma.product.create({ data: productData });
   res.status(201).json(product);
 }));
 app.patch('/api/products/:id', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asyncRoute(async (req, res) => {

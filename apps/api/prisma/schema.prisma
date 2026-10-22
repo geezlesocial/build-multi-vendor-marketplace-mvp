@@ -22,6 +22,47 @@ enum SellerStatus {
   SUSPENDED
 }
 
+enum StorePlanStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum StorePlanVersionStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+}
+
+enum StorePlanAssignmentStatus {
+  ACTIVE
+  SUPERSEDED
+  EXPIRED
+  CANCELLED
+}
+
+enum StorePlanAssignmentSource {
+  ADMIN
+  LEGACY_BOOTSTRAP
+}
+
+enum StoreThemePreset {
+  CLASSIC
+  EDITORIAL
+  BOUTIQUE
+}
+
+enum StorePaymentConnector {
+  STRIPE
+  PAYPAL
+}
+
+enum MobileStorefrontTemplate {
+  RESPONSIVE_STANDARD
+  MOBILE_COMPACT
+  MOBILE_EDITORIAL
+}
+
 enum ProductStatus {
   PENDING
   APPROVED
@@ -375,6 +416,8 @@ model User {
   clubCoinEntries ClubCoinEntry[]
   clubCoinRedemptions ClubCoinRedemption[]
   clubCoinRulesCreated ClubCoinRule[] @relation("ClubCoinRuleCreator")
+  storePlanVersionsCreated StorePlanVersion[] @relation("StorePlanVersionCreator")
+  storePlanAssignmentsMade StorePlanAssignment[] @relation("StorePlanAssignmentAdmin")
 }
 
 model SavedAddress {
@@ -454,6 +497,7 @@ model Store {
   logoMedia MediaAsset? @relation("StoreLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
   bannerMedia MediaAsset? @relation("StoreBanner", fields: [bannerMediaId], references: [id], onDelete: SetNull)
   themeRevisions StoreThemeRevision[]
+  planAssignments StorePlanAssignment[]
 }
 
 model SellerStaff {
@@ -854,6 +898,57 @@ model StoreThemeRevision {
   editor      User @relation(fields: [editorId], references: [id], onDelete: Restrict)
   @@unique([storeId, version])
   @@index([storeId, createdAt])
+}
+
+model StorePlan {
+  id        String          @id @default(cuid())
+  key       String          @unique
+  name      String
+  status    StorePlanStatus @default(DRAFT)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  versions  StorePlanVersion[]
+}
+
+model StorePlanVersion {
+  id                    String                    @id @default(cuid())
+  planId                String
+  version               Int
+  status                StorePlanVersionStatus    @default(DRAFT)
+  productLimit          Int
+  storeLimit            Int
+  vendorLimit           Int
+  staffSeatLimit        Int
+  allowedThemes         StoreThemePreset[]         @default([CLASSIC, EDITORIAL, BOUTIQUE])
+  customDomainEligible  Boolean                   @default(false)
+  paymentConnectors     StorePaymentConnector[]   @default([])
+  mobileTemplates       MobileStorefrontTemplate[] @default([RESPONSIVE_STANDARD])
+  createdById           String?
+  createdAt             DateTime                  @default(now())
+  activatedAt           DateTime?
+  plan                  StorePlan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
+  creator               User?                     @relation("StorePlanVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  assignments           StorePlanAssignment[]
+  @@unique([planId, version])
+  @@index([planId, status, version])
+}
+
+model StorePlanAssignment {
+  id             String                       @id @default(cuid())
+  storeId        String
+  planVersionId  String
+  status         StorePlanAssignmentStatus    @default(ACTIVE)
+  source         StorePlanAssignmentSource    @default(ADMIN)
+  assignedById   String?
+  effectiveFrom  DateTime                     @default(now())
+  effectiveUntil DateTime?
+  reason         String?
+  createdAt      DateTime                     @default(now())
+  store          Store                        @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  planVersion    StorePlanVersion             @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
+  assignedBy     User?                        @relation("StorePlanAssignmentAdmin", fields: [assignedById], references: [id], onDelete: SetNull)
+  @@index([storeId, status, effectiveFrom])
+  @@index([planVersionId, status])
 }
 
 model SellerAdminNote {

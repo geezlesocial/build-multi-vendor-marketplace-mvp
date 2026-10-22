@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ApprovalPolicy, ContentStatus, MediaScanStatus, PayoutMethodStatus, PayoutMethodType, ProductStatus, Role, SellerPayoutLedgerType, SellerPayoutStatus, SellerStatus, TaxonomyStatus, Prisma } from '@prisma/client';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
 import { env } from './config.js';
+import { asStorePlanEntitlements, effectiveStorePlan } from './store-plan-domain.js';
 import { brandingSchema, decryptPayoutDetails, encryptPayoutDetails, maskIdentifier, payoutMethodEnabled, payoutMethodSchema, payoutStatusTransitionAllowed, platformSettingsSchema, reservedStoreSlug, safePayoutMethod, storeSettingsSchema, storeSlugFromName, storeThemeSchema, taxonomySchema } from './platform-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -160,8 +161,70 @@ export function registerPlatformRoutes(app: Express) {
   app.delete('/api/admin/brands/:id', requireAuth, requireRole(...admin), run(async (req, res) => { const actor = user(res); const existing = await prisma.brand.findUnique({ where: { id: param(req.params.id) }, include: { _count: { select: { products: true } } } }); if (!existing) return res.status(404).json({ error: 'Brand not found' }); if (existing._count.products) throw fail(409, 'Reassign or archive products before deleting a referenced brand'); await prisma.brand.delete({ where: { id: existing.id } }); await audit(actor.id, 'BRAND_DELETED', 'Brand', existing.id); res.status(204).send(); }));
 
   app.get('/api/seller/store-theme', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => { const actor = user(res); if (!actor.sellerId) throw fail(403, 'Seller scope required'); const store = await storeForSeller(actor.sellerId); if (!store) throw fail(404, 'Store not found'); res.json({ storeId: store.id, name: store.name, slug: store.slug, publicPath: `/store/${store.slug}`, draft: store.themeDraftJson ?? store.themePublishedJson ?? storeThemeSchema.parse({}), published: store.themePublishedJson, publishedAt: store.themePublishedAt }); }));
-  app.put('/api/seller/store-theme', requireAuth, requireRole(...sellerRoles), run(async (req, res) => { const actor = user(res); if (!actor.sellerId) throw fail(403, 'Seller scope required'); const seller = await prisma.seller.findUnique({ where: { id: actor.sellerId }, select: { status: true } }); if (!seller || seller.status !== SellerStatus.APPROVED) throw fail(403, 'Approved seller required'); const store = await storeForSeller(actor.sellerId); if (!store) throw fail(404, 'Store not found'); const input = storeSettingsSchema.parse(req.body); const { name, ...theme } = input; const nextName = name ?? store.name; const nextSlug = name === undefined ? store.slug : storeSlugFromName(nextName); if (!nextSlug) throw fail(400, 'Store name must produce a valid public URL'); if (reservedStoreSlug(nextSlug)) throw fail(400, 'That store name produces a reserved public URL'); if (nextSlug !== store.slug && await prisma.store.findFirst({ where: { slug: nextSlug, id: { not: store.id } } })) throw fail(409, 'Store URL is already in use; choose a different store name'); if (nextSlug !== store.slug && await prisma.slugRedirect.findUnique({ where: { fromPath: `/store/${nextSlug}` } })) throw fail(409, 'That store URL is reserved by an existing redirect; choose a different store name'); await mediaCheck([theme.logoMediaId, theme.bannerMediaId], false); const updated = await prisma.$transaction(async tx => { const next = await tx.store.update({ where: { id: store.id }, data: { name: nextName, ...(nextSlug !== store.slug ? { slug: nextSlug } : {}), themeDraftJson: inputJson(theme) } }); const latest = await tx.storeThemeRevision.findFirst({ where: { storeId: store.id }, orderBy: { version: 'desc' }, select: { version: true } }); await tx.storeThemeRevision.create({ data: { storeId: store.id, version: (latest?.version ?? 0) + 1, themeJson: inputJson(theme), editorId: actor.id, changeNote: typeof req.body.changeNote === 'string' ? req.body.changeNote.slice(0, 500) : undefined } }); if (nextSlug !== store.slug) { await tx.slugRedirect.updateMany({ where: { destinationPath: `/store/${store.slug}` }, data: { destinationPath: `/store/${nextSlug}` } }); await tx.slugRedirect.upsert({ where: { fromPath: `/store/${store.slug}` }, update: { destinationPath: `/store/${nextSlug}`, statusCode: 301, createdById: actor.id }, create: { fromPath: `/store/${store.slug}`, destinationPath: `/store/${nextSlug}`, statusCode: 301, createdById: actor.id } }); } return next; }); await audit(actor.id, 'SELLER_STORE_SETTINGS_SAVED', 'Store', updated.id, { oldSlug: store.slug, newSlug: updated.slug, nameChanged: store.name !== updated.name }); res.json({ ...updated, publicPath: `/store/${updated.slug}` }); }));
-  app.post('/api/seller/store-theme/publish', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => { const actor = user(res); if (!actor.sellerId) throw fail(403, 'Seller scope required'); const seller = await prisma.seller.findUnique({ where: { id: actor.sellerId }, select: { status: true } }); if (!seller || seller.status !== SellerStatus.APPROVED) throw fail(403, 'Approved seller required'); const store = await storeForSeller(actor.sellerId); if (!store || !store.themeDraftJson) throw fail(404, 'Store theme draft not found'); const theme = storeThemeSchema.parse(store.themeDraftJson); await mediaCheck([theme.logoMediaId, theme.bannerMediaId], true); const updated = await prisma.store.update({ where: { id: store.id }, data: { themePublishedJson: inputJson(theme), themePublishedAt: new Date() } }); await audit(actor.id, 'STORE_THEME_PUBLISHED', 'Store', updated.id); res.json(updated); }));
+  app.put('/api/seller/store-theme', requireAuth, requireRole(...sellerRoles), run(async (req, res) => {
+    const actor = user(res);
+    if (!actor.sellerId) throw fail(403, 'Seller scope required');
+    const seller = await prisma.seller.findUnique({ where: { id: actor.sellerId }, select: { status: true } });
+    if (!seller || seller.status !== SellerStatus.APPROVED) throw fail(403, 'Approved seller required');
+    const store = await storeForSeller(actor.sellerId);
+    if (!store) throw fail(404, 'Store not found');
+    const input = storeSettingsSchema.parse(req.body);
+    const { name, ...theme } = input;
+    const nextName = name ?? store.name;
+    const nextSlug = name === undefined ? store.slug : storeSlugFromName(nextName);
+    if (!nextSlug) throw fail(400, 'Store name must produce a valid public URL');
+    if (reservedStoreSlug(nextSlug)) throw fail(400, 'That store name produces a reserved public URL');
+    if (nextSlug !== store.slug && await prisma.store.findFirst({ where: { slug: nextSlug, id: { not: store.id } } })) throw fail(409, 'Store URL is already in use; choose a different store name');
+    if (nextSlug !== store.slug && await prisma.slugRedirect.findUnique({ where: { fromPath: `/store/${nextSlug}` } })) throw fail(409, 'That store URL is reserved by an existing redirect; choose a different store name');
+    await mediaCheck([theme.logoMediaId, theme.bannerMediaId], false);
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
+      const current = await tx.store.findUnique({ where: { id: store.id } });
+      if (!current) throw fail(404, 'Store not found');
+      const priorTheme = storeThemeSchema.safeParse(current.themeDraftJson ?? {});
+      const prior = priorTheme.success ? priorTheme.data : storeThemeSchema.parse({});
+      const entitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      if (!entitlements.allowedThemes.includes(theme.themePreset) && theme.themePreset !== prior.themePreset) return { denied: 'themePreset' as const };
+      if (!entitlements.mobileTemplates.includes(theme.mobileTemplate) && theme.mobileTemplate !== prior.mobileTemplate) return { denied: 'mobileTemplate' as const };
+
+      const updated = await tx.store.update({ where: { id: store.id }, data: { name: nextName, ...(nextSlug !== current.slug ? { slug: nextSlug } : {}), themeDraftJson: inputJson(theme) } });
+      const latest = await tx.storeThemeRevision.findFirst({ where: { storeId: store.id }, orderBy: { version: 'desc' }, select: { version: true } });
+      await tx.storeThemeRevision.create({ data: { storeId: store.id, version: (latest?.version ?? 0) + 1, themeJson: inputJson(theme), editorId: actor.id, changeNote: typeof req.body.changeNote === 'string' ? req.body.changeNote.slice(0, 500) : undefined } });
+      if (nextSlug !== current.slug) {
+        await tx.slugRedirect.updateMany({ where: { destinationPath: `/store/${current.slug}` }, data: { destinationPath: `/store/${nextSlug}` } });
+        await tx.slugRedirect.upsert({ where: { fromPath: `/store/${current.slug}` }, update: { destinationPath: `/store/${nextSlug}`, statusCode: 301, createdById: actor.id }, create: { fromPath: `/store/${current.slug}`, destinationPath: `/store/${nextSlug}`, statusCode: 301, createdById: actor.id } });
+      }
+      await tx.auditLog.create({ data: { actorId: actor.id, action: 'SELLER_STORE_SETTINGS_SAVED', entity: 'Store', entityId: updated.id, metadata: inputJson({ oldSlug: current.slug, newSlug: updated.slug, nameChanged: current.name !== updated.name, themePreset: theme.themePreset, mobileTemplate: theme.mobileTemplate }) } });
+      return { updated };
+    });
+    if ('denied' in result) return res.status(409).json({ code: 'PLAN_ENTITLEMENT_REQUIRED', entitlement: result.denied, upgradeRequired: true, error: `This Store plan does not include the selected ${result.denied === 'themePreset' ? 'theme' : 'mobile template'}.`, planUrl: '/seller/plan' });
+    res.json({ ...result.updated, publicPath: `/store/${result.updated.slug}` });
+  }));
+  app.post('/api/seller/store-theme/publish', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
+    const actor = user(res);
+    if (!actor.sellerId) throw fail(403, 'Seller scope required');
+    const seller = await prisma.seller.findUnique({ where: { id: actor.sellerId }, select: { status: true } });
+    if (!seller || seller.status !== SellerStatus.APPROVED) throw fail(403, 'Approved seller required');
+    const store = await storeForSeller(actor.sellerId);
+    if (!store || !store.themeDraftJson) throw fail(404, 'Store theme draft not found');
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
+      const current = await tx.store.findUnique({ where: { id: store.id } });
+      if (!current?.themeDraftJson) throw fail(404, 'Store theme draft not found');
+      const theme = storeThemeSchema.parse(current.themeDraftJson);
+      await mediaCheck([theme.logoMediaId, theme.bannerMediaId], true);
+      const priorPublished = storeThemeSchema.safeParse(current.themePublishedJson ?? {});
+      const prior = priorPublished.success ? priorPublished.data : storeThemeSchema.parse({});
+      const entitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      if (!entitlements.allowedThemes.includes(theme.themePreset) && theme.themePreset !== prior.themePreset) return { denied: 'themePreset' as const };
+      if (!entitlements.mobileTemplates.includes(theme.mobileTemplate) && theme.mobileTemplate !== prior.mobileTemplate) return { denied: 'mobileTemplate' as const };
+      const updated = await tx.store.update({ where: { id: store.id }, data: { themePublishedJson: inputJson(theme), themePublishedAt: new Date() } });
+      await tx.auditLog.create({ data: { actorId: actor.id, action: 'STORE_THEME_PUBLISHED', entity: 'Store', entityId: updated.id } });
+      return { updated };
+    });
+    if ('denied' in result) return res.status(409).json({ code: 'PLAN_ENTITLEMENT_REQUIRED', entitlement: result.denied, upgradeRequired: true, error: `This Store plan does not include the selected ${result.denied === 'themePreset' ? 'theme' : 'mobile template'}.`, planUrl: '/seller/plan' });
+    res.json(result.updated);
+  }));
   app.get('/api/stores/:slug', run(async (req, res) => { const slug = param(req.params.slug); const store = await prisma.store.findFirst({ where: { slug, seller: { status: SellerStatus.APPROVED } }, include: { seller: { select: { products: { where: { status: ProductStatus.APPROVED }, include: { category: true, brand: true, inventory: true, images: true, variants: { where: { status: ProductStatus.APPROVED }, orderBy: { name: 'asc' } } }, orderBy: { createdAt: 'desc' } } } } } }); if (!store) { const redirect = await prisma.slugRedirect.findUnique({ where: { fromPath: `/store/${slug}` } }); if (redirect) return res.json({ redirectTo: redirect.destinationPath, statusCode: redirect.statusCode }); return res.status(404).json({ error: 'Store not found' }); } const theme = storeThemeSchema.safeParse(store.themePublishedJson ?? {}); const publishedTheme = theme.success ? theme.data : storeThemeSchema.parse({}); res.json({ storeId: store.id, name: store.name, slug: store.slug, publicPath: `/store/${store.slug}`, theme: publishedTheme, publishedAt: store.themePublishedAt, products: store.seller.products.map(product => ({ id: product.id, name: product.name, slug: product.slug, description: product.description, priceMinor: product.priceMinor, currency: product.currency, availableStock: product.inventory?.quantity ?? 0, category: product.category ? { name: product.category.name, slug: product.category.slug } : null, brand: product.brand ? { name: product.brand.name, slug: product.brand.slug } : null, images: product.images.map(image => ({ url: image.url, alt: image.alt })) , variants: product.variants.map(variant => ({ id: variant.id, name: variant.name, priceMinor: variant.priceMinor, currency: variant.currency, stock: variant.stock })) })) }); }));
   app.get('/api/stores/:slug/theme', run(async (req, res) => { const store = await prisma.store.findFirst({ where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } }, include: { seller: true } }); if (!store || !store.themePublishedJson) return res.status(404).json({ error: 'Store theme not found' }); res.json({ storeId: store.id, slug: store.slug, theme: store.themePublishedJson, publishedAt: store.themePublishedAt }); }));
 

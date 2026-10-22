@@ -29,7 +29,7 @@ test('approved seller can switch dashboards and view only the public store link'
   await expect(page.getByRole('heading', { name: 'Seller dashboard' })).toBeVisible();
   await page.getByRole('button', { name: 'Store' }).click();
   await expect(page.getByText(store.name)).toBeVisible();
-  await expect(page.getByRole('link', { name: 'View store' })).toHaveAttribute('href', store.publicPath);
+  await expect(page.getByRole('link', { name: 'View store', exact: true })).toHaveAttribute('href', store.publicPath);
   await expect((await page.request.get('/api/dashboard/buyer')).ok()).toBeTruthy();
 });
 

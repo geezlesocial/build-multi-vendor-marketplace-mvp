@@ -4,7 +4,7 @@ type StorefrontData = {
   name: string;
   slug: string;
   publicPath: string;
-  theme: { description: string; primaryColor: string; accentColor: string; font: string; bannerMediaId: string | null };
+  theme: { themePreset: string; mobileTemplate: string; description: string; primaryColor: string; accentColor: string; font: string; bannerMediaId: string | null };
   products: { id: string; name: string; description: string; priceMinor: number; currency: string; availableStock: number; category: { name: string } | null }[];
   redirectTo?: string;
 };
@@ -40,7 +40,7 @@ export function Storefront({ slug }: { slug: string }) {
   if (error) return <section className="page"><p className="eyebrow">Storefront</p><h1>Store not found</h1><p className="muted">This store is unavailable or its seller is not approved.</p></section>;
   if (!store) return <section className="page"><p className="eyebrow">Storefront</p><h1>Loading store…</h1></section>;
 
-  return <section className="page storeFront" style={{ ['--store-primary' as string]: store.theme.primaryColor, ['--store-accent' as string]: store.theme.accentColor }}>
+  return <section className="page storeFront" data-store-theme={store.theme.themePreset} data-mobile-template={store.theme.mobileTemplate} style={{ ['--store-primary' as string]: store.theme.primaryColor, ['--store-accent' as string]: store.theme.accentColor }}>
     <p className="eyebrow">Independent store</p>
     <h1>{store.name}</h1>
     {store.theme.description && <p className="storeDescription">{store.theme.description}</p>}

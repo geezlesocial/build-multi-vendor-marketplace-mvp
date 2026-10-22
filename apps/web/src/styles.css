@@ -33,3 +33,38 @@
 .settingsPage a{color:#315d47;text-decoration-thickness:.08em;text-underline-offset:.18em}
 .settingsPage a:hover{color:#234832}
 @media(max-width:720px){.settingsPage{padding-top:2rem}.settingsGrid{grid-template-columns:minmax(0,1fr)}.settingsPreferenceControls{grid-template-columns:minmax(0,1fr)}.settingsSecurityForm .primary{justify-self:stretch}.settingsNotificationContent .settingRow{gap:.65rem}}
+
+/* Server-allowlisted storefront theme entitlements. */
+.storeFront[data-store-theme="EDITORIAL"] h1,.storeFront[data-store-theme="EDITORIAL"] h2{font-family:Georgia,"Times New Roman",serif;letter-spacing:-.035em}
+.storeFront[data-store-theme="BOUTIQUE"] .card{border-radius:1.6rem;box-shadow:0 14px 32px #23452d12}
+.storeFront[data-mobile-template="MOBILE_COMPACT"] .grid{gap:.7rem}
+.storeFront[data-mobile-template="MOBILE_EDITORIAL"] .storeDescription{max-width:54rem;font-family:Georgia,"Times New Roman",serif;font-size:1.18rem;line-height:1.8}
+@media(max-width:720px){.storeFront[data-mobile-template="MOBILE_COMPACT"] .cardBody{padding:.8rem}.storeFront[data-mobile-template="MOBILE_COMPACT"] .productMark{height:110px}.storeFront[data-mobile-template="MOBILE_EDITORIAL"] .heroPills{gap:.4rem}}
+.sellerPlanSummary{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:1rem 0 2rem}
+.sellerPlanSummary h2{margin:.2rem 0}
+.planUsageCard p{margin:.5rem 0}
+.planUsageCard progress{width:100%;height:.65rem;accent-color:#325a45}
+.planCapabilities{margin:1.5rem 0}
+.planCapabilities dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
+.planCapabilities dl>div{min-width:0;padding:.9rem;background:#f7f8f4;border-radius:.7rem}
+.planCapabilities dt{font-weight:700}
+.planCapabilities dd{margin:.25rem 0 0;overflow-wrap:anywhere}
+@media(max-width:720px){.sellerPlanSummary{align-items:flex-start;flex-direction:column}.planCapabilities dl{grid-template-columns:minmax(0,1fr)}}
+.storePlanAdminGrid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);align-items:start;gap:1rem}
+.storePlanAdminCard{margin:.75rem 0}
+.storePlanCardHead,.storePlanVersion{display:flex;align-items:center;justify-content:space-between;gap:.8rem}
+.storePlanCardHead h3{margin:.2rem 0}
+.storePlanVersion{padding:.7rem 0;border-top:1px solid #edf0ec;font-size:.88rem}
+.storePlanVersion button{padding:.45rem .7rem;font-size:.85rem}
+.storePlanForm{display:grid;gap:.85rem;min-width:0}
+.storePlanForm h3,.storePlanAdmin h3{margin:.2rem 0}
+.storePlanNumberGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}
+.storePlanForm fieldset{display:flex;flex-wrap:wrap;gap:.65rem 1rem;min-width:0;border:1px solid #dce1d9;border-radius:.7rem;padding:.8rem}
+.storePlanForm fieldset legend{font-weight:700;padding:0 .3rem}
+.storePlanCheck{display:flex;align-items:center;gap:.5rem;min-width:0;font-weight:500}
+.storePlanCheck input{width:1.1rem;min-width:1.1rem;height:1.1rem;margin:0}
+.storeAssignmentPanel{margin:1.5rem 0}
+.storeAssignmentForm{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;align-items:end;gap:.8rem;margin:1rem 0}
+.storeAssignmentRow{grid-template-columns:minmax(0,1fr) auto minmax(0,1.3fr) minmax(0,1fr)}
+@media(max-width:850px){.storePlanAdminGrid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:720px){.storePlanNumberGrid,.storeAssignmentForm{grid-template-columns:minmax(0,1fr)}.storePlanVersion{align-items:flex-start;flex-direction:column}.storeAssignmentRow{grid-template-columns:minmax(0,1fr) auto}.storeAssignmentRow span:nth-child(3),.storeAssignmentRow span:nth-child(4){color:#68736b;font-size:.85rem}}
