@@ -12,8 +12,8 @@ test('buyer dashboard exposes buyer modules and denies seller-scoped data', asyn
   await expect((await page.request.get('/api/dashboard/seller')).status()).toBe(403);
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { name: 'Buyer dashboard' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Buyer dashboard' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Seller dashboard' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Buyer view' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Seller view' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Orders' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cart' })).toBeVisible();
 });
@@ -25,7 +25,7 @@ test('approved seller can switch dashboards and view only the public store link'
   const store = await storeResponse.json() as { publicPath: string; name: string };
 
   await page.goto('/dashboard');
-  await page.getByRole('button', { name: 'Seller dashboard' }).click();
+  await page.getByRole('button', { name: 'Seller view' }).click();
   await expect(page.getByRole('heading', { name: 'Seller dashboard' })).toBeVisible();
   await page.getByRole('button', { name: 'Store' }).click();
   await expect(page.getByText(store.name)).toBeVisible();

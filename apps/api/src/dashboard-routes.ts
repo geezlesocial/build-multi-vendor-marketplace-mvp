@@ -45,7 +45,8 @@ export function registerDashboardRoutes(app: Express) {
 
   app.patch('/api/account/profile', requireAuth, run(async (req, res) => {
     const user = actor(res); const input = z.object({ name: z.string().trim().min(2).max(100) }).strict().parse(req.body);
-    res.json(await prisma.user.update({ where: { id: user.id }, data: { name: input.name }, select: { id: true, email: true, name: true, role: true } }));
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { name: input.name }, select: { id: true, email: true, name: true, role: true, avatarMediaId: true } });
+    res.json({ id: updated.id, email: updated.email, name: updated.name, role: updated.role, ...(updated.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) });
   }));
 
   app.get('/api/account/preferences', requireAuth, run(async (_req, res) => {

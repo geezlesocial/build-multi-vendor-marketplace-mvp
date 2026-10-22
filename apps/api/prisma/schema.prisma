@@ -323,6 +323,7 @@ model User {
   passwordHash String
   name         String
   role         Role         @default(BUYER)
+  avatarMediaId String?     @unique
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   sessions     Session[]
@@ -342,6 +343,7 @@ model User {
   blogRevisions BlogPostRevision[]
   pageRevisions ContentPageRevision[]
   uploadedMedia MediaAsset[]
+  avatarMedia MediaAsset? @relation("UserAvatar", fields: [avatarMediaId], references: [id], onDelete: SetNull)
   contentAuditPreviews ContentPreviewToken[]
   slugRedirects SlugRedirect[]
   favorites Favorite[]
@@ -1343,6 +1345,7 @@ model MediaAsset {
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   uploader      User            @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+  avatarUsers   User[]          @relation("UserAvatar")
   featuredPosts BlogPost[]      @relation("BlogFeaturedImage")
   blogOgPosts   BlogPost[]      @relation("BlogOgImage")
   pageOgPages   ContentPage[]   @relation("PageOgImage")

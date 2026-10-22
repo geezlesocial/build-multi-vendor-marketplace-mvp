@@ -2,7 +2,6 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { AffiliateAdjustmentType, ApprovalPolicy, Prisma, PaymentMethod, PaymentStatus, ProductStatus, Role, SellerStatus, OrderStatus } from '@prisma/client';
 import type { Stripe as StripeType } from 'stripe';
@@ -19,8 +18,10 @@ import { registerPlatformRoutes } from './platform-routes.js';
 import { registerDashboardRoutes } from './dashboard-routes.js';
 import { registerMarketplaceRoutes } from './marketplace-routes.js';
 import { registerWalletRoutes } from './wallet-routes.js';
+import { registerAvatarRoutes } from './avatar-routes.js';
 import { reverseAffiliateForOrder, settleAffiliateForPaidOrder } from './affiliate-ledger.js';
 import { referralTokenHash, verifySignedReferralToken } from './growth-domain.js';
+import { createApiRateLimiters, resolveApiRateLimitOptions } from './api-rate-limits.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -34,8 +35,15 @@ app.use((req, res, next) => {
   if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) return res.status(403).json({ error: 'CSRF validation failed' });
   next();
 });
-app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 60 }));
-app.use('/api', rateLimit({ windowMs: 60 * 1000, limit: 300 }));
+const { credentialLimiter, apiLimiter } = createApiRateLimiters(resolveApiRateLimitOptions({
+  NODE_ENV: env.NODE_ENV,
+  E2E_API_RATE_LIMIT_OVERRIDE: process.env.E2E_API_RATE_LIMIT_OVERRIDE,
+  DATABASE_URL: env.DATABASE_URL,
+  E2E_DATABASE_URL: process.env.E2E_DATABASE_URL,
+  WALLET_FUNDING_SANDBOX_ID: env.WALLET_FUNDING_SANDBOX_ID,
+  WALLET_FUNDING_DISPOSABLE_DATABASE_ALLOWLIST: env.WALLET_FUNDING_DISPOSABLE_DATABASE_ALLOWLIST
+}));
+app.use('/api', apiLimiter);
 app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf); } }));
 registerContentRoutes(app);
 registerGrowthRoutes(app);
@@ -43,6 +51,7 @@ registerMarketplaceRoutes(app);
 registerPlatformRoutes(app);
 registerDashboardRoutes(app);
 registerWalletRoutes(app);
+registerAvatarRoutes(app);
 if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => console.error(error instanceof Error ? error.message : 'Content scheduler failed')), 60_000);
 
 const asyncRoute = (handler: express.RequestHandler): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -53,18 +62,18 @@ const orderNumber = () => `MV-${new Date().toISOString().slice(0, 10).replaceAll
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'marketplace-api' }));
 app.get('/ready', asyncRoute(async (_req, res) => { await prisma.$queryRaw`SELECT 1`; res.json({ ok: true }); }));
 
-app.post('/api/auth/register', asyncRoute(async (req, res) => {
+app.post('/api/auth/register', credentialLimiter, asyncRoute(async (req, res) => {
   const input = parse(registerSchema, req.body);
   const user = await prisma.user.create({ data: { email: input.email.toLowerCase(), name: input.name, passwordHash: await hashPassword(input.password) } });
   await createSession(user.id, res);
   res.status(201).json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role }) });
 }));
-app.post('/api/auth/login', asyncRoute(async (req, res) => {
+app.post('/api/auth/login', credentialLimiter, asyncRoute(async (req, res) => {
   const input = parse(loginSchema, req.body);
   const user = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() }, include: { seller: true } });
   if (!user || !(await verifyPassword(input.password, user.passwordHash))) return res.status(401).json({ error: 'Invalid credentials' });
   await createSession(user.id, res);
-  res.json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, ...(user.seller ? { sellerId: user.seller.id } : {}) }) });
+  res.json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, ...(user.seller ? { sellerId: user.seller.id } : {}), ...(user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) }) });
 }));
 app.post('/api/auth/logout', requireAuth, asyncRoute(async (req, res) => { const token = req.cookies?.[env.SESSION_COOKIE_NAME] as string | undefined; if (token) await prisma.session.deleteMany({ where: { tokenHash: (await import('node:crypto')).createHash('sha256').update(token).digest('hex') } }); res.clearCookie(env.SESSION_COOKIE_NAME); res.clearCookie('marketplace_csrf'); res.status(204).send(); }));
 app.get('/api/auth/me', asyncRoute(async (req, res) => { const user = await currentUser(req); res.json({ user: user ? safeUser(user) : null }); }));

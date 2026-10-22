@@ -37,7 +37,10 @@ test('buyer can update, remove, and empty the cart without CSRF errors', async (
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Add to cart' }).first().click();
-  await page.getByRole('button', { name: /Cart/ }).click();
+  const cartLink = page.getByRole('link', { name: /Cart/ });
+  await expect(cartLink).toHaveAttribute('href', '/checkout');
+  await cartLink.click();
+  await expect(page).toHaveURL(/\/checkout$/);
 
   const line = page.locator('.cartLine').filter({ hasText: 'Demo Canvas Tote' });
   await expect(line).toBeVisible();
@@ -56,9 +59,11 @@ test('buyer can update, remove, and empty the cart without CSRF errors', async (
   await expect(page.locator('.total')).toContainText('$24.00');
 
   await line.getByRole('button', { name: 'Remove Demo Canvas Tote from cart' }).click();
+  const announcement = page.locator('.shellNotice[role="status"]');
+  await expect(announcement).toContainText('Demo Canvas Tote removed from your cart.');
   await expect(page.getByText('Your cart is empty.')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Cart/ })).toContainText('0');
-  await expect(page.getByRole('status')).not.toContainText('CSRF');
+  await expect(page.getByRole('link', { name: /Cart/ })).toContainText('0');
+  await expect(page.locator('.cartLine')).toHaveCount(0);
 });
 
 test('buyer sees the COD confirmation after checkout empties the cart', async ({ page }) => {
@@ -70,7 +75,10 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Add to cart' }).first().click();
-  await page.getByRole('button', { name: /Cart/ }).click();
+  const cartLink = page.getByRole('link', { name: /Cart/ });
+  await expect(cartLink).toHaveAttribute('href', '/checkout');
+  await cartLink.click();
+  await expect(page).toHaveURL(/\/checkout$/);
   await page.getByLabel('Address').fill('1 Test Street');
   await page.getByLabel('City').fill('Test City');
   await page.getByLabel('Region').fill('TS');
@@ -89,5 +97,5 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
   await expect(summaryTotal).toHaveText((await confirmationTotal.textContent())!.trim());
   await expect(page.getByText('Your cart is empty.')).toBeVisible();
   await expect(page.getByText('Added to cart')).not.toBeVisible();
-  await expect(page.getByRole('button', { name: /Cart/ })).toContainText('0');
+  await expect(page.getByRole('link', { name: /Cart/ })).toContainText('0');
 });

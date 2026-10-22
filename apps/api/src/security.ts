@@ -26,7 +26,7 @@ export async function createSession(userId: string, res: Response) {
   res.cookie('marketplace_csrf', csrf, { httpOnly: false, secure: env.NODE_ENV === 'production', sameSite: 'lax', expires: expiresAt, path: '/' });
 }
 
-export type AuthUser = { id: string; email: string; name: string; role: Role; sellerId?: string };
+export type AuthUser = { id: string; email: string; name: string; role: Role; sellerId?: string; avatarUrl?: string };
 
 export async function currentUser(req: Request): Promise<AuthUser | null> {
   const token = req.cookies?.[env.SESSION_COOKIE_NAME] as string | undefined;
@@ -34,7 +34,7 @@ export async function currentUser(req: Request): Promise<AuthUser | null> {
   const session = await prisma.session.findUnique({ where: { tokenHash: tokenHash(token) }, include: { user: { include: { seller: true, staffMemberships: true } } } });
   if (!session || session.expiresAt <= new Date()) return null;
   const sellerId = session.user.seller?.id ?? session.user.staffMemberships[0]?.sellerId;
-  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, ...(sellerId ? { sellerId } : {}) };
+  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, ...(sellerId ? { sellerId } : {}), ...(session.user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) };
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {

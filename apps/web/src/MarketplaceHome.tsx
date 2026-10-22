@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-type User = { name: string; role: string } | null;
+type User = { id: string; name: string; role: string } | null;
 type Product = { id: string; name: string; description: string; priceMinor: number; currency: string; availableStock: number; image: { url: string; alt: string } | null; category: { name: string; slug: string } | null; store: { name: string; slug: string } | null };
 type Store = { id: string; name: string; slug: string; description: string | null; logoMediaId: string | null };
 type HomeData = { hero: { title: string; description: string }; categories: { id: string; name: string; slug: string; imageUrl: string | null }[]; featuredDeals: Product[]; productCollection: Product[]; featuredStores: Store[] };
 type SearchData = { products: (Product & { type: 'Product' })[]; stores: (Store & { type: 'Store' })[] };
+type MemberData = { orders: { orderNumber: string; status: string }[]; cart: { items: { quantity: number }[] }; favorites: unknown[] };
 
 const money = (minor: number, currency: string) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(minor / 100);
 
@@ -24,10 +25,16 @@ export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: 
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const [memberData, setMemberData] = useState<MemberData | null>(null);
 
   useEffect(() => {
     request<HomeData>('/api/marketplace/home').then(setHome).catch(error => setError(error.message)).finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!user || user.role === 'ADMIN') { setMemberData(null); return; }
+    request<MemberData>('/api/dashboard/buyer').then(setMemberData).catch(() => setMemberData(null));
+  }, [user?.id, user?.name, user?.role]);
 
   useEffect(() => {
     const value = query.trim();
@@ -61,9 +68,10 @@ export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: 
   const cards = [...home.featuredDeals, ...home.productCollection];
   return <section className="page marketplaceHome">
     <div className="marketHero">
-      <div className="marketHeroCopy"><p className="eyebrow">{user ? `Welcome back, ${user.name}` : 'Market Lane · independent marketplace'}</p><h1>{home.hero.title}</h1><p>{home.hero.description}</p><div className="marketHeroActions"><a className="primary heroAction" href="#featured">Browse the collection</a><a className="heroActionSecondary" href="#stores">Meet the stores</a></div><div className="heroPills"><span>Approved catalog only</span><span>Server-validated stock</span><span>Clear checkout totals</span></div></div>
+      <div className="marketHeroCopy"><p className="eyebrow">{user ? user.role === 'ADMIN' ? 'Marketplace control room' : 'Your Market Lane' : 'Market Lane · independent marketplace'}</p><h1>{user && user.role !== 'ADMIN' ? `Good to see you, ${user.name.split(/\s+/)[0]}.` : user?.role === 'ADMIN' ? 'A clear view of the marketplace.' : home.hero.title}</h1><p>{user && user.role !== 'ADMIN' ? 'Pick up where you left off, check your account, or discover something new from independent stores.' : home.hero.description}</p><div className="marketHeroActions">{user && user.role !== 'ADMIN' ? <><a className="primary heroAction" href="/dashboard">Open your dashboard</a><a className="heroActionSecondary" href="/dashboard?tab=orders">View orders</a>{user.role === 'SELLER' && <a className="heroActionSecondary" href="/dashboard?mode=seller">Seller tools</a>}</> : user?.role === 'ADMIN' ? <><a className="primary heroAction" href="/admin/platform">Open admin dashboard</a><a className="heroActionSecondary" href="#featured">Browse public catalog</a></> : <><a className="primary heroAction" href="#featured">Browse the collection</a><a className="heroActionSecondary" href="#stores">Meet the stores</a><a className="heroActionSecondary" href="/?auth=login">Sign in</a><a className="heroActionSecondary" href="/?auth=register">Create account</a></>}</div><div className="heroPills"><span>Approved catalog only</span><span>Server-validated stock</span><span>Clear checkout totals</span></div></div>
       <aside className="marketHeroVisual" aria-label="Featured marketplace preview"><div className="marketHeroVisualFrame">{cards[0]?.image ? <img src={cards[0].image.url} alt={cards[0].image.alt} /> : <div className="marketVisualFallback" aria-hidden="true"><span className="visualOrb visualOrbOne" /><span className="visualOrb visualOrbTwo" /><span className="visualShelf" /></div>}<div className="marketHeroVisualCaption"><span>Featured from the catalog</span><strong>{cards[0]?.name ?? 'Thoughtful finds, ready to explore'}</strong><small>{cards[0]?.store?.name ?? 'Approved independent stores'}</small></div></div></aside>
     </div>
+    {user && user.role !== 'ADMIN' && <section className="memberHomePanel" aria-label="Your account overview"><div className="sectionHeading"><div><p className="eyebrow">A good place to pick up</p><h2>Your account at a glance</h2></div><a href="/settings#profile">Profile and settings</a></div>{memberData ? <div className="memberHomeStats"><a className="memberStat" href="/dashboard?tab=orders"><span>Recent orders</span><strong>{memberData.orders.length}</strong><small>{memberData.orders[0]?.orderNumber ?? 'Your order history is ready'}</small></a><a className="memberStat" href="/checkout"><span>In your cart</span><strong>{memberData.cart.items.reduce((sum, item) => sum + item.quantity, 0)}</strong><small>Continue to checkout when you’re ready</small></a><a className="memberStat" href="/dashboard?tab=favorites"><span>Saved favorites</span><strong>{memberData.favorites.length}</strong><small>Keep track of things you like</small></a></div> : <p className="muted" role="status">Your account summary is not available right now.</p>}</section>}
     <div className="marketSearchWrap">
       <label className="search marketSearch"><span>Search products and stores</span><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={handleKeyDown} placeholder="Try “canvas”, “home”, or a store name" aria-controls="market-search-results" aria-expanded={results.length > 0} aria-autocomplete="list" /></label>
       {searching && <span className="muted searchStatus">Searching catalog…</span>}
