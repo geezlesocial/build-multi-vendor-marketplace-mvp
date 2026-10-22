@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { env } from './config.js';
+import { MobileStorefrontTemplate, StoreThemePreset } from '@prisma/client';
 
 export const brandingSchema = z.object({
   platformName: z.string().trim().min(1).max(100),
@@ -25,6 +26,8 @@ const themeSection = z.object({
 }).strict();
 
 export const storeThemeSchema = z.object({
+  themePreset: z.nativeEnum(StoreThemePreset).default(StoreThemePreset.CLASSIC),
+  mobileTemplate: z.nativeEnum(MobileStorefrontTemplate).default(MobileStorefrontTemplate.RESPONSIVE_STANDARD),
   logoMediaId: z.string().min(1).max(80).nullable().default(null),
   bannerMediaId: z.string().min(1).max(80).nullable().default(null),
   description: z.string().trim().max(1000).default(''),
