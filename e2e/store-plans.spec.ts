@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { PrismaClient, Role, SellerStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
@@ -59,6 +59,36 @@ async function activatePlan(page: Page, planId: string, versionId: string) {
     headers: await csrfHeaders(page)
   });
   expect(response.ok(), await response.text()).toBeTruthy();
+}
+
+async function activatePlanFromAdminUI(page: Page, planCard: Locator, plan: { id: string; name: string }, version: { id: string; version: number }) {
+  const dialogPromise = page.waitForEvent('dialog');
+  const responsePromise = page.waitForResponse(response =>
+    new URL(response.url()).pathname === `/api/admin/store-plans/${plan.id}/activate` && response.request().method() === 'POST'
+  );
+  const clickPromise = planCard.getByRole('button', { name: 'Activate version' }).click();
+
+  const dialog = await dialogPromise;
+  expect(dialog.type()).toBe('confirm');
+  expect(dialog.message()).toBe(`Activate ${plan.name} version ${version.version} for new Store subscriptions and assignments? Existing subscriptions keep their saved price and terms. Activation does not charge anyone.`);
+  await dialog.accept();
+  await clickPromise;
+
+  const response = await responsePromise;
+  const responseBody = await response.json() as {
+    plan: { id: string; status: string };
+    version: { id: string; version: number; status: string };
+    alreadyActive: boolean;
+  };
+  expect(response.status(), JSON.stringify(responseBody)).toBe(200);
+  expect(responseBody).toMatchObject({
+    plan: { id: plan.id, status: 'ACTIVE' },
+    version: { id: version.id, version: version.version, status: 'ACTIVE' },
+    alreadyActive: false
+  });
+
+  const versionRow = planCard.locator('.storePlanVersion').filter({ hasText: `Version ${version.version} ·` });
+  await expect(versionRow).toContainText('ACTIVE');
 }
 
 async function assignPlan(page: Page, storeId: string, versionId: string) {
@@ -134,10 +164,22 @@ test('admin creates, versions, activates, assigns, and retires a plan without re
   const plans = await planList.json() as { id: string; key: string; versions: { id: string; version: number; status: string }[] }[];
   const plan = plans.find(item => item.key === key);
   expect(plan).toBeTruthy();
+  const firstVersion = plan!.versions.find(version => version.status === 'DRAFT')!;
   const planCard = page.locator('.storePlanAdminCard').filter({ hasText: key });
   await expect(planCard).toBeVisible();
-  await planCard.getByRole('button', { name: 'Activate version' }).click();
+  await activatePlanFromAdminUI(page, planCard, { id: plan!.id, name: 'Starter Store Plan' }, firstVersion);
   await expect(planCard).toContainText('ACTIVE');
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Store plans' }).click();
+  await expect(page.getByRole('heading', { name: 'Store plans and versions' })).toBeVisible();
+  const reloadedPlansResponse = await page.request.get('/api/admin/store-plans');
+  expect(reloadedPlansResponse.ok(), await reloadedPlansResponse.text()).toBeTruthy();
+  const reloadedPlans = await reloadedPlansResponse.json() as { id: string; key: string; status: string; versions: { id: string; version: number; status: string }[] }[];
+  const reloadedPlan = reloadedPlans.find(item => item.id === plan!.id)!;
+  expect(reloadedPlan.status).toBe('ACTIVE');
+  expect(reloadedPlan.versions.find(version => version.id === firstVersion.id)?.status).toBe('ACTIVE');
+  await expect(page.locator('.storePlanAdminCard').filter({ hasText: key }).locator('.storePlanVersion').filter({ hasText: 'Version 1 ·' })).toContainText('ACTIVE');
 
   const demoStore = await getSellerStore(page);
   const activePlansResponse = await page.request.get('/api/admin/store-plans');
@@ -165,7 +207,7 @@ test('admin creates, versions, activates, assigns, and retires a plan without re
   const versions = (await afterEdit.json() as { key: string; versions: { id: string; version: number; status: string }[] }[]).find(item => item.key === key)!.versions;
   const versionTwo = versions.find(version => version.version === 2)!;
   expect(versionTwo.status).toBe('DRAFT');
-  await planCard.getByRole('button', { name: 'Activate version' }).click();
+  await activatePlanFromAdminUI(page, planCard, { id: plan!.id, name: 'Starter Store Plan' }, versionTwo);
   await page.getByLabel('Active plan version').selectOption(versionTwo.id);
   await page.getByLabel('Reason', { exact: true }).fill('Move demo Store to the newly activated version');
   await page.getByRole('button', { name: 'Assign plan' }).click();
@@ -213,7 +255,7 @@ test('product quotas, theme entitlements, and staff-seat limits are enforced at 
     const sellerPage = await sellerContext.newPage();
     await signIn(sellerPage, sellerEmail);
     await sellerPage.goto('/seller/plan');
-    await expect(sellerPage.getByRole('heading', { name: 'Store plan' })).toBeVisible();
+    await expect(sellerPage.getByRole('heading', { name: 'Plan & Billing' })).toBeVisible();
     await expect(sellerPage.getByText('1 of 2 used')).toBeVisible();
     await expect(sellerPage.getByText('0 of 0 used')).toBeVisible();
 

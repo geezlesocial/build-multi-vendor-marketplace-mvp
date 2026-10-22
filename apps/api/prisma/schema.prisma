@@ -44,6 +44,53 @@ enum StorePlanAssignmentStatus {
 enum StorePlanAssignmentSource {
   ADMIN
   LEGACY_BOOTSTRAP
+  SUBSCRIPTION
+}
+
+enum StorePlanBillingInterval {
+  MONTHLY
+  ANNUAL
+}
+
+enum StorePlanExpirationBehavior {
+  DOWNGRADE_TO_LEGACY
+  SUSPEND_SELLER
+}
+
+enum StorePlanCancellationPolicy {
+  CANCEL_ANYTIME
+  CANCEL_AT_TERM_END
+}
+
+enum StoreSubscriptionStatus {
+  PENDING
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+  UNPAID
+}
+
+enum StoreSubscriptionProvider {
+  STRIPE
+  PAYPAL
+}
+
+enum StoreSubscriptionInvoiceStatus {
+  OPEN
+  PAID
+  FAILED
+  VOID
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum StoreSubscriptionEventStatus {
+  RECEIVED
+  APPLIED
+  IGNORED
+  FAILED
 }
 
 enum StoreThemePreset {
@@ -418,6 +465,7 @@ model User {
   clubCoinRulesCreated ClubCoinRule[] @relation("ClubCoinRuleCreator")
   storePlanVersionsCreated StorePlanVersion[] @relation("StorePlanVersionCreator")
   storePlanAssignmentsMade StorePlanAssignment[] @relation("StorePlanAssignmentAdmin")
+  storePlanSubscriptionsRequested StoreSubscription[] @relation("StoreSubscriptionRequester")
 }
 
 model SavedAddress {
@@ -498,6 +546,7 @@ model Store {
   bannerMedia MediaAsset? @relation("StoreBanner", fields: [bannerMediaId], references: [id], onDelete: SetNull)
   themeRevisions StoreThemeRevision[]
   planAssignments StorePlanAssignment[]
+  subscriptions   StoreSubscription[]
 }
 
 model SellerStaff {
@@ -915,6 +964,21 @@ model StorePlanVersion {
   planId                String
   version               Int
   status                StorePlanVersionStatus    @default(DRAFT)
+  name                  String
+  description           String                    @default("")
+  currency              String                    @default("USD")
+  monthlyPriceMinor     Int                       @default(0)
+  annualPriceMinor      Int                       @default(0)
+  annualDiscountPercent Int?
+  defaultInterval       StorePlanBillingInterval  @default(MONTHLY)
+  termIntervals         Int?
+  expirationBehavior    StorePlanExpirationBehavior @default(DOWNGRADE_TO_LEGACY)
+  cancellationPolicy    StorePlanCancellationPolicy @default(CANCEL_ANYTIME)
+  freeTrialDays         Int                       @default(0)
+  introPriceMinor       Int?
+  introDurationDays     Int?
+  effectiveFrom         DateTime?
+  effectiveUntil        DateTime?
   productLimit          Int
   storeLimit            Int
   vendorLimit           Int
@@ -929,6 +993,7 @@ model StorePlanVersion {
   plan                  StorePlan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
   creator               User?                     @relation("StorePlanVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
   assignments           StorePlanAssignment[]
+  subscriptions         StoreSubscription[]
   @@unique([planId, version])
   @@index([planId, status, version])
 }
@@ -949,6 +1014,83 @@ model StorePlanAssignment {
   assignedBy     User?                        @relation("StorePlanAssignmentAdmin", fields: [assignedById], references: [id], onDelete: SetNull)
   @@index([storeId, status, effectiveFrom])
   @@index([planVersionId, status])
+}
+
+model StoreSubscription {
+  id                    String                       @id @default(cuid())
+  storeId               String
+  planVersionId         String
+  requestedById         String?
+  provider              StoreSubscriptionProvider?
+  providerSubscriptionId String?
+  status                StoreSubscriptionStatus      @default(PENDING)
+  interval              StorePlanBillingInterval
+  currency              String
+  monthlyPriceMinor     Int
+  annualPriceMinor      Int?
+  introPriceMinor       Int?
+  introDurationDays     Int?
+  freeTrialDays         Int
+  termIntervals         Int?
+  expirationBehavior    StorePlanExpirationBehavior
+  cancellationPolicy    StorePlanCancellationPolicy
+  termsSnapshot         Json
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  trialEndsAt           DateTime?
+  introEndsAt           DateTime?
+  nextChargeAt          DateTime?
+  expiresAt             DateTime?
+  cancelAtPeriodEnd     Boolean                      @default(false)
+  cancelledAt           DateTime?
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+  store                 Store                        @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  planVersion           StorePlanVersion             @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
+  requestedBy           User?                        @relation("StoreSubscriptionRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  invoices              StoreSubscriptionInvoice[]
+  events                StoreSubscriptionEvent[]
+  @@index([storeId, status, createdAt])
+  @@index([planVersionId, status])
+  @@unique([provider, providerSubscriptionId])
+}
+
+model StoreSubscriptionInvoice {
+  id                String                           @id @default(cuid())
+  subscriptionId    String
+  provider          StoreSubscriptionProvider?
+  providerInvoiceId String?
+  idempotencyKey    String                           @unique
+  status            StoreSubscriptionInvoiceStatus   @default(OPEN)
+  amountMinor       Int
+  refundedMinor     Int                              @default(0)
+  currency          String
+  periodStart       DateTime?
+  periodEnd         DateTime?
+  dueAt             DateTime?
+  paidAt            DateTime?
+  createdAt         DateTime                         @default(now())
+  subscription      StoreSubscription                @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  @@unique([provider, providerInvoiceId])
+  @@index([subscriptionId, createdAt])
+}
+
+model StoreSubscriptionEvent {
+  id                  String                       @id @default(cuid())
+  provider            StoreSubscriptionProvider
+  providerEventId     String
+  eventType           String
+  status              StoreSubscriptionEventStatus @default(RECEIVED)
+  signatureVerified   Boolean                      @default(false)
+  subscriptionId      String?
+  safeSummary         Json?
+  errorCode           String?
+  receivedAt          DateTime                     @default(now())
+  processedAt         DateTime?
+  subscription        StoreSubscription?           @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  @@unique([provider, providerEventId])
+  @@index([subscriptionId, receivedAt])
+  @@index([status, receivedAt])
 }
 
 model SellerAdminNote {

@@ -4,6 +4,7 @@ import { Prisma, Role, SellerStatus, StorePlanAssignmentStatus, StorePlanStatus,
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { asStorePlanEntitlements, effectiveStorePlan, isAtLimit, storePlanEntitlementsSchema } from './store-plan-domain.js';
+import { formatMinorAmount, isFreePlan, planPricingInputSchema, resolvePlanPricing } from './store-plan-pricing.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -19,14 +20,16 @@ const createPlanSchema = z.object({
   key: planKey,
   name: z.string().trim().min(2).max(100),
   entitlements: storePlanEntitlementsSchema,
+  pricing: planPricingInputSchema.optional(),
   reason
 }).strict();
 
 const editPlanSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
   entitlements: storePlanEntitlementsSchema.optional(),
+  pricing: planPricingInputSchema.optional(),
   reason
-}).strict().refine(input => input.name !== undefined || input.entitlements !== undefined, 'Provide a name or a new entitlement version');
+}).strict().refine(input => input.name !== undefined || input.entitlements !== undefined || input.pricing !== undefined, 'Provide a name or a new plan version');
 
 const assignmentSchema = z.object({ versionId: z.string().trim().min(1).max(80), reason }).strict();
 const actionSchema = z.object({ reason }).strict();
@@ -35,13 +38,44 @@ async function planAudit(tx: Prisma.TransactionClient, actorId: string, action: 
   await tx.auditLog.create({ data: { actorId, action, entity, entityId, metadata: json(metadata) } });
 }
 
-function versionData(entitlements: z.infer<typeof storePlanEntitlementsSchema>) {
+function versionData(name: string, entitlements: z.infer<typeof storePlanEntitlementsSchema>, pricing: z.infer<typeof planPricingInputSchema>) {
+  let resolvedPricing: ReturnType<typeof resolvePlanPricing>;
+  try { resolvedPricing = resolvePlanPricing(pricing); }
+  catch (error) { throw fail(400, error instanceof Error ? error.message : 'Invalid pricing terms.'); }
   return {
+    name,
     ...entitlements,
+    ...resolvedPricing,
     allowedThemes: entitlements.allowedThemes,
     paymentConnectors: entitlements.paymentConnectors,
     mobileTemplates: entitlements.mobileTemplates
   };
+}
+
+function pricingInputFromVersion(version: {
+  description: string; currency: string; monthlyPriceMinor: number; annualPriceMinor: number;
+  annualDiscountPercent: number | null; defaultInterval: 'MONTHLY' | 'ANNUAL'; termIntervals: number | null;
+  expirationBehavior: 'DOWNGRADE_TO_LEGACY' | 'SUSPEND_SELLER'; cancellationPolicy: 'CANCEL_ANYTIME' | 'CANCEL_AT_TERM_END';
+  freeTrialDays: number; introPriceMinor: number | null; introDurationDays: number | null;
+  effectiveFrom: Date | null; effectiveUntil: Date | null;
+}) {
+  const annualPriceMode = version.annualDiscountPercent !== null ? 'DISCOUNT' : version.annualPriceMinor === version.monthlyPriceMinor * 12 ? 'FULL' : 'FIXED';
+  return planPricingInputSchema.parse({
+    description: version.description,
+    currency: version.currency,
+    monthlyPrice: formatMinorAmount(version.monthlyPriceMinor),
+    annualPriceMode,
+    ...(annualPriceMode === 'FIXED' ? { annualPrice: formatMinorAmount(version.annualPriceMinor) } : {}),
+    ...(annualPriceMode === 'DISCOUNT' ? { annualDiscountPercent: version.annualDiscountPercent! } : {}),
+    defaultInterval: version.defaultInterval,
+    termIntervals: version.termIntervals,
+    expirationBehavior: version.expirationBehavior,
+    cancellationPolicy: version.cancellationPolicy,
+    freeTrialDays: version.freeTrialDays,
+    ...(version.introPriceMinor !== null ? { introPrice: formatMinorAmount(version.introPriceMinor), introDurationDays: version.introDurationDays! } : {}),
+    ...(version.effectiveFrom ? { effectiveFrom: version.effectiveFrom.toISOString() } : {}),
+    ...(version.effectiveUntil ? { effectiveUntil: version.effectiveUntil.toISOString() } : {})
+  });
 }
 
 export function registerStorePlanRoutes(app: Express) {
@@ -59,8 +93,9 @@ export function registerStorePlanRoutes(app: Express) {
     if (await prisma.storePlan.findUnique({ where: { key: input.key }, select: { id: true } })) return res.status(409).json({ error: 'A plan with that key already exists.' });
     const result = await prisma.$transaction(async tx => {
       const plan = await tx.storePlan.create({ data: { key: input.key, name: input.name, status: StorePlanStatus.DRAFT } });
-      const version = await tx.storePlanVersion.create({ data: { planId: plan.id, version: 1, createdById: user.id, ...versionData(input.entitlements) } });
-      await planAudit(tx, user.id, 'STORE_PLAN_CREATED', 'StorePlan', plan.id, { name: plan.name, key: plan.key, version: version.version, entitlements: input.entitlements, reason: input.reason });
+      const pricing = input.pricing ?? planPricingInputSchema.parse({});
+      const version = await tx.storePlanVersion.create({ data: { planId: plan.id, version: 1, createdById: user.id, ...versionData(plan.name, input.entitlements, pricing) } });
+      await planAudit(tx, user.id, 'STORE_PLAN_CREATED', 'StorePlan', plan.id, { name: plan.name, key: plan.key, version: version.version, entitlements: input.entitlements, pricing, reason: input.reason });
       return { plan, version };
     });
     res.status(201).json(result);
@@ -78,15 +113,19 @@ export function registerStorePlanRoutes(app: Express) {
       if (current.status === StorePlanStatus.RETIRED) throw fail(409, 'Retired plans cannot be edited; create a new plan instead.');
       const updated = input.name === undefined ? current : await tx.storePlan.update({ where: { id: current.id }, data: { name: input.name } });
       let version = current.versions[0] ?? null;
-      if (input.entitlements) {
+      if (input.name !== undefined || input.entitlements || input.pricing) {
+        if (!version) throw fail(409, 'This plan has no version to copy. Create a new plan instead.');
         const nextVersion = (await tx.storePlanVersion.aggregate({ where: { planId }, _max: { version: true } }))._max.version ?? 0;
-        version = await tx.storePlanVersion.create({ data: { planId, version: nextVersion + 1, createdById: user.id, ...versionData(input.entitlements) } });
+        const nextEntitlements = input.entitlements ?? asStorePlanEntitlements(version);
+        const nextPricing = input.pricing ?? pricingInputFromVersion(version);
+        version = await tx.storePlanVersion.create({ data: { planId, version: nextVersion + 1, createdById: user.id, ...versionData(input.name ?? version.name, nextEntitlements, nextPricing) } });
       }
       await planAudit(tx, user.id, 'STORE_PLAN_EDITED', 'StorePlan', planId, {
         oldName: current.name,
         newName: updated.name,
         newDraftVersion: input.entitlements ? version?.version : null,
         entitlements: input.entitlements ?? null,
+        pricing: input.pricing ?? null,
         reason: input.reason
       });
       return { plan: updated, version };
@@ -108,9 +147,12 @@ export function registerStorePlanRoutes(app: Express) {
       if (target.status === StorePlanVersionStatus.ACTIVE) return { plan, version: target, alreadyActive: true };
       if (target.status !== StorePlanVersionStatus.DRAFT) throw fail(409, 'Only a draft plan version can be activated.');
       await tx.storePlanVersion.updateMany({ where: { planId, status: StorePlanVersionStatus.ACTIVE }, data: { status: StorePlanVersionStatus.SUPERSEDED } });
-      const version = await tx.storePlanVersion.update({ where: { id: target.id }, data: { status: StorePlanVersionStatus.ACTIVE, activatedAt: new Date() } });
+      const now = new Date();
+      const effectiveFrom = target.effectiveFrom ?? now;
+      if (target.effectiveUntil && (target.effectiveUntil <= now || target.effectiveUntil <= effectiveFrom)) throw fail(409, 'The plan version end date has passed or is before its effective start.');
+      const version = await tx.storePlanVersion.update({ where: { id: target.id }, data: { status: StorePlanVersionStatus.ACTIVE, activatedAt: now, effectiveFrom } });
       const updatedPlan = await tx.storePlan.update({ where: { id: planId }, data: { status: StorePlanStatus.ACTIVE } });
-      await planAudit(tx, user.id, 'STORE_PLAN_VERSION_ACTIVATED', 'StorePlanVersion', version.id, { planId, version: version.version, reason: input.reason });
+      await planAudit(tx, user.id, 'STORE_PLAN_VERSION_ACTIVATED', 'StorePlanVersion', version.id, { planId, version: version.version, effectiveFrom: version.effectiveFrom, effectiveUntil: version.effectiveUntil, reason: input.reason });
       return { plan: updatedPlan, version, alreadyActive: false };
     });
     res.json(result);
@@ -169,11 +211,13 @@ export function registerStorePlanRoutes(app: Express) {
       ]);
       if (!store) throw fail(404, 'Store not found.');
       if (!version || version.plan.status !== StorePlanStatus.ACTIVE || version.status !== StorePlanVersionStatus.ACTIVE) throw fail(409, 'Only an active version of an active plan can be assigned.');
+      const now = new Date();
+      if ((version.effectiveFrom && version.effectiveFrom > now) || (version.effectiveUntil && version.effectiveUntil <= now)) throw fail(409, 'This plan version is outside its effective date range.');
+      if (!isFreePlan(version)) throw fail(409, 'Paid plan entitlements cannot be assigned manually while subscription billing is disabled.');
       const storeUsage = await tx.store.count({ where: { sellerId: store.sellerId } });
       const vendorUsage = 1; // Store currently has exactly one Seller owner by schema.
       if (storeUsage > version.storeLimit || vendorUsage > version.vendorLimit) throw fail(409, 'This plan is below the Store or vendor count already in use. Existing access was not changed.');
 
-      const now = new Date();
       const current = await tx.storePlanAssignment.findFirst({ where: { storeId, status: StorePlanAssignmentStatus.ACTIVE, effectiveFrom: { lte: now }, OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }] }, orderBy: { effectiveFrom: 'desc' } });
       if (current?.planVersionId === version.id) return { assignment: current, alreadyAssigned: true };
       const effectiveFrom = new Date(Math.max(Date.now(), (current?.effectiveFrom.getTime() ?? 0) + 1));
@@ -210,8 +254,29 @@ export function registerStorePlanRoutes(app: Express) {
     const entitlements = asStorePlanEntitlements(effective.version);
     res.json({
       store: { id: seller.store.id, name: seller.store.name, slug: seller.store.slug },
-      plan: effective.plan ? { id: effective.plan.id, key: effective.plan.key, name: effective.plan.name, status: effective.plan.status, version: effective.version?.version ?? 1, versionStatus: effective.version?.status ?? 'ACTIVE' } : { key: 'legacy-compatible', name: 'Legacy compatible', status: 'ACTIVE', version: 1, versionStatus: 'ACTIVE' },
+      plan: effective.plan ? { id: effective.plan.id, key: effective.plan.key, name: effective.version?.name ?? effective.plan.name, status: effective.plan.status, version: effective.version?.version ?? 1, versionStatus: effective.version?.status ?? 'ACTIVE' } : { key: 'legacy-compatible', name: 'Legacy compatible', status: 'ACTIVE', version: 1, versionStatus: 'ACTIVE' },
       assignment: effective.assignment ? { id: effective.assignment.id, status: effective.assignment.status, source: effective.assignment.source, effectiveFrom: effective.assignment.effectiveFrom, effectiveUntil: effective.assignment.effectiveUntil } : { id: null, status: 'ACTIVE', source: 'LEGACY_FALLBACK', effectiveFrom: null, effectiveUntil: null },
+      pricing: effective.version ? {
+        description: effective.version.description,
+        currency: effective.version.currency,
+        monthlyPriceMinor: effective.version.monthlyPriceMinor,
+        annualPriceMinor: effective.version.annualPriceMinor,
+        annualDiscountPercent: effective.version.annualDiscountPercent,
+        defaultInterval: effective.version.defaultInterval,
+        termIntervals: effective.version.termIntervals,
+        expirationBehavior: effective.version.expirationBehavior,
+        cancellationPolicy: effective.version.cancellationPolicy,
+        freeTrialDays: effective.version.freeTrialDays,
+        introPriceMinor: effective.version.introPriceMinor,
+        introDurationDays: effective.version.introDurationDays,
+        effectiveFrom: effective.version.effectiveFrom,
+        effectiveUntil: effective.version.effectiveUntil
+      } : {
+        description: 'Compatibility plan for existing Stores.', currency: 'USD', monthlyPriceMinor: 0,
+        annualPriceMinor: 0, annualDiscountPercent: null, defaultInterval: 'MONTHLY', termIntervals: null,
+        expirationBehavior: 'DOWNGRADE_TO_LEGACY', cancellationPolicy: 'CANCEL_ANYTIME', freeTrialDays: 0,
+        introPriceMinor: null, introDurationDays: null, effectiveFrom: null, effectiveUntil: null
+      },
       entitlements,
       usage: { products: productCount, stores: storeCount, vendors: 1, staffSeats: seller._count.staff },
       notes: {
@@ -220,5 +285,69 @@ export function registerStorePlanRoutes(app: Express) {
         mobileTemplates: 'These are responsive web storefront templates, not native applications.'
       }
     });
+  }));
+
+  app.get('/api/seller/plan-options', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
+    const user = actor(res);
+    if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } } } });
+    if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
+    const now = new Date();
+    const versions = await prisma.storePlanVersion.findMany({
+      where: {
+        status: StorePlanVersionStatus.ACTIVE,
+        plan: { status: StorePlanStatus.ACTIVE, key: { not: 'legacy-compatible' } },
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }]
+      },
+      include: { plan: { select: { key: true, name: true } } },
+      orderBy: [{ monthlyPriceMinor: 'asc' }, { planId: 'asc' }, { version: 'desc' }]
+    });
+    res.json({ checkoutAvailable: false, checkoutUnavailableReason: 'Plan checkout is not configured. The platform must select and verify a subscription billing provider before sellers can subscribe.', offers: versions.map(version => ({
+      id: version.id, plan: { key: version.plan.key, name: version.name }, version: version.version, description: version.description,
+      currency: version.currency, monthlyPriceMinor: version.monthlyPriceMinor, annualPriceMinor: version.annualPriceMinor,
+      annualDiscountPercent: version.annualDiscountPercent, defaultInterval: version.defaultInterval,
+      termIntervals: version.termIntervals, expirationBehavior: version.expirationBehavior,
+      cancellationPolicy: version.cancellationPolicy, freeTrialDays: version.freeTrialDays,
+      introPriceMinor: version.introPriceMinor, introDurationDays: version.introDurationDays,
+      entitlements: asStorePlanEntitlements(version)
+    })) });
+  }));
+
+  app.get('/api/seller/billing', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
+    const user = actor(res);
+    if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } } } });
+    if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
+    const subscriptions = await prisma.storeSubscription.findMany({
+      where: { storeId: seller.store.id },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: {
+        id: true, status: true, interval: true, currency: true, monthlyPriceMinor: true,
+        annualPriceMinor: true, introPriceMinor: true, introDurationDays: true, freeTrialDays: true,
+        termIntervals: true, expirationBehavior: true, cancellationPolicy: true, termsSnapshot: true,
+        currentPeriodStart: true, currentPeriodEnd: true, trialEndsAt: true, introEndsAt: true,
+        nextChargeAt: true, expiresAt: true, cancelAtPeriodEnd: true, cancelledAt: true, createdAt: true,
+        planVersion: { select: { version: true, name: true, plan: { select: { key: true } } } },
+        invoices: { select: { id: true, status: true, amountMinor: true, refundedMinor: true, currency: true, periodStart: true, periodEnd: true, dueAt: true, paidAt: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 50 }
+      }
+    });
+    const current = subscriptions.find(item => ['TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID'].includes(item.status)) ?? null;
+    res.json({
+      checkoutAvailable: false,
+      checkoutUnavailableReason: 'Subscription checkout is unavailable because this deployment has no configured subscription provider or verified subscription webhook. No subscription payment has been simulated.',
+      current,
+      subscriptions,
+      historyAvailable: subscriptions.length > 0
+    });
+  }));
+
+  app.post('/api/seller/billing/subscribe', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
+    const user = actor(res);
+    if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } } } });
+    if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
+    return res.status(503).json({ code: 'PLAN_BILLING_DISABLED', error: 'Plan checkout is unavailable until a subscription provider, signed webhook handling, and sandbox verification are configured.' });
   }));
 }
