@@ -128,7 +128,27 @@ test('admin pricing versions are auditable and immutable; seller checkout stays 
     await sellerPage.goto('/seller/plan');
     await expect(sellerPage.getByRole('heading', { name: 'Plan & Billing' })).toBeVisible();
     await expect(sellerPage.getByText(/Subscription checkout is unavailable/)).toBeVisible();
-    await expect(sellerPage.getByRole('button', { name: 'Upgrade unavailable' })).toBeDisabled();
+    const optionsResponse = await sellerPage.request.get('/api/seller/plan-options');
+    expect(optionsResponse.status()).toBe(200);
+    const options = await optionsResponse.json() as {
+      checkoutAvailable: boolean;
+      checkoutUnavailableReason: string;
+      offers: { id: string; plan: { key: string }; version: number }[];
+    };
+    expect(options.checkoutAvailable).toBe(false);
+    expect(options.offers.length).toBeGreaterThan(0);
+    const upgradeButtons = sellerPage.getByRole('button', { name: 'Upgrade unavailable' });
+    await expect(upgradeButtons).toHaveCount(options.offers.length);
+    for (const offer of options.offers) {
+      const offerCard = sellerPage.locator('.planOfferGrid article').filter({
+        hasText: `${offer.plan.key} · version ${offer.version}`
+      });
+      await expect(offerCard).toHaveCount(1);
+      const upgradeButton = offerCard.getByRole('button', { name: 'Upgrade unavailable' });
+      await expect(upgradeButton).toBeVisible();
+      await expect(upgradeButton).toBeDisabled();
+      await expect(upgradeButton).toHaveAttribute('title', options.checkoutUnavailableReason);
+    }
     const before = await prisma.storeSubscription.count({ where: { storeId: ownStore.id } });
     const subscribe = await sellerPage.request.post('/api/seller/billing/subscribe', { headers: await csrfHeaders(sellerPage), data: { planVersionId: draft.id, interval: 'ANNUAL' } });
     expect(subscribe.status()).toBe(503);

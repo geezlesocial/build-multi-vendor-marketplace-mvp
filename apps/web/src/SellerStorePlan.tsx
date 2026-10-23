@@ -5,8 +5,8 @@ type PlanData = {
   plan: { key: string; name: string; status: string; version: number; versionStatus: string };
   assignment: { status: string; source: string; effectiveFrom: string | null; effectiveUntil: string | null };
   pricing: { description: string; currency: string; monthlyPriceMinor: number; annualPriceMinor: number; annualDiscountPercent: number | null; defaultInterval: string; termIntervals: number | null; expirationBehavior: string; cancellationPolicy: string; freeTrialDays: number; introPriceMinor: number | null; introDurationDays: number | null; effectiveFrom: string | null; effectiveUntil: string | null };
-  entitlements: { productLimit: number; storeLimit: number; vendorLimit: number; staffSeatLimit: number; allowedThemes: string[]; customDomainEligible: boolean; paymentConnectors: string[]; mobileTemplates: string[] };
-  usage: { products: number; stores: number; vendors: number; staffSeats: number };
+  entitlements: { productLimit: number; storeLimit: number; vendorLimit: number; staffSeatLimit: number; allowedThemes: string[]; customDomainEligible: boolean; paymentConnectors: string[]; mobileTemplates: string[]; blogPostLimit: number; contentPageLimit: number; mediaStorageLimitBytes: number; scheduledPublishingEnabled: boolean; advancedContentSeoEnabled: boolean; storeBusterEnabled: boolean; storeBusterCampaignLimit: number; storeBusterMonthlyBudgetMinor: number; emailMarketingEnabled: boolean; emailSubscriberLimit: number; emailMonthlySendLimit: number; affiliateToolsEnabled: boolean };
+  usage: { products: number; stores: number; vendors: number; staffSeats: number; blogPosts: number; contentPages: number; mediaStorageBytes: number };
   notes: { connectors: string; customDomain: string; mobileTemplates: string };
 };
 type BillingSubscription = { id: string; status: string; interval: string; currency: string; monthlyPriceMinor: number; annualPriceMinor: number | null; introPriceMinor: number | null; introDurationDays: number | null; freeTrialDays: number; termIntervals: number | null; expirationBehavior: string; cancellationPolicy: string; currentPeriodStart: string | null; currentPeriodEnd: string | null; trialEndsAt: string | null; introEndsAt: string | null; nextChargeAt: string | null; expiresAt: string | null; cancelAtPeriodEnd: boolean; cancelledAt: string | null; planVersion: { version: number; name: string; plan: { key: string } }; invoices: { id: string; status: string; amountMinor: number; refundedMinor: number; currency: string; periodStart: string | null; periodEnd: string | null; dueAt: string | null; paidAt: string | null; createdAt: string }[] };
@@ -36,7 +36,7 @@ export function SellerStorePlan() {
   if (error) return <section className="page"><p className="eyebrow">Seller tools</p><h1>Plan &amp; Billing</h1><div className="notice" role="alert">{error}</div></section>;
   if (!data || !billing || !options) return <section className="page"><p className="eyebrow">Seller tools</p><h1>Plan &amp; Billing</h1><p className="empty" role="status">Loading your Store plan…</p></section>;
   const limitText = (usage: number, limit: number) => limit >= 1_000_000_000 ? `${usage.toLocaleString()} used · legacy-compatible limit` : `${usage.toLocaleString()} of ${limit.toLocaleString()} used`;
-  const metric = (label: string, usage: number, limit: number) => <article className="card cardBody planUsageCard" key={label}><h2>{label}</h2><p><strong>{limitText(usage, limit)}</strong></p>{limit < 1_000_000_000 && <progress max={Math.max(limit, 1)} value={Math.min(usage, limit)} aria-label={`${label} usage`} />}</article>;
+  const metric = (label: string, usage: number, limit: number, unit = '') => <article className="card cardBody planUsageCard" key={label}><h2>{label}</h2><p><strong>{limitText(usage, limit)}{unit}</strong></p>{limit < 1_000_000_000 && <progress max={Math.max(limit, 1)} value={Math.min(usage, limit)} aria-label={`${label} usage`} />}</article>;
 
   return <section className="page sellerPlanPage">
     <p className="eyebrow">Seller tools</p>
@@ -53,6 +53,9 @@ export function SellerStorePlan() {
       {metric('Stores', data.usage.stores, data.entitlements.storeLimit)}
       {metric('Vendors', data.usage.vendors, data.entitlements.vendorLimit)}
       {metric('Staff seats', data.usage.staffSeats, data.entitlements.staffSeatLimit)}
+      {metric('Blog posts', data.usage.blogPosts, data.entitlements.blogPostLimit)}
+      {metric('Pages', data.usage.contentPages, data.entitlements.contentPageLimit)}
+      {metric('Media storage', data.usage.mediaStorageBytes, data.entitlements.mediaStorageLimitBytes, ' bytes')}
     </div>
     <section className="card cardBody planCapabilities">
       <h2>Included capabilities</h2>
@@ -61,6 +64,12 @@ export function SellerStorePlan() {
         <div><dt>Responsive storefront templates</dt><dd>{data.entitlements.mobileTemplates.join(', ')}</dd></div>
         <div><dt>Custom-domain eligibility</dt><dd>{data.entitlements.customDomainEligible ? 'Eligible' : 'Not included'}</dd></div>
         <div><dt>Payment connector eligibility</dt><dd>{data.entitlements.paymentConnectors.length ? data.entitlements.paymentConnectors.join(', ') : 'None'}</dd></div>
+        <div><dt>Blog and page publishing</dt><dd>Included on every plan · {data.entitlements.blogPostLimit} posts · {data.entitlements.contentPageLimit} pages</dd></div>
+        <div><dt>Scheduled publishing</dt><dd>{data.entitlements.scheduledPublishingEnabled ? 'Included' : 'Not enabled for this plan'}</dd></div>
+        <div><dt>Advanced content SEO</dt><dd>{data.entitlements.advancedContentSeoEnabled ? 'Included' : 'Not enabled for this plan'}</dd></div>
+        <div><dt>Store Buster</dt><dd>{data.entitlements.storeBusterEnabled ? `Included · ${data.entitlements.storeBusterCampaignLimit} campaigns` : 'Not enabled for this plan'}</dd></div>
+        <div><dt>Email marketing</dt><dd>{data.entitlements.emailMarketingEnabled ? `Included · ${data.entitlements.emailSubscriberLimit} subscribers · ${data.entitlements.emailMonthlySendLimit} sends/month` : 'Not enabled for this plan'}</dd></div>
+        <div><dt>Affiliate tools</dt><dd>{data.entitlements.affiliateToolsEnabled ? 'Included (payouts are separately gated)' : 'Not enabled for this plan'}</dd></div>
       </dl>
       <p className="muted">{data.notes.connectors}</p>
       <p className="muted">{data.notes.customDomain}</p>

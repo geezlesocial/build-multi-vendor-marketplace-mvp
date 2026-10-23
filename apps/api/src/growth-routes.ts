@@ -6,10 +6,38 @@ import { audit, currentUser, prisma, requireAuth, requireRole } from './security
 import { env } from './config.js';
 import { generatedReferralCode, referralTokenHash, safeInternalPath, signedReferralToken, verifySignedReferralToken, escapeHtmlAttribute } from './growth-domain.js';
 import { reverseAffiliateForOrder } from './affiliate-ledger.js';
+import { asStorePlanEntitlements, effectiveStorePlan } from './store-plan-domain.js';
 
 const run = (handler: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: (error?: unknown) => void) => Promise.resolve(handler(req, res)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
 const idSchema = z.string().cuid();
+
+async function assertStoreAffiliateEligible(storeId: string) {
+  const participation = await prisma.storeAffiliateProgram.findUnique({ where: { storeId } });
+  // Stores without a record retain the legacy platform affiliate behavior.
+  if (!participation) return;
+  const plan = await effectiveStorePlan(prisma, storeId);
+  if (!participation.enabled || !asStorePlanEntitlements(plan.version).affiliateToolsEnabled) {
+    const error = Object.assign(new Error('This Store is not currently eligible for affiliate promotion.'), { statusCode: 409, code: 'STORE_AFFILIATE_NOT_AVAILABLE' });
+    throw error;
+  }
+}
+
+async function assertAffiliateLinkStoreEligible(link: { sellerId: string | null; productId: string | null }) {
+  if (link.sellerId) {
+    const store = await prisma.store.findUnique({ where: { sellerId: link.sellerId }, select: { id: true } });
+    if (!store) throw Object.assign(new Error('This Store is not currently eligible for affiliate promotion.'), { statusCode: 409, code: 'STORE_AFFILIATE_NOT_AVAILABLE' });
+    return assertStoreAffiliateEligible(store.id);
+  }
+  if (link.productId) {
+    const product = await prisma.product.findUnique({ where: { id: link.productId }, select: { sellerId: true } });
+    if (product?.sellerId) {
+      const store = await prisma.store.findUnique({ where: { sellerId: product.sellerId }, select: { id: true } });
+      if (!store) throw Object.assign(new Error('This Store is not currently eligible for affiliate promotion.'), { statusCode: 409, code: 'STORE_AFFILIATE_NOT_AVAILABLE' });
+      return assertStoreAffiliateEligible(store.id);
+    }
+  }
+}
 
 export function registerGrowthRoutes(app: Express) {
   app.get('/api/favorites', requireAuth, run(async (_req, res) => {
@@ -21,12 +49,25 @@ export function registerGrowthRoutes(app: Express) {
     const productId = idSchema.parse(param(req.params.productId));
     const product = await prisma.product.findFirst({ where: { id: productId, status: ProductStatus.APPROVED } });
     if (!product) return res.status(404).json({ error: 'Product not found' });
-    const favorite = await prisma.favorite.upsert({ where: { userId_productId: { userId: user.id, productId } }, update: {}, create: { userId: user.id, productId } });
+    const favorite = await prisma.$transaction(async tx => {
+      const existing = await tx.favorite.findUnique({ where: { userId_productId: { userId: user.id, productId } }, select: { id: true } });
+      const saved = await tx.favorite.upsert({ where: { userId_productId: { userId: user.id, productId } }, update: {}, create: { userId: user.id, productId } });
+      if (!existing) {
+        await tx.$queryRaw`SELECT "id" FROM "UserPreference" WHERE "userId" = ${user.id} FOR UPDATE`;
+        const preference = await tx.userPreference.findUnique({ where: { userId: user.id }, select: { personalizationEnabled: true, personalizationConsentAt: true } });
+        if (preference?.personalizationEnabled && preference.personalizationConsentAt) await tx.storeInterestSignal.create({ data: { userId: user.id, type: 'FAVORITE', productId, categoryId: product.categoryId } });
+      }
+      return saved;
+    });
     res.status(201).json(favorite);
   }));
   app.delete('/api/favorites/:productId', requireAuth, run(async (req, res) => {
     const user = res.locals.user as { id: string };
-    await prisma.favorite.deleteMany({ where: { userId: user.id, productId: idSchema.parse(param(req.params.productId)) } });
+    const productId = idSchema.parse(param(req.params.productId));
+    await prisma.$transaction(async tx => {
+      await tx.favorite.deleteMany({ where: { userId: user.id, productId } });
+      await tx.storeInterestSignal.deleteMany({ where: { userId: user.id, productId, type: 'FAVORITE' } });
+    });
     res.status(204).send();
   }));
 
@@ -75,10 +116,16 @@ export function registerGrowthRoutes(app: Express) {
     const input = z.object({ targetPath: z.string().min(1).max(500).optional(), productId: z.string().cuid().optional(), sellerId: z.string().cuid().optional() }).refine(value => Boolean(value.productId) !== Boolean(value.sellerId), { message: 'Set exactly one product or seller target' }).parse(req.body);
     const profile = await prisma.affiliateProfile.findUnique({ where: { userId: user.id } });
     if (!profile || profile.status !== AffiliateStatus.APPROVED || !profile.termsAcceptedAt) return res.status(403).json({ error: 'Approved affiliate required' });
-    const product = input.productId ? await prisma.product.findFirst({ where: { id: input.productId, status: ProductStatus.APPROVED } }) : null;
+    const product = input.productId ? await prisma.product.findFirst({ where: { id: input.productId, status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: 'APPROVED' } }] } }) : null;
     const seller = input.sellerId ? await prisma.seller.findFirst({ where: { id: input.sellerId, status: 'APPROVED' }, include: { store: true } }) : null;
     if (input.productId && !product) return res.status(404).json({ error: 'Product not found' });
     if (input.sellerId && !seller) return res.status(404).json({ error: 'Seller not found' });
+    if (seller?.store) await assertStoreAffiliateEligible(seller.store.id);
+    if (product?.sellerId) {
+      const productStore = await prisma.store.findUnique({ where: { sellerId: product.sellerId }, select: { id: true } });
+      if (!productStore) return res.status(404).json({ error: 'Store not found' });
+      await assertStoreAffiliateEligible(productStore.id);
+    }
     const canonicalPath = product ? `/products/${product.slug}` : `/stores/${seller!.id}`;
     const targetPath = input.targetPath ? safeInternalPath(input.targetPath) : canonicalPath;
     if (product && targetPath !== canonicalPath) return res.status(400).json({ error: 'Product links must use the canonical product path' });
@@ -92,6 +139,7 @@ export function registerGrowthRoutes(app: Express) {
     const link = await prisma.affiliateLink.findUnique({ where: { code: param(req.params.code) }, include: { affiliate: true } });
     const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
     if (!settings?.affiliateEnabled || !link || link.affiliate.status !== AffiliateStatus.APPROVED) return res.status(404).send('Referral link not found');
+    await assertAffiliateLinkStoreEligible(link);
     const token = signedReferralToken(env.AFFILIATE_SIGNING_SECRET ?? env.PASSWORD_PEPPER);
     const expiresAt = new Date(Date.now() + settings.affiliateAttributionWindowDays * 86400000);
     const visitorKey = String(req.query.visitorKey ?? '');
@@ -105,6 +153,7 @@ export function registerGrowthRoutes(app: Express) {
     const code = param(req.params.code);
     const link = await prisma.affiliateLink.findUnique({ where: { code }, include: { affiliate: true } });
     if (!link || link.affiliate.status !== AffiliateStatus.APPROVED) return res.status(404).json({ error: 'Referral link not found' });
+    await assertAffiliateLinkStoreEligible(link);
     const input = z.object({ consent: z.literal(true), visitorKey: z.string().min(16).max(200).optional() }).parse(req.body);
     const token = signedReferralToken(env.AFFILIATE_SIGNING_SECRET ?? env.PASSWORD_PEPPER);
     const ipHash = crypto.createHash('sha256').update(req.ip ?? 'unknown').digest('hex');

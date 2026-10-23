@@ -5,6 +5,8 @@ describe('platform administration domain rules', () => {
   it('accepts only the allowlisted store theme shape', () => {
     const theme = storeThemeSchema.parse({ primaryColor: '#123456', accentColor: '#abcdef', sections: [{ type: 'featuredProducts', title: 'Featured', productIds: [] }] });
     expect(theme.primaryColor).toBe('#123456');
+    expect(theme.faviconMediaId).toBeNull();
+    expect(storeThemeSchema.parse({ faviconMediaId: 'approved-store-favicon' }).faviconMediaId).toBe('approved-store-favicon');
     expect(() => storeThemeSchema.parse({ primaryColor: 'red', script: '<script>alert(1)</script>' })).toThrow();
   });
 

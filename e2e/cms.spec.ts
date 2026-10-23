@@ -43,7 +43,7 @@ test('admin publishes a crawlable blog post with initial HTML metadata', async (
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'index,follow');
 });
 
-test('content editor can save drafts but cannot change indexing/navigation, and quarantined media stays private', async ({ page }) => {
+test('content editor can save drafts but cannot change indexing/navigation; media remains unavailable without managed storage', async ({ page }) => {
   const slug = `cms-editor-${Date.now()}`;
   await login(page, editorEmail);
 
@@ -74,14 +74,22 @@ test('content editor can save drafts but cannot change indexing/navigation, and 
   });
   expect(forbiddenNavigation.status()).toBe(403);
 
-  const upload = await page.request.post('/api/admin/content/media', {
-    data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    headers: { ...(await csrfHeaders(page)), 'content-type': 'image/png', 'x-original-name': 'quarantined.png' }
+  const mediaBefore = await page.request.get('/api/admin/content/media');
+  expect(mediaBefore.ok()).toBeTruthy();
+  const unavailable = await page.request.post('/api/admin/content/media/uploads', {
+    data: { fileName: 'quarantined.png', contentType: 'image/png', sizeBytes: 128 },
+    headers: await csrfHeaders(page)
   });
-  expect(upload.status()).toBe(201);
-  const media = await upload.json() as { id: string; scanStatus: string };
-  expect(media.scanStatus).toBe('QUARANTINED');
-  const publicMedia = await page.request.get(`/content-media/${media.id}`);
+  expect(unavailable.status()).toBe(503);
+  expect((await unavailable.json()).error).toContain('Managed private media storage is unavailable');
+  const mediaAfter = await page.request.get('/api/admin/content/media');
+  expect(await mediaAfter.json()).toEqual(await mediaBefore.json());
+  const retiredDirectUpload = await page.request.post('/api/admin/content/media', {
+    data: Buffer.from('legacy direct upload'),
+    headers: { ...(await csrfHeaders(page)), 'content-type': 'application/octet-stream' }
+  });
+  expect(retiredDirectUpload.status()).toBe(410);
+  const publicMedia = await page.request.get('/content-media/nonexistent-quarantined-media');
   expect(publicMedia.status()).toBe(404);
 });
 

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { z } from 'zod';
 import { clubCoinsHardDisabledSchema, isDisposableWalletFundingDatabaseUrl } from './wallet-safety.js';
+import { liveProviderConfigurationsAvailableSchema } from './provider-configuration-gate.js';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -17,10 +18,21 @@ const envSchema = z.object({
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_BASE_URL: z.string().url().default('https://api-m.sandbox.paypal.com'),
   PAYPAL_WEBHOOK_ID: z.string().optional(),
+  LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE: liveProviderConfigurationsAvailableSchema,
   UPLOAD_DIR: z.string().default('uploads'),
   LIVE_SHOPPING_AVAILABLE: z.string().optional().default('false').transform(value => ['true', '1', 'yes', 'on'].includes(value.toLowerCase())),
   SITE_URL: z.string().url().default('http://localhost:4000'),
   CONTENT_STORAGE_DIR: z.string().default('storage/content'),
+  CONTENT_OBJECT_STORAGE_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  CONTENT_OBJECT_STORAGE_BUCKET: z.string().trim().min(1).optional(),
+  CONTENT_OBJECT_STORAGE_REGION: z.string().trim().min(1).optional(),
+  CONTENT_OBJECT_STORAGE_ENDPOINT: z.string().url().optional(),
+  CONTENT_SCANNER_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  CONTENT_SCANNER_HOST: z.string().trim().min(1).optional(),
+  CONTENT_SCANNER_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+  CONTENT_SCANNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(15000),
+  STORE_BUSTER_SPONSORED_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  STORE_EMAIL_DELIVERY_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   CONTENT_SCAN_REQUIRED: z.string().optional().default('true').transform(value => !['false', '0', 'no', 'off'].includes(value.toLowerCase())),
   CONTENT_MAX_IMAGE_BYTES: z.coerce.number().int().positive().default(5_000_000),
   CONTENT_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(50_000_000),
@@ -35,6 +47,13 @@ const envSchema = z.object({
   WALLET_FUNDING_SANDBOX_ID: z.string().optional().default(''),
   WALLET_FUNDING_TREASURY_ACCOUNT_ID: z.string().trim().min(1).optional(),
   CLUB_COINS_HARD_DISABLED: clubCoinsHardDisabledSchema
+}).superRefine((value, context) => {
+  if (value.CONTENT_OBJECT_STORAGE_AVAILABLE && (!value.CONTENT_OBJECT_STORAGE_BUCKET || !value.CONTENT_OBJECT_STORAGE_REGION)) {
+    context.addIssue({ code: 'custom', path: ['CONTENT_OBJECT_STORAGE_BUCKET'], message: 'Object storage requires a bucket and region before it can be enabled.' });
+  }
+  if (value.CONTENT_SCANNER_AVAILABLE && !value.CONTENT_SCANNER_HOST) {
+    context.addIssue({ code: 'custom', path: ['CONTENT_SCANNER_HOST'], message: 'A private ClamAV daemon host is required when the media scanner is enabled.' });
+  }
 });
 
 export const env = envSchema.parse(process.env);

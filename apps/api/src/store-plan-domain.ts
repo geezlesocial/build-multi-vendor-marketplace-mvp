@@ -10,8 +10,27 @@ export const storePlanEntitlementsSchema = z.object({
   allowedThemes: z.array(z.nativeEnum(StoreThemePreset)).min(1).max(3).refine(values => new Set(values).size === values.length, 'Themes must not contain duplicates'),
   customDomainEligible: z.boolean(),
   paymentConnectors: z.array(z.nativeEnum(StorePaymentConnector)).max(2).refine(values => new Set(values).size === values.length, 'Connectors must not contain duplicates'),
-  mobileTemplates: z.array(z.nativeEnum(MobileStorefrontTemplate)).min(1).max(3).refine(values => new Set(values).size === values.length, 'Templates must not contain duplicates')
-}).strict();
+  mobileTemplates: z.array(z.nativeEnum(MobileStorefrontTemplate)).min(1).max(3).refine(values => new Set(values).size === values.length, 'Templates must not contain duplicates'),
+  blogPostLimit: z.number().int().min(1).max(2_000_000_000).default(100),
+  contentPageLimit: z.number().int().min(1).max(2_000_000_000).default(100),
+  mediaStorageLimitBytes: z.number().int().min(1).max(2_000_000_000).default(100_000_000),
+  scheduledPublishingEnabled: z.boolean().default(false),
+  advancedContentSeoEnabled: z.boolean().default(false),
+  storeBusterEnabled: z.boolean().default(false),
+  storeBusterCampaignLimit: z.number().int().min(0).max(100_000).default(0),
+  storeBusterMonthlyBudgetMinor: z.number().int().min(0).max(2_000_000_000).default(0),
+  emailMarketingEnabled: z.boolean().default(false),
+  emailSubscriberLimit: z.number().int().min(0).max(2_000_000_000).default(0),
+  emailMonthlySendLimit: z.number().int().min(0).max(2_000_000_000).default(0),
+  affiliateToolsEnabled: z.boolean().default(false)
+}).strict().superRefine((entitlements, context) => {
+  if (entitlements.storeBusterEnabled && entitlements.storeBusterCampaignLimit < 1) {
+    context.addIssue({ code: 'custom', path: ['storeBusterCampaignLimit'], message: 'Store Buster requires at least one campaign slot.' });
+  }
+  if (entitlements.emailMarketingEnabled && (entitlements.emailSubscriberLimit < 1 || entitlements.emailMonthlySendLimit < 1)) {
+    context.addIssue({ code: 'custom', path: ['emailMarketingEnabled'], message: 'Email marketing requires positive subscriber and monthly send limits.' });
+  }
+});
 
 export type StorePlanEntitlements = z.infer<typeof storePlanEntitlementsSchema>;
 export type StorePlanDb = typeof prisma | Prisma.TransactionClient;
@@ -24,7 +43,19 @@ export const legacyCompatibleEntitlements: StorePlanEntitlements = {
   allowedThemes: Object.values(StoreThemePreset),
   customDomainEligible: false,
   paymentConnectors: Object.values(StorePaymentConnector),
-  mobileTemplates: Object.values(MobileStorefrontTemplate)
+  mobileTemplates: Object.values(MobileStorefrontTemplate),
+  blogPostLimit: 2_000_000_000,
+  contentPageLimit: 2_000_000_000,
+  mediaStorageLimitBytes: 2_000_000_000,
+  scheduledPublishingEnabled: true,
+  advancedContentSeoEnabled: true,
+  storeBusterEnabled: false,
+  storeBusterCampaignLimit: 0,
+  storeBusterMonthlyBudgetMinor: 0,
+  emailMarketingEnabled: false,
+  emailSubscriberLimit: 0,
+  emailMonthlySendLimit: 0,
+  affiliateToolsEnabled: false
 };
 
 export async function effectiveStorePlan(db: StorePlanDb, storeId: string, now = new Date()) {
@@ -57,6 +88,18 @@ export function asStorePlanEntitlements(version: {
   customDomainEligible: boolean;
   paymentConnectors: StorePaymentConnector[];
   mobileTemplates: MobileStorefrontTemplate[];
+  blogPostLimit: number;
+  contentPageLimit: number;
+  mediaStorageLimitBytes: number;
+  scheduledPublishingEnabled: boolean;
+  advancedContentSeoEnabled: boolean;
+  storeBusterEnabled: boolean;
+  storeBusterCampaignLimit: number;
+  storeBusterMonthlyBudgetMinor: number;
+  emailMarketingEnabled: boolean;
+  emailSubscriberLimit: number;
+  emailMonthlySendLimit: number;
+  affiliateToolsEnabled: boolean;
 } | null): StorePlanEntitlements {
   if (!version) return legacyCompatibleEntitlements;
   return {
@@ -67,7 +110,19 @@ export function asStorePlanEntitlements(version: {
     allowedThemes: version.allowedThemes,
     customDomainEligible: version.customDomainEligible,
     paymentConnectors: version.paymentConnectors,
-    mobileTemplates: version.mobileTemplates
+    mobileTemplates: version.mobileTemplates,
+    blogPostLimit: version.blogPostLimit,
+    contentPageLimit: version.contentPageLimit,
+    mediaStorageLimitBytes: version.mediaStorageLimitBytes,
+    scheduledPublishingEnabled: version.scheduledPublishingEnabled,
+    advancedContentSeoEnabled: version.advancedContentSeoEnabled,
+    storeBusterEnabled: version.storeBusterEnabled,
+    storeBusterCampaignLimit: version.storeBusterCampaignLimit,
+    storeBusterMonthlyBudgetMinor: version.storeBusterMonthlyBudgetMinor,
+    emailMarketingEnabled: version.emailMarketingEnabled,
+    emailSubscriberLimit: version.emailSubscriberLimit,
+    emailMonthlySendLimit: version.emailMonthlySendLimit,
+    affiliateToolsEnabled: version.affiliateToolsEnabled
   };
 }
 

@@ -20,6 +20,13 @@ import { registerMarketplaceRoutes } from './marketplace-routes.js';
 import { registerWalletRoutes } from './wallet-routes.js';
 import { registerAvatarRoutes } from './avatar-routes.js';
 import { registerStorePlanRoutes } from './store-plan-routes.js';
+import { registerIntegrationRoutes } from './integration-routes.js';
+import { registerStoreContentRoutes } from './store-content-routes.js';
+import { registerStoreMediaRoutes } from './store-media-routes.js';
+import { registerBrandingMediaRoutes } from './branding-media-routes.js';
+import { registerStoreGrowthRoutes } from './store-growth-routes.js';
+import { registerProductMediaRoutes } from './product-media-routes.js';
+import { livePaymentActivationBlock } from './provider-activation.js';
 import { asStorePlanEntitlements, effectiveStorePlan, isAtLimit } from './store-plan-domain.js';
 import { reverseAffiliateForOrder, settleAffiliateForPaidOrder } from './affiliate-ledger.js';
 import { referralTokenHash, verifySignedReferralToken } from './growth-domain.js';
@@ -55,6 +62,12 @@ registerDashboardRoutes(app);
 registerWalletRoutes(app);
 registerAvatarRoutes(app);
 registerStorePlanRoutes(app);
+registerIntegrationRoutes(app);
+registerStoreContentRoutes(app);
+registerStoreMediaRoutes(app);
+registerBrandingMediaRoutes(app);
+registerStoreGrowthRoutes(app);
+registerProductMediaRoutes(app);
 if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => console.error(error instanceof Error ? error.message : 'Content scheduler failed')), 60_000);
 
 const asyncRoute = (handler: express.RequestHandler): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -248,6 +261,8 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   const method = input.method as PaymentMethod;
   const methodSetting = await prisma.paymentMethodSettings.findUnique({ where: { method } });
   if (!methodSetting?.enabled) return res.status(409).json({ error: `${method} is disabled` });
+  const liveActivationBlock = await livePaymentActivationBlock(method);
+  if (liveActivationBlock) return res.status(503).json(liveActivationBlock);
   const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { inventory: true, seller: true } } } } } });
   if (!cart?.items.length) return res.status(400).json({ error: 'Cart is empty' });
   const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
@@ -312,6 +327,7 @@ app.post('/api/pos/sales', requireAuth, requireRole(Role.SELLER, Role.CASHIER), 
 app.get('/api/pos/receipts/:id', requireAuth, asyncRoute(async (req, res) => { const user = res.locals.user as { sellerId?: string; role: Role }; const order = await prisma.parentOrder.findFirst({ where: { id: routeParam(req.params.id), sellerOrders: { some: user.role === Role.ADMIN ? {} : { sellerId: user.sellerId } }, payment: { method: PaymentMethod.POS } }, include: { sellerOrders: { include: { items: true, seller: { include: { store: true } } } }, payment: true } }); if (!order) return res.status(404).send('Receipt not found'); res.type('html').send(`<html><head><title>Receipt ${order.orderNumber}</title><style>body{font-family:system-ui;max-width:420px;margin:2rem auto} @media print{button{display:none}}</style></head><body><h1>Receipt</h1><p>${order.orderNumber}</p>${order.sellerOrders.flatMap(s => s.items.map(i => `<p>${i.quantity} × ${i.productName} — ${(i.unitPriceMinor / 100).toFixed(2)} ${order.currency}</p>`)).join('')}<hr><strong>Total ${(order.totalMinor / 100).toFixed(2)} ${order.currency}</strong><br><button onclick="print()">Print</button></body></html>`); }));
 
 app.get('/api/admin/settings', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (_req, res) => { const [marketplace, paymentMethods, liveShopping] = await Promise.all([prisma.marketplaceSettings.findUnique({ where: { id: 'default' } }), prisma.paymentMethodSettings.findMany({ orderBy: { method: 'asc' } }), liveShoppingState()]); res.json({ marketplace, paymentMethods, liveShopping }); }));
+app.patch('/api/admin/settings', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res, next) => { const input = parse(settingSchema, req.body); if (!input.method || input.enabled !== true) return next(); const block = await livePaymentActivationBlock(input.method as PaymentMethod); if (block) return res.status(409).json(block); return next(); }));
 app.patch('/api/admin/settings', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const input = parse(settingSchema, req.body); if (input.multiVendorEnabled !== undefined) { const old = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } }); const updated = await prisma.marketplaceSettings.upsert({ where: { id: 'default' }, update: { multiVendorEnabled: input.multiVendorEnabled }, create: { id: 'default', multiVendorEnabled: input.multiVendorEnabled } }); await audit(user.id, 'MARKETPLACE_MODE_CHANGED', 'MarketplaceSettings', 'default', { old: old?.multiVendorEnabled, new: input.multiVendorEnabled, reason: input.reason }); res.json(updated); return; } if (input.liveShoppingEnabled !== undefined) { const live = await liveShoppingState(); if (input.liveShoppingEnabled && (!live.deploymentGate || !live.readiness.configured || !live.readiness.healthy)) return res.status(409).json({ error: `Live shopping cannot be enabled: ${live.reason}`, liveShopping: live }); const old = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { liveShoppingEnabled: true } }); const updated = await prisma.marketplaceSettings.upsert({ where: { id: 'default' }, update: { liveShoppingEnabled: input.liveShoppingEnabled }, create: { id: 'default', liveShoppingEnabled: input.liveShoppingEnabled } }); await audit(user.id, 'LIVE_SHOPPING_MODE_CHANGED', 'MarketplaceSettings', 'default', { old: old?.liveShoppingEnabled ?? false, new: input.liveShoppingEnabled, reason: input.reason }); res.json(updated); return; } if (input.method && input.enabled !== undefined) { const old = await prisma.paymentMethodSettings.findUnique({ where: { method: input.method as PaymentMethod } }); const updated = await prisma.paymentMethodSettings.upsert({ where: { method: input.method as PaymentMethod }, update: { enabled: input.enabled }, create: { id: input.method.toLowerCase(), method: input.method as PaymentMethod, enabled: input.enabled } }); await audit(user.id, 'PAYMENT_METHOD_CHANGED', 'PaymentMethodSettings', input.method, { old: old?.enabled, new: input.enabled, reason: input.reason }); res.json(updated); return; } res.status(400).json({ error: 'No supported setting provided' }); }));
 app.get('/api/admin/live-sessions', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (_req, res) => res.json(await prisma.liveSession.findMany({ include: { seller: { include: { store: true } }, products: { include: { product: true } }, reports: true }, orderBy: { createdAt: 'desc' }, take: 100 }))));
 app.post('/api/admin/live-sessions/:id/terminate', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const session = await prisma.liveSession.findUnique({ where: { id: routeParam(req.params.id) } }); if (!session) return res.status(404).json({ error: 'Live session not found' }); if (session.providerSessionRef) await liveProvider.endSession(session.providerSessionRef); const updated = await prisma.liveSession.update({ where: { id: session.id }, data: { status: 'ENDED', endedAt: new Date() } }); await audit(user.id, 'LIVE_SESSION_TERMINATED', 'LiveSession', session.id, { previousStatus: session.status }); res.json(updated); }));
@@ -360,7 +376,26 @@ app.post('/api/webhooks/paypal', express.raw({ type: 'application/json' }), asyn
   res.json({ received: true });
 }));
 
-app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => { if (error instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: error.flatten() }); const statusCode = (error as { statusCode?: number }).statusCode; if (statusCode) return res.status(statusCode).json({ error: error instanceof Error ? error.message : 'Live shopping unavailable', liveShopping: (error as { liveShoppingState?: unknown }).liveShoppingState }); console.error(error instanceof Error ? error.message : 'Unhandled error'); res.status(500).json({ error: 'Internal server error' }); });
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (error instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: error.flatten() });
+  const apiError = error as Record<string, unknown>;
+  const statusCode = typeof apiError.statusCode === 'number' ? apiError.statusCode : undefined;
+  if (statusCode) {
+    const body: Record<string, unknown> = { error: error instanceof Error ? error.message : 'Live shopping unavailable' };
+    if (typeof apiError.code === 'string') body.code = apiError.code;
+    if (typeof apiError.entitlement === 'string') body.entitlement = apiError.entitlement;
+    for (const field of ['usage', 'requested', 'limit'] as const) {
+      const value = apiError[field];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) body[field] = value;
+    }
+    if (typeof apiError.upgradeRequired === 'boolean') body.upgradeRequired = apiError.upgradeRequired;
+    if (apiError.planUrl === '/seller/plan') body.planUrl = apiError.planUrl;
+    if (apiError.liveShoppingState !== undefined) body.liveShopping = apiError.liveShoppingState;
+    return res.status(statusCode).json(body);
+  }
+  console.error(error instanceof Error ? error.message : 'Unhandled error');
+  res.status(500).json({ error: 'Internal server error' });
+});
 
 if (process.env.NODE_ENV !== 'test') app.listen(env.API_PORT, () => console.log(`Marketplace API listening on http://localhost:${env.API_PORT}`));
 export { app };

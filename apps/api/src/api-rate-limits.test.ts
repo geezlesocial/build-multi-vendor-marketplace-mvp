@@ -6,6 +6,7 @@ import {
   API_REQUEST_LIMIT_WINDOW_MS,
   AUTH_CREDENTIAL_LIMIT,
   AUTH_CREDENTIAL_LIMIT_WINDOW_MS,
+  E2E_AUTH_CREDENTIAL_LIMIT,
   E2E_API_REQUEST_LIMIT,
   createApiRateLimiters,
   resolveApiRateLimitOptions
@@ -17,9 +18,10 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
 });
 
-async function startRateLimitTestServer() {
+async function startRateLimitTestServer(credentialLimit?: number) {
   const app = express();
-  const { credentialLimiter, apiLimiter } = createApiRateLimiters({ credentialLimit: 2 });
+  const options = credentialLimit === undefined ? {} : { credentialLimit };
+  const { credentialLimiter, apiLimiter } = createApiRateLimiters(options);
   app.use('/api', apiLimiter);
   app.post('/api/auth/login', credentialLimiter, (_req, res) => res.status(401).json({ error: 'Invalid credentials' }));
   app.post('/api/auth/register', credentialLimiter, (_req, res) => res.status(201).json({ ok: true }));
@@ -51,7 +53,10 @@ describe('API rate-limit policy', () => {
       E2E_DATABASE_URL: databaseUrl,
       WALLET_FUNDING_SANDBOX_ID: id
     };
-    expect(resolveApiRateLimitOptions(valid)).toEqual({ apiLimit: E2E_API_REQUEST_LIMIT });
+    expect(resolveApiRateLimitOptions(valid)).toEqual({
+      apiLimit: E2E_API_REQUEST_LIMIT,
+      credentialLimit: E2E_AUTH_CREDENTIAL_LIMIT
+    });
 
     for (const invalid of [
       { ...valid, NODE_ENV: 'production' },
@@ -63,8 +68,15 @@ describe('API rate-limit policy', () => {
       },
       {
         ...valid,
-        DATABASE_URL: 'postgresql://e2e:test@127.0.0.1:5432/marketplace',
-        E2E_DATABASE_URL: 'postgresql://e2e:test@127.0.0.1:5432/marketplace'
+        DATABASE_URL: 'postgresql://e2e:test@127.0.0.1:55432/marketplace',
+        E2E_DATABASE_URL: 'postgresql://e2e:test@127.0.0.1:55432/marketplace',
+        WALLET_FUNDING_DISPOSABLE_DATABASE_ALLOWLIST: 'marketplace'
+      },
+      {
+        ...valid,
+        DATABASE_URL: `postgresql://e2e:test@remote.example.test:55432/wallet_funding_e2e_${id}`,
+        E2E_DATABASE_URL: `postgresql://e2e:test@remote.example.test:55432/wallet_funding_e2e_${id}`,
+        WALLET_FUNDING_DISPOSABLE_DATABASE_ALLOWLIST: `wallet_funding_e2e_${id}`
       },
       { ...valid, WALLET_FUNDING_SANDBOX_ID: 'b'.repeat(32) }
     ]) {
@@ -73,7 +85,7 @@ describe('API rate-limit policy', () => {
   });
 
   it('allows ordinary session inspection beyond the credential-attempt limit while throttling login and registration', async () => {
-    const baseUrl = await startRateLimitTestServer();
+    const baseUrl = await startRateLimitTestServer(2);
 
     for (let request = 0; request < 65; request += 1) {
       const response = await fetch(`${baseUrl}/api/auth/me`);
@@ -83,5 +95,15 @@ describe('API rate-limit policy', () => {
     expect((await fetch(`${baseUrl}/api/auth/login`, { method: 'POST' })).status).toBe(401);
     expect((await fetch(`${baseUrl}/api/auth/login`, { method: 'POST' })).status).toBe(401);
     expect((await fetch(`${baseUrl}/api/auth/register`, { method: 'POST' })).status).toBe(429);
+  });
+
+  it('keeps the normal shared login/register credential limit enforced', async () => {
+    const baseUrl = await startRateLimitTestServer();
+
+    for (let attempt = 0; attempt < AUTH_CREDENTIAL_LIMIT - 1; attempt += 1) {
+      expect((await fetch(`${baseUrl}/api/auth/login`, { method: 'POST' })).status).toBe(401);
+    }
+    expect((await fetch(`${baseUrl}/api/auth/register`, { method: 'POST' })).status).toBe(201);
+    expect((await fetch(`${baseUrl}/api/auth/login`, { method: 'POST' })).status).toBe(429);
   });
 });

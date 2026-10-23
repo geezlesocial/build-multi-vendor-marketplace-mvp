@@ -20,7 +20,7 @@ async function csrfHeaders(page: Page) {
 test('admin can save/publish branding and manage taxonomy while public users cannot', async ({ page }) => {
   await login(page, adminEmail);
   await page.goto('/admin/platform');
-  await expect(page.getByRole('heading', { name: 'Identity, governance, and payouts' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Control center', exact: true })).toBeVisible();
   const slug = 'home-essentials';
   const draft = await page.request.put('/api/admin/platform/branding', { data: { platformName: 'E2E Market', shortName: 'E2E', description: 'Verified platform identity', seoDescription: 'E2E metadata', tagline: 'Test safely', logoMediaId: null, alternateLogoMediaId: null, faviconMediaId: null, defaultAvatarMediaId: null, socialImageMediaId: null, supportEmail: null, supportUrl: null }, headers: await csrfHeaders(page) });
   expect(draft.status()).toBe(200);

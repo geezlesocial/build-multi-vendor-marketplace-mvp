@@ -29,6 +29,7 @@ export const storeThemeSchema = z.object({
   themePreset: z.nativeEnum(StoreThemePreset).default(StoreThemePreset.CLASSIC),
   mobileTemplate: z.nativeEnum(MobileStorefrontTemplate).default(MobileStorefrontTemplate.RESPONSIVE_STANDARD),
   logoMediaId: z.string().min(1).max(80).nullable().default(null),
+  faviconMediaId: z.string().min(1).max(80).nullable().default(null),
   bannerMediaId: z.string().min(1).max(80).nullable().default(null),
   description: z.string().trim().max(1000).default(''),
   primaryColor: hex.default('#1f6f5b'),

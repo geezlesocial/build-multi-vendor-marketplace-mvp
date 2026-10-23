@@ -3,11 +3,15 @@ import path from 'node:path';
 import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
 import { z } from 'zod';
-import { ContentStatus, MediaKind, MediaScanStatus, Role, Prisma } from '@prisma/client';
+import { ContentStatus, MediaKind, MediaPurpose, MediaScanStatus, MediaUploadStatus, Role, Prisma } from '@prisma/client';
+import sharp from 'sharp';
 import { env } from './config.js';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
 import { contentActionSchema, contentWriteSchema, mediaExtension, pageWriteSchema, slugPath } from './content-validation.js';
-import { contentStorage } from './content-storage.js';
+import { objectContentStorage, openContentObject } from './content-storage.js';
+import type { ManagedContentStorage } from './content-storage.js';
+import { detectStoreMedia } from './store-media-routes.js';
+import { malwareScanner, scanQuarantinedMedia, type MalwareScanner } from './media-scanner.js';
 import { renderBlocks, renderDocument } from './content-renderer.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -17,13 +21,25 @@ const contentRoles = [Role.ADMIN, Role.CONTENT_EDITOR];
 const adminOnly = [Role.ADMIN];
 const now = () => new Date();
 function publishedWhere(): Prisma.BlogPostWhereInput {
-  return { status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
+  return { storeId: null, status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
 }
 
 function pagePublishedWhere(): Prisma.ContentPageWhereInput {
-  return { status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
+  return { storeId: null, status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
 }
 const reservedSlugs = new Set(['api', 'admin', 'blog', 'pages', 'content-media', 'content-preview', 'health', 'ready', 'robots.txt', 'sitemap.xml']);
+const contentUploadTypes: Record<string, { kind: MediaKind; extensions: string[] }> = {
+  'image/png': { kind: MediaKind.IMAGE, extensions: ['png'] }, 'image/jpeg': { kind: MediaKind.IMAGE, extensions: ['jpg', 'jpeg'] },
+  'image/webp': { kind: MediaKind.IMAGE, extensions: ['webp'] }, 'image/gif': { kind: MediaKind.IMAGE, extensions: ['gif'] },
+  'video/mp4': { kind: MediaKind.VIDEO, extensions: ['mp4'] }, 'video/webm': { kind: MediaKind.VIDEO, extensions: ['webm'] },
+  'video/ogg': { kind: MediaKind.VIDEO, extensions: ['ogv', 'ogg'] }, 'application/pdf': { kind: MediaKind.DOCUMENT, extensions: ['pdf'] },
+  'text/csv': { kind: MediaKind.DOCUMENT, extensions: ['csv'] }, 'text/vtt': { kind: MediaKind.CAPTION, extensions: ['vtt'] },
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { kind: MediaKind.DOCUMENT, extensions: ['docx'] },
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { kind: MediaKind.DOCUMENT, extensions: ['xlsx'] },
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': { kind: MediaKind.DOCUMENT, extensions: ['pptx'] }
+};
+const contentUploadTtlMs = 60 * 60 * 1000;
+function mediaLimit(kind: MediaKind) { return kind === MediaKind.IMAGE ? env.CONTENT_MAX_IMAGE_BYTES : kind === MediaKind.VIDEO ? env.CONTENT_MAX_VIDEO_BYTES : env.CONTENT_MAX_DOCUMENT_BYTES; }
 
 function actor(res: Response) { return res.locals.user as { id: string; role: Role }; }
 function assertAdmin(res: Response) { if (actor(res).role !== Role.ADMIN) throw fail(403, 'Administrator permission required'); }
@@ -43,8 +59,9 @@ function jsonInput(value: unknown) { return JSON.parse(JSON.stringify(value)) as
 
 async function assertMediaReady(ids: string[], release: boolean) {
   if (!ids.length) return;
-  const assets = await prisma.mediaAsset.findMany({ where: { id: { in: ids } }, select: { id: true, scanStatus: true } });
+  const assets = await prisma.mediaAsset.findMany({ where: { id: { in: ids }, storeId: null, uploadStatus: 'COMPLETE' }, select: { id: true, scanStatus: true } });
   if (assets.length !== new Set(ids).size) throw fail(400, 'One or more media assets do not exist');
+  if (assets.some(asset => asset.scanStatus === MediaScanStatus.REJECTED)) throw fail(409, 'Rejected media cannot be used in content. Choose a different file.');
   if (release && assets.some(asset => asset.scanStatus !== MediaScanStatus.APPROVED)) throw fail(409, 'All media must pass scanning before publication');
 }
 
@@ -64,13 +81,18 @@ async function assertRedirectSafe(fromPath: string, destinationPath: string) {
 async function publicMediaAsset(id: string) {
   const asset = await prisma.mediaAsset.findUnique({ where: { id } });
   if (!asset || asset.scanStatus !== MediaScanStatus.APPROVED) return null;
-  const [posts, pages, branding, stores] = await Promise.all([
-    prisma.blogPost.findMany({ where: publishedWhere(), select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
-    prisma.contentPage.findMany({ where: pagePublishedWhere(), select: { bodyJson: true, ogImageId: true } }),
+  if (asset.uploadStatus !== 'COMPLETE') return null;
+  const publishedNow = { status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
+  const [posts, pages, storePosts, storePages, branding, stores, products] = await Promise.all([
+    prisma.blogPost.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
+    prisma.contentPage.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, ogImageId: true } }),
+    prisma.blogPost.findMany({ where: { ...publishedNow, store: { seller: { status: 'APPROVED' } } }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
+    prisma.contentPage.findMany({ where: { ...publishedNow, store: { seller: { status: 'APPROVED' } } }, select: { bodyJson: true, ogImageId: true } }),
     prisma.platformBranding.findUnique({ where: { id: 'default' }, select: { publishedJson: true } }),
-    prisma.store.findMany({ where: { seller: { status: 'APPROVED' }, themePublishedJson: { not: Prisma.JsonNull } }, select: { logoMediaId: true, bannerMediaId: true, themePublishedJson: true } })
+    prisma.store.findMany({ where: { seller: { status: 'APPROVED' }, themePublishedJson: { not: Prisma.JsonNull } }, select: { logoMediaId: true, bannerMediaId: true, themePublishedJson: true } }),
+    prisma.productImage.findMany({ where: { mediaAssetId: id, product: { status: 'APPROVED', OR: [{ sellerId: null }, { seller: { status: 'APPROVED' } }] } }, select: { id: true } })
   ]);
-  const referencedInPublishedContent = posts.some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || pages.some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id));
+  const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || products.length > 0;
   return referencedInPublishedContent ? asset : null;
 }
 
@@ -98,7 +120,7 @@ async function contentHtml(content: { title: string; bodyJson: unknown; excerpt?
   return renderDocument({ title: content.seoTitle || content.title, description: content.seoDescription || safeDescription(content.title, content.excerpt), canonical, body: renderBlocks(content.bodyJson), type: kind === 'blog' ? 'BlogPosting' : 'WebPage', publishedAt: content.publishedAt, updatedAt: content.updatedAt, noIndex: preview || content.noIndex, noFollow: preview || content.noFollow, imageUrl: content.ogImageId ? `/content-media/${encodeURIComponent(content.ogImageId)}` : null, breadcrumb: kind === 'blog' ? 'Blog' : 'Pages', siteName, faviconUrl });
 }
 
-export function registerContentRoutes(app: Express) {
+export function registerContentRoutes(app: Express, openObject: typeof openContentObject = openContentObject, storage: ManagedContentStorage | null = objectContentStorage, scanner: MalwareScanner | null = malwareScanner) {
   app.get('/api/content/blog', run(async (req, res) => {
     const page = Math.max(1, Number(req.query.page ?? 1));
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize ?? 12)));
@@ -112,13 +134,23 @@ export function registerContentRoutes(app: Express) {
   app.get('/api/content/navigation', run(async (_req, res) => res.json(await prisma.contentPage.findMany({ where: { ...pagePublishedWhere(), navPlacement: { not: 'NONE' } }, select: { slug: true, title: true, navLabel: true, navPlacement: true, navOrder: true }, orderBy: [{ navOrder: 'asc' }, { title: 'asc' }] }))));
 
   app.get('/sitemap.xml', run(async (_req, res) => {
-    const [posts, pages] = await Promise.all([prisma.blogPost.findMany({ where: publishedWhere(), select: { slug: true, updatedAt: true, canonicalUrl: true, noIndex: true } }), prisma.contentPage.findMany({ where: pagePublishedWhere(), select: { slug: true, updatedAt: true, canonicalUrl: true, noIndex: true } })]);
+    const [posts, pages, storePosts, storePages] = await Promise.all([
+      prisma.blogPost.findMany({ where: publishedWhere(), select: { slug: true, updatedAt: true, canonicalUrl: true, noIndex: true } }),
+      prisma.contentPage.findMany({ where: pagePublishedWhere(), select: { slug: true, updatedAt: true, canonicalUrl: true, noIndex: true } }),
+      prisma.blogPost.findMany({ where: { store: { seller: { status: 'APPROVED' } }, status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] }, select: { slug: true, updatedAt: true, noIndex: true, store: { select: { slug: true } } } }),
+      prisma.contentPage.findMany({ where: { store: { seller: { status: 'APPROVED' } }, status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] }, select: { slug: true, updatedAt: true, noIndex: true, store: { select: { slug: true } } } })
+    ]);
     const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-    const urls = [...posts.filter(post => !post.noIndex).map(post => ({ loc: post.canonicalUrl || publicUrl('blog', post.slug), lastmod: post.updatedAt })), ...pages.filter(page => !page.noIndex).map(page => ({ loc: page.canonicalUrl || publicUrl('pages', page.slug), lastmod: page.updatedAt }))];
+    const urls = [
+      ...posts.filter(post => !post.noIndex).map(post => ({ loc: post.canonicalUrl || publicUrl('blog', post.slug), lastmod: post.updatedAt })),
+      ...pages.filter(page => !page.noIndex).map(page => ({ loc: page.canonicalUrl || publicUrl('pages', page.slug), lastmod: page.updatedAt })),
+      ...storePosts.filter(post => !post.noIndex && post.store).map(post => ({ loc: `${env.SITE_URL}/store/${post.store!.slug}/blog/${post.slug}`, lastmod: post.updatedAt })),
+      ...storePages.filter(page => !page.noIndex && page.store).map(page => ({ loc: `${env.SITE_URL}/store/${page.store!.slug}/pages/${page.slug}`, lastmod: page.updatedAt }))
+    ];
     res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(url => `<url><loc>${escape(url.loc)}</loc><lastmod>${url.lastmod.toISOString()}</lastmod></url>`).join('')}</urlset>`);
   }));
   app.get('/robots.txt', (_req, res) => res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /content-preview/\nSitemap: ${env.SITE_URL}/sitemap.xml\n`));
-  app.get('/content-media/:id', run(async (req, res) => { const asset = await publicMediaAsset(param(req.params.id)); if (!asset) return res.status(404).send('Media not found'); res.setHeader('Content-Type', asset.detectedMime); res.setHeader('Content-Disposition', asset.kind === MediaKind.DOCUMENT || asset.kind === MediaKind.CAPTION ? `attachment; filename="${asset.safeName}"` : `inline; filename="${asset.safeName}"`); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); contentStorage.open(asset.storageKey).on('error', () => { if (!res.headersSent) res.status(404).send('Media not found'); }).pipe(res); }));
+  app.get('/content-media/:id', run(async (req, res) => { const asset = await publicMediaAsset(param(req.params.id)); if (!asset) return res.status(404).send('Media not found'); res.setHeader('Content-Type', asset.detectedMime); res.setHeader('Content-Disposition', asset.kind === MediaKind.DOCUMENT || asset.kind === MediaKind.CAPTION ? `attachment; filename="${asset.safeName}"` : `inline; filename="${asset.safeName}"`); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); openObject(asset.storageProvider, asset.storageKey).on('error', () => { if (!res.headersSent) res.status(404).send('Media not found'); }).pipe(res); }));
 
   app.get('/blog/:slug', run(async (req, res) => { const slug = param(req.params.slug); const post = await prisma.blogPost.findFirst({ where: { ...publishedWhere(), slug } }); if (post) return res.type('html').send(await contentHtml(post, 'blog')); const redirect = await prisma.slugRedirect.findUnique({ where: { fromPath: `/blog/${slug}` } }); if (redirect) return res.redirect(redirect.statusCode, redirect.destinationPath); res.status(404).type('html').send('<!doctype html><title>Not found</title><h1>Not found</h1>'); }));
   app.get('/pages/:slug', run(async (req, res) => { const slug = param(req.params.slug); const page = await prisma.contentPage.findFirst({ where: { ...pagePublishedWhere(), slug } }); if (page) return res.type('html').send(await contentHtml(page, 'pages')); const redirect = await prisma.slugRedirect.findUnique({ where: { fromPath: `/pages/${slug}` } }); if (redirect) return res.redirect(redirect.statusCode, redirect.destinationPath); res.status(404).type('html').send('<!doctype html><title>Not found</title><h1>Not found</h1>'); }));
@@ -200,7 +232,112 @@ export function registerContentRoutes(app: Express) {
   app.post('/api/admin/content/pages/:id/action', requireAuth, requireRole(...contentRoles), actionRoute('page'));
 
   app.post('/api/admin/content/previews', requireAuth, requireRole(...contentRoles), run(async (req, res) => { const user = actor(res); const body = z.object({ postId: z.string().cuid().optional(), pageId: z.string().cuid().optional() }).refine(value => Boolean(value.postId) !== Boolean(value.pageId), 'Provide exactly one postId or pageId').parse(req.body); const token = crypto.randomBytes(32).toString('base64url'); const tokenHash = crypto.createHash('sha256').update(token).digest('hex'); await prisma.contentPreviewToken.create({ data: { createdBy: { connect: { id: user.id } }, tokenHash, ...(body.postId ? { post: { connect: { id: body.postId } } } : { page: { connect: { id: body.pageId! } } }), expiresAt: new Date(Date.now() + 10 * 60 * 1000) } }); res.status(201).json({ url: `${env.SITE_URL}/content-preview/${token}`, expiresInSeconds: 600 }); }));
-  app.get('/api/admin/content/media', requireAuth, requireRole(...contentRoles), run(async (_req, res) => res.json(await prisma.mediaAsset.findMany({ orderBy: { createdAt: 'desc' }, take: 100, select: { id: true, originalName: true, safeName: true, kind: true, detectedMime: true, sizeBytes: true, scanStatus: true, altText: true, caption: true, createdAt: true } }))));
-  app.post('/api/admin/content/media', express.raw({ type: '*/*', limit: '60mb' }), requireAuth, requireRole(...contentRoles), run(async (req, res) => { if (!Buffer.isBuffer(req.body)) throw fail(400, 'Upload bytes are required'); const originalName = req.get('x-original-name')?.slice(0, 255) || 'upload'; const extension = mediaExtension(originalName); const claimedMime = req.get('content-type') || 'application/octet-stream'; const signature = fileSignature(req.body, extension, claimedMime); const limit = signature.kind === MediaKind.IMAGE ? env.CONTENT_MAX_IMAGE_BYTES : signature.kind === MediaKind.VIDEO ? env.CONTENT_MAX_VIDEO_BYTES : env.CONTENT_MAX_DOCUMENT_BYTES; if (req.body.length > limit) throw fail(413, 'File exceeds the configured size limit'); const id = crypto.randomUUID(); const storageKey = `${id}.${signature.extension}`; await contentStorage.put(storageKey, req.body); const user = actor(res); const asset = await prisma.mediaAsset.create({ data: { id, storageKey, originalName, safeName: originalName.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120), kind: signature.kind, detectedMime: signature.mime, sizeBytes: req.body.length, checksum: crypto.createHash('sha256').update(req.body).digest('hex'), uploaderId: user.id, altText: req.get('x-media-alt')?.slice(0, 300), caption: req.get('x-media-caption')?.slice(0, 500), scanStatus: env.NODE_ENV === 'production' || env.CONTENT_SCAN_REQUIRED ? MediaScanStatus.QUARANTINED : MediaScanStatus.APPROVED } }); await audit(user.id, 'CONTENT_MEDIA_UPLOADED', 'MediaAsset', asset.id, { kind: asset.kind, sizeBytes: asset.sizeBytes, scanStatus: asset.scanStatus }); res.status(201).json({ id: asset.id, kind: asset.kind, detectedMime: asset.detectedMime, sizeBytes: asset.sizeBytes, scanStatus: asset.scanStatus }); }));
-  app.delete('/api/admin/content/media/:id', requireAuth, requireRole(...adminOnly), run(async (req, res) => { const id = param(req.params.id); const asset = await prisma.mediaAsset.findUnique({ where: { id } }); if (!asset) return res.status(404).json({ error: 'Media not found' }); const [featured, og, posts, pages] = await Promise.all([prisma.blogPost.count({ where: { featuredImageId: id } }), prisma.blogPost.count({ where: { ogImageId: id } }), prisma.blogPost.findMany({ select: { bodyJson: true } }), prisma.contentPage.findMany({ select: { bodyJson: true } })]); if (featured || og || [...posts, ...pages].some(item => JSON.stringify(item.bodyJson).includes(id))) throw fail(409, 'Media is still referenced by content'); await prisma.mediaAsset.delete({ where: { id } }); await audit(actor(res).id, 'CONTENT_MEDIA_DELETED', 'MediaAsset', id); res.status(204).send(); }));
+  app.get('/api/admin/content/media', requireAuth, requireRole(...contentRoles), run(async (_req, res) => res.json(await prisma.mediaAsset.findMany({ where: { storeId: null }, orderBy: { createdAt: 'desc' }, take: 100, select: { id: true, originalName: true, safeName: true, kind: true, detectedMime: true, sizeBytes: true, scanStatus: true, scanErrorCode: true, scanAttemptCount: true, scanCompletedAt: true, uploadStatus: true, storageProvider: true, altText: true, caption: true, createdAt: true } }))));
+  app.post('/api/admin/content/media/uploads', requireAuth, requireRole(...contentRoles), run(async (req, res) => {
+    const user = actor(res);
+    const input = z.object({ fileName: z.string().trim().min(1).max(255), contentType: z.string().trim().min(1).max(120), sizeBytes: z.number().int().positive() }).strict().parse(req.body);
+    const extension = mediaExtension(input.fileName);
+    const type = contentUploadTypes[input.contentType];
+    if (!type || !type.extensions.includes(extension)) throw fail(415, 'Choose a supported image, video, caption, or document file with matching content type.');
+    if (input.sizeBytes > mediaLimit(type.kind)) throw fail(413, 'File exceeds the configured size limit.');
+    if (!storage) throw fail(503, 'Managed private media storage is unavailable. No file was uploaded.');
+    const id = crypto.randomUUID();
+    const storageKey = `pending/platform/content/${id}`;
+    const asset = await prisma.mediaAsset.create({ data: {
+      id, storageKey, originalName: input.fileName, safeName: input.fileName.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 120),
+      kind: type.kind, detectedMime: input.contentType, sizeBytes: input.sizeBytes,
+      checksum: crypto.createHash('sha256').update(`pending:${id}`).digest('hex'), uploaderId: user.id,
+      purpose: MediaPurpose.PLATFORM_CONTENT, storageProvider: 'OBJECT', uploadStatus: 'PENDING', scanStatus: 'QUARANTINED'
+    } });
+    try {
+      const upload = await storage.createUploadForm(storageKey, input.contentType, input.sizeBytes);
+      await audit(user.id, 'CONTENT_MEDIA_UPLOAD_RESERVED', 'MediaAsset', id, { kind: type.kind, sizeBytes: input.sizeBytes });
+      return res.status(201).json({ id: asset.id, upload, expiresInSeconds: 300, uploadStatus: asset.uploadStatus, scanStatus: asset.scanStatus, publicAfterUpload: false });
+    } catch {
+      await prisma.mediaAsset.updateMany({ where: { id, uploaderId: user.id, uploadStatus: 'PENDING' }, data: { uploadStatus: 'FAILED' } });
+      throw fail(503, 'A temporary upload authorization could not be issued. Retry safely.');
+    }
+  }));
+  app.post('/api/admin/content/media/:id/finalize', requireAuth, requireRole(...contentRoles), run(async (req, res) => {
+    const user = actor(res);
+    if (!storage) throw fail(503, 'Managed private media storage is unavailable. The file remains unavailable.');
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: param(req.params.id), uploaderId: user.id, storeId: null, purpose: MediaPurpose.PLATFORM_CONTENT, storageProvider: 'OBJECT', uploadStatus: { in: ['PENDING', 'COMPLETE'] } } });
+    if (!asset) throw fail(404, 'Pending content media upload not found.');
+    if (asset.uploadStatus === 'COMPLETE') return res.status(asset.scanStatus === 'APPROVED' ? 200 : 202).json({ id: asset.id, kind: asset.kind, scanStatus: asset.scanStatus, scanErrorCode: asset.scanErrorCode, uploadStatus: asset.uploadStatus, publicAfterUpload: false, message: 'This upload was already finalized. Its saved scan state is unchanged.' });
+    if (asset.createdAt < new Date(Date.now() - contentUploadTtlMs)) {
+      await prisma.mediaAsset.updateMany({ where: { id: asset.id, uploaderId: user.id, uploadStatus: 'PENDING' }, data: { uploadStatus: 'FAILED' } });
+      await storage.remove(asset.storageKey).catch(() => undefined);
+      throw fail(410, 'Upload authorization expired. Choose the file again to retry.');
+    }
+    const claim = await prisma.mediaAsset.updateMany({ where: { id: asset.id, uploaderId: user.id, uploadStatus: 'PENDING' }, data: { uploadStatus: 'VERIFYING' } });
+    if (claim.count !== 1) throw fail(409, 'Upload is already being verified or is no longer available.');
+    let finalKey: string | null = null;
+    let persisted = false;
+    try {
+      const limit = mediaLimit(asset.kind);
+      const head = await storage.head(asset.storageKey);
+      if (head.ContentLength !== asset.sizeBytes || head.ContentLength > limit || head.ContentType !== asset.detectedMime) throw fail(400, 'Uploaded object size or type does not match its reservation.');
+      const read = await storage.readLimited(asset.storageKey, limit);
+      if (read.bytes.length !== asset.sizeBytes || read.contentLength !== asset.sizeBytes || read.contentType !== asset.detectedMime) throw fail(400, 'Uploaded object metadata does not match its reservation.');
+      const extension = mediaExtension(asset.originalName);
+      const detected = detectStoreMedia(read.bytes, extension, asset.detectedMime);
+      if (detected.kind !== asset.kind) throw fail(415, 'Uploaded file content does not match its reservation.');
+      let bytes = read.bytes; let mime = detected.mime; let ext = detected.extension;
+      let width: number | undefined; let height: number | undefined;
+      if (detected.kind === MediaKind.IMAGE) {
+        const decoder = sharp(bytes, { limitInputPixels: 40_000_000, animated: false, failOn: 'error' });
+        const metadata = await decoder.metadata();
+        if (!metadata.width || !metadata.height || !['png', 'jpeg', 'webp', 'gif'].includes(metadata.format ?? '')) throw fail(415, 'Image data could not be safely decoded.');
+        width = metadata.width; height = metadata.height;
+        bytes = await decoder.rotate().webp({ quality: 86 }).toBuffer(); mime = 'image/webp'; ext = 'webp';
+      }
+      if (bytes.length > limit) throw fail(413, 'Processed file exceeds the configured size limit.');
+      finalKey = `platform/content/${asset.id}.${ext}`;
+      await storage.put(finalKey, bytes, mime);
+      await prisma.$transaction(async tx => {
+        const updated = await tx.mediaAsset.updateMany({ where: { id: asset.id, uploaderId: user.id, uploadStatus: 'VERIFYING' }, data: {
+          storageKey: finalKey!, safeName: `${path.parse(asset.safeName).name}.${ext}`, detectedMime: mime, sizeBytes: bytes.length,
+          width: width ?? null, height: height ?? null, checksum: crypto.createHash('sha256').update(bytes).digest('hex'),
+          purpose: MediaPurpose.PLATFORM_CONTENT, uploadStatus: 'COMPLETE', scanStatus: MediaScanStatus.QUARANTINED,
+          scanAttemptId: null, scanStartedAt: null, scanCompletedAt: null, scanErrorCode: null, scannerProvider: null
+        } });
+        if (updated.count !== 1) throw fail(409, 'Upload is no longer available.');
+        await tx.auditLog.create({ data: { actorId: user.id, action: 'CONTENT_MEDIA_QUARANTINED', entity: 'MediaAsset', entityId: asset.id, metadata: { kind: asset.kind, sizeBytes: bytes.length } } });
+      });
+      persisted = true;
+      await storage.remove(asset.storageKey).catch(() => undefined);
+      const scan = await scanQuarantinedMedia({ assetId: asset.id, bytes, scanner, actorId: user.id });
+      return res.status(scan.scanStatus === MediaScanStatus.APPROVED ? 200 : 202).json({ kind: asset.kind, detectedMime: mime, sizeBytes: bytes.length, ...scan, uploadStatus: 'COMPLETE', publicAfterUpload: false, message: scan.scanStatus === MediaScanStatus.APPROVED ? 'Upload verified and scanned. It can be used in a draft; publication remains an explicit action.' : scan.scanErrorCode === 'MALWARE_DETECTED' ? 'The scanner rejected this file. It remains private and cannot be published.' : 'Upload verified. The file remains private in quarantine until the configured scanner approves it.' });
+    } catch (error) {
+      if (persisted) return res.status(202).json({ id: asset.id, uploadStatus: 'COMPLETE', scanStatus: MediaScanStatus.QUARANTINED, publicAfterUpload: false, message: 'The file is safely stored in private quarantine, but its scan result could not be confirmed. Retry the scan later.' });
+      if (finalKey) await storage.remove(finalKey).catch(() => undefined);
+      const status = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : 503;
+      if (status >= 400 && status < 500) {
+        await storage.remove(asset.storageKey).catch(() => undefined);
+        await prisma.mediaAsset.updateMany({ where: { id: asset.id, uploaderId: user.id, uploadStatus: 'VERIFYING' }, data: { uploadStatus: 'FAILED' } });
+        throw error;
+      }
+      await prisma.mediaAsset.updateMany({ where: { id: asset.id, uploaderId: user.id, uploadStatus: 'VERIFYING' }, data: { uploadStatus: 'PENDING' } });
+      throw fail(503, 'The upload could not be safely verified. It remains unavailable; retry later.');
+    }
+  }));
+  app.post('/api/admin/content/media/:id/scan-retry', requireAuth, requireRole(...contentRoles), run(async (req, res) => {
+    const user = actor(res);
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: param(req.params.id), uploaderId: user.id, storeId: null, purpose: MediaPurpose.PLATFORM_CONTENT, uploadStatus: 'COMPLETE', scanStatus: 'QUARANTINED', storageProvider: 'OBJECT' } });
+    if (!asset) throw fail(404, 'Quarantined content media not found.');
+    if (!scanner) {
+      const scan = await scanQuarantinedMedia({ assetId: asset.id, bytes: Buffer.alloc(0), scanner, actorId: user.id });
+      return res.status(202).json({ ...scan, message: 'The malware scanner is unavailable. The file remains private.' });
+    }
+    if (!storage) throw fail(503, 'Managed private media storage is unavailable. The file remains private.');
+    try {
+      const read = await storage.readLimited(asset.storageKey, mediaLimit(asset.kind));
+      const scan = await scanQuarantinedMedia({ assetId: asset.id, bytes: read.bytes, scanner, actorId: user.id });
+      return res.status(scan.scanStatus === MediaScanStatus.APPROVED ? 200 : 202).json(scan);
+    } catch {
+      return res.status(503).json({ error: 'The private media object could not be read for scanning. It remains quarantined; retry later.', code: 'MEDIA_READ_UNAVAILABLE' });
+    }
+  }));
+  app.post('/api/admin/content/media', express.raw({ type: '*/*', limit: '60mb' }), requireAuth, requireRole(...contentRoles), run(async (_req, res) => res.status(410).json({ error: 'Direct CMS media uploads are no longer supported. Use the short-lived private upload flow.' })));
+  app.delete('/api/admin/content/media/:id', requireAuth, requireRole(...adminOnly), run(async (req, res) => { const id = param(req.params.id); const asset = await prisma.mediaAsset.findFirst({ where: { id, storeId: null } }); if (!asset) return res.status(404).json({ error: 'Media not found' }); const [featured, og, posts, pages, productImages, branding, stores, avatars] = await Promise.all([prisma.blogPost.count({ where: { storeId: null, featuredImageId: id } }), prisma.blogPost.count({ where: { storeId: null, ogImageId: id } }), prisma.blogPost.findMany({ where: { storeId: null }, select: { bodyJson: true } }), prisma.contentPage.findMany({ where: { storeId: null }, select: { bodyJson: true } }), prisma.productImage.count({ where: { mediaAssetId: id } }), prisma.platformBranding.findUnique({ where: { id: 'default' }, select: { draftJson: true, publishedJson: true } }), prisma.store.findMany({ select: { logoMediaId: true, bannerMediaId: true, themeDraftJson: true, themePublishedJson: true } }), prisma.user.count({ where: { avatarMediaId: id } })]); if (featured || og || productImages || avatars || stores.some(store => store.logoMediaId === id || store.bannerMediaId === id || JSON.stringify([store.themeDraftJson, store.themePublishedJson]).includes(id)) || [...posts, ...pages].some(item => JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding ?? {}).includes(id)) throw fail(409, 'Media is still referenced by content or a product'); await prisma.mediaAsset.delete({ where: { id } }); await audit(actor(res).id, 'CONTENT_MEDIA_DELETED', 'MediaAsset', id); res.status(204).send(); }));
 }

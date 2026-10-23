@@ -15,7 +15,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, status, error, refreshUser, setUser } = useSession();
   const [accountOpen, setAccountOpen] = useState(false);
   const [cartCount, setCartCount] = useState(0);
+  const [publicBranding, setPublicBranding] = useState<{ platformName: string; shortName: string; logoMediaId: string | null; alternateLogoMediaId: string | null; faviconMediaId: string | null; defaultAvatarMediaId: string | null } | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/platform/branding').then(response => response.ok ? response.json() : null).then(value => {
+      if (!active || !value || typeof value.platformName !== 'string') return;
+      setPublicBranding(value);
+      if (typeof value.faviconMediaId === 'string') {
+        let link = document.querySelector<HTMLLinkElement>('link[data-platform-branding-icon]');
+        if (!link) { link = document.createElement('link'); link.rel = 'icon'; link.dataset.platformBrandingIcon = 'true'; document.head.append(link); }
+        link.href = `/content-media/${encodeURIComponent(value.faviconMediaId)}`;
+      } else document.querySelector('link[data-platform-branding-icon]')?.remove();
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!user) { setCartCount(0); return undefined; }
@@ -55,16 +70,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (status === 'error') return <div className="app"><header className="topbar"><a className="brand" href="/">Market Lane<span>independent marketplace</span></a></header><main className="shellLoading"><h1>Marketplace unavailable</h1><p className="notice" role="alert">{error}</p><button className="primary" onClick={() => void refreshUser()}>Try again</button></main></div>;
 
   const dashboardHref = user?.role === 'ADMIN' ? '/admin/platform' : '/dashboard';
+  const platformName = publicBranding?.platformName ?? 'Market Lane';
+  const platformShortName = publicBranding?.shortName ?? 'Market Lane';
+  const platformLogo = publicBranding?.logoMediaId ?? publicBranding?.alternateLogoMediaId;
   return <div className="app">
     <header className="topbar">
-      <a className="brand" href="/">Market Lane<span>independent marketplace</span></a>
+      <a className="brand" href="/">{platformLogo && <img className="platformBrandLogo" src={`/content-media/${encodeURIComponent(platformLogo)}`} alt="" onError={event => { event.currentTarget.hidden = true; }} />}<span className="platformBrandText">{platformShortName}<small>{platformName === platformShortName ? 'independent marketplace' : platformName}</small></span></a>
       <nav className="primaryNav" aria-label="Main navigation">
         <a className="navPill" href="/">Shop</a>
         <a className="navPill cartButton" href="/checkout">Cart <b aria-label={`${cartCount} items in cart`}>{user ? cartCount : 0}</b></a>
         {!user && <><a className="navPill" href="/?auth=login">Sign in</a><a className="navPill primary" href="/?auth=register">Create account</a></>}
         {user && <div className="accountMenu" ref={accountRef}>
           <button className="accountTrigger" type="button" aria-label={`${user.name}, account menu`} aria-haspopup="true" aria-expanded={accountOpen} aria-controls="account-menu" onClick={() => setAccountOpen(open => !open)}>
-            <AccountAvatar name={user.name} src={user.avatarUrl} />
+              <AccountAvatar name={user.name} src={user.avatarUrl ?? (publicBranding?.defaultAvatarMediaId ? `/content-media/${encodeURIComponent(publicBranding.defaultAvatarMediaId)}` : undefined)} />
             <span className="accountName">{user.name}</span><span aria-hidden="true">⌄</span>
           </button>
           <div className="accountMenuPanel" id="account-menu" aria-label="Account destinations" hidden={!accountOpen}>
@@ -85,6 +103,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </nav>
     </header>
     <main className="shellMain">{children}</main>
-    <footer>Market Lane MVP · Platform payments are collected by the owner; automated seller payouts are not included.</footer>
+    <footer>{platformName} · Platform payments are collected by the owner; automated seller payouts are not included.</footer>
   </div>;
 }

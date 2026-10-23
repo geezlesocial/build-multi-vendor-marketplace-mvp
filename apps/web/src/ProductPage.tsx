@@ -6,7 +6,7 @@ const money = (minor: number, currency: string) => new Intl.NumberFormat(undefin
 export function ProductPage({ id }: { id: string }) {
   const [product, setProduct] = useState<Product | null>(null);
   const [message, setMessage] = useState('');
-  useEffect(() => { fetch(`/api/products/${encodeURIComponent(id)}`).then(async response => { const body = await response.json(); if (!response.ok) throw new Error(body.error ?? 'Product unavailable'); setProduct(body); }).catch(error => setMessage(error.message)); }, [id]);
+  useEffect(() => { let active = true; fetch(`/api/products/${encodeURIComponent(id)}`).then(async response => { const body = await response.json(); if (!response.ok) throw new Error(body.error ?? 'Product unavailable'); if (!active) return; setProduct(body); const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1]; void fetch('/api/store-buster/signals', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'x-csrf-token': csrf } : {}) }, body: JSON.stringify({ type: 'PRODUCT_VIEW', productId: body.id }) }).catch(() => undefined); }).catch(error => { if (active) setMessage(error.message); }); return () => { active = false; }; }, [id]);
   const add = async () => {
     const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
     const response = await fetch('/api/cart/items', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'x-csrf-token': csrf } : {}) }, body: JSON.stringify({ productId: id, quantity: 1 }) });
