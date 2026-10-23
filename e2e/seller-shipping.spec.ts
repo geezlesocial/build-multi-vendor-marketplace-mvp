@@ -129,6 +129,9 @@ test('multi-vendor checkout applies product shipping discounts, persists immutab
       await buyer.page.request.patch(`/api/cart/items/${item.productId}`, { data: { quantity: 0 }, headers: await csrf(buyer.page) });
     }
     const demoProduct = (await (await buyer.page.request.get('/api/products?q=Demo%20Canvas%20Tote')).json() as { items: { id: string; priceMinor: number }[] }).items[0]!;
+    const demoStore = await prisma.product.findUniqueOrThrow({ where: { id: demoProduct.id }, select: { sellerId: true, seller: { select: { store: { select: { name: true } } } } } });
+    const demoStoreName = demoStore.seller?.store?.name;
+    expect(demoStoreName).toBeTruthy();
     for (const productId of [demoProduct.id, second.product.id]) {
       const added = await buyer.page.request.post('/api/cart/items', { data: { productId, quantity: 1 }, headers: await csrf(buyer.page) });
       expect(added.status()).toBe(201);
@@ -187,16 +190,21 @@ test('multi-vendor checkout applies product shipping discounts, persists immutab
     await page.getByLabel('City').fill(address.city);
     await page.getByLabel('Region').fill(address.region);
     await page.getByLabel('Postal code').fill(address.postalCode);
+    const quoteResponsePromise = page.waitForResponse(response => new URL(response.url()).pathname === '/api/shipping/quote' && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Calculate shipping' }).click();
-    await expect(page.getByLabel('Delivery service for Demo Store')).toBeVisible();
+    const quoteResponse = await quoteResponsePromise;
+    expect(quoteResponse.status(), await quoteResponse.text()).toBe(200);
+    const shippingQuote = await quoteResponse.json() as { quoteToken: string; totalMinor: number; shipments: { sellerId: string; storeName: string }[] };
+    expect(shippingQuote.shipments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sellerId: demoStore.sellerId, storeName: demoStoreName }),
+      expect.objectContaining({ sellerId: second.seller.id, storeName: second.store.name })
+    ]));
+    await expect(page.getByRole('combobox', { name: `Delivery service for ${demoStoreName}`, exact: true })).toBeVisible();
     await expect(page.getByLabel(new RegExp(`Delivery service for ${second.store.name}`))).toBeVisible();
     await expect(page.locator('.summary .total strong')).toHaveText('$69.00');
     await expect(page.locator('.summary')).toContainText('$3.00');
 
     const buyerRecord = await prisma.user.findUniqueOrThrow({ where: { email: 'buyer.local@example.test' }, select: { id: true } });
-    const shippingQuoteResponse = await buyer.page.request.post('/api/shipping/quote', { data: { address }, headers: await csrf(buyer.page) });
-    expect(shippingQuoteResponse.status(), await shippingQuoteResponse.text()).toBe(200);
-    const shippingQuote = await shippingQuoteResponse.json() as { quoteToken: string; totalMinor: number };
     expect(shippingQuote.totalMinor).toBe(6900);
     const beforeCodLimitOrderCount = await prisma.parentOrder.count({ where: { buyerId: buyerRecord.id } });
     const beforeCodLimitStock = await prisma.inventory.findUniqueOrThrow({ where: { productId: second.product.id } });
