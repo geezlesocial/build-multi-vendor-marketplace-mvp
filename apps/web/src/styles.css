@@ -78,3 +78,49 @@
 .sellerPlanBillingSection ul{padding-left:1.3rem}
 @media(max-width:850px){.storePlanAdminGrid{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:720px){.storePlanNumberGrid,.storeAssignmentForm{grid-template-columns:minmax(0,1fr)}.storePlanVersion{align-items:flex-start;flex-direction:column}.storeAssignmentRow{grid-template-columns:minmax(0,1fr) auto}.storeAssignmentRow span:nth-child(3),.storeAssignmentRow span:nth-child(4){color:#68736b;font-size:.85rem}.storePlanPricingFields{padding:.75rem}.planOfferGrid{grid-template-columns:minmax(0,1fr)}}
+
+/* Platform administration control center */
+.adminControlCenter>h1{margin-bottom:.35rem}
+.adminControlLayout{display:grid;grid-template-columns:minmax(220px,270px) minmax(0,1fr);gap:2rem;align-items:start;margin-top:2rem}
+.adminControlNav{display:grid;gap:1.2rem;align-items:stretch;position:sticky;top:6rem;max-height:calc(100vh - 7rem);overflow:auto;padding:.75rem;background:#fff;border:1px solid #e0e6df;border-radius:1rem}
+.adminNavGroup{display:grid;gap:.3rem}
+.adminNavGroup h2{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:#68736b;margin:.35rem .6rem}
+.adminNavGroup button{width:100%;text-align:left;border:0;border-radius:.55rem;background:transparent;padding:.55rem .65rem}
+.adminNavGroup button:hover,.adminNavGroup button.active{background:#e7f0e8;color:#234b38}
+.adminNavPlanned{display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:.5rem .65rem;color:#68736b;font-size:.9rem}
+.adminNavPlanned small{font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.adminControlMain{min-width:0}
+.adminControlMain>section,.adminControlMain>div{min-width:0}
+.adminMetricGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:1.25rem 0}
+.adminMetricGrid .card{display:grid;gap:.3rem}
+.adminMetricGrid .card strong{font-size:1.7rem}
+.adminMetricGrid .card span{color:#68736b}
+.adminOrderRow{grid-template-columns:minmax(140px,1fr) minmax(90px,.7fr) minmax(180px,1.3fr) minmax(110px,.7fr)}
+.adminAuditRow{grid-template-columns:minmax(150px,1fr) minmax(100px,.65fr) minmax(150px,1fr) minmax(170px,1fr)}
+.adminIntegrations{min-width:0}
+/* Managed, quarantined platform and store branding media. */
+.platformBrandLogo{display:block;width:auto;height:2.35rem;max-width:9rem;object-fit:contain}
+.platformBrandText{display:grid;gap:.15rem}.platformBrandText small{font-size:.62rem;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:#68736b}
+.brandingEditor{min-width:0}.brandingEditor>.two{grid-template-columns:minmax(250px,.85fr) minmax(0,1.4fr);align-items:start;gap:1.2rem}
+.brandingImageGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;min-width:0}
+.brandingImageControl{display:grid;align-content:start;gap:.65rem;min-width:0;margin:0;padding:1rem;border:1px solid #dce4dc;border-radius:1rem;background:#fff}
+.brandingImageControl legend{padding:0 .35rem;font-weight:750;color:#19231e}
+.brandingImageControl>p{margin:.15rem 0;font-size:.88rem}
+.brandingImageControl select,.brandingImageControl input[type=file]{width:100%;min-width:0}
+.brandingImageControl input[type=range]{width:100%}
+.brandingImagePreview,.brandingImageCandidate{display:grid;gap:.45rem;min-width:0}
+.brandingImagePreview>span,.brandingImageCandidate>p{margin:0;font-size:.76rem;font-weight:700;color:#68736b}
+.brandingImagePreview img,.brandingImageCandidate img{display:block;width:100%;max-height:220px;object-fit:cover;border-radius:.65rem;background:#eef2ed}
+.brandingImageCandidate{padding:.75rem;border:1px dashed #b8cbbd;border-radius:.75rem}
+.brandingImageCandidate .primary{justify-self:start}
+.brandingImageControl progress{width:100%;accent-color:#315d47}
+.brandingImageEmpty{padding:.65rem}
+.storeBrandingStaff{margin-top:1rem;padding-top:1rem;border-top:1px solid #e2e8e1}
+.storeBrandingStaff .setting{grid-template-columns:minmax(0,1fr) auto}
+.storefrontBanner{display:block;width:100%;max-height:18rem;aspect-ratio:2.4/1;object-fit:cover;border-radius:1rem;margin:0 0 1rem;background:#edf2ed}
+.storefrontIdentity{display:flex;align-items:center;gap:1rem;min-width:0}
+.storefrontIdentity h1{margin:.2rem 0}.storefrontLogo{display:block;width:min(28vw,12rem);max-height:7rem;aspect-ratio:3/1;object-fit:contain;border-radius:.65rem;background:#fff;padding:.3rem}
+@media(max-width:850px){.brandingEditor>.two{grid-template-columns:minmax(0,1fr)}.brandingImageGrid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:560px){.storefrontIdentity{align-items:flex-start;flex-direction:column}.storefrontLogo{width:min(60vw,12rem)}.brandingImageControl{padding:.75rem}}
+@media(max-width:900px){.adminControlLayout{grid-template-columns:1fr;gap:1rem}.adminControlNav{position:static;max-height:none;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible}.adminNavGroup{align-content:start}.adminOrderRow,.adminAuditRow{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.adminControlNav{grid-template-columns:1fr}.adminMetricGrid{grid-template-columns:1fr}.adminOrderRow,.adminAuditRow{grid-template-columns:1fr}.adminControlCenter{width:calc(100% - 1.25rem)}}

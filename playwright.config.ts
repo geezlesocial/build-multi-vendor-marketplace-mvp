@@ -16,8 +16,27 @@ const webServerEnv = {
   DATABASE_URL: e2eDatabaseURL,
   E2E_DATABASE_URL: e2eDatabaseURL,
   E2E_API_RATE_LIMIT_OVERRIDE: 'true',
+  // Browser runs must never inherit usable provider or money-movement settings.
+  STRIPE_SECRET_KEY: '',
+  STRIPE_WEBHOOK_SECRET: '',
+  PAYPAL_CLIENT_ID: '',
+  PAYPAL_CLIENT_SECRET: '',
+  PAYPAL_WEBHOOK_ID: '',
+  PAYPAL_BASE_URL: 'https://api-m.sandbox.paypal.com',
+  MONEY_MOVEMENT_HARD_DISABLED: 'true',
+  WALLET_FUNDING_SANDBOX_MODE: 'false',
+  WALLET_FUNDING_PROVIDER_READY: 'false',
+  CLUB_COINS_HARD_DISABLED: 'true',
+  LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE: 'false',
+  LIVE_SHOPPING_AVAILABLE: 'false',
   CONTENT_STORAGE_DIR: e2eContentStorageDir,
-  NODE_ENV: process.env.NODE_ENV ?? 'development',
+  // Feature provider gates are fixed off in browser tests; no cloud service is contacted.
+  CONTENT_OBJECT_STORAGE_AVAILABLE: 'false',
+  STORE_BUSTER_SPONSORED_AVAILABLE: 'false',
+  STORE_EMAIL_DELIVERY_AVAILABLE: 'false',
+  // The API intentionally does not listen when NODE_ENV is "test". Keep the
+  // Playwright runner's test mode from disabling its HTTP webServer process.
+  NODE_ENV: 'development',
   // Keep E2E behavior explicit and safe when no scanner policy is supplied.
   CONTENT_SCAN_REQUIRED: process.env.CONTENT_SCAN_REQUIRED ?? 'true'
 };

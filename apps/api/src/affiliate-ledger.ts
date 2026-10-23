@@ -2,6 +2,7 @@ import { AffiliateStatus, CommissionEntryType, CommissionStatus, AffiliateAdjust
 import { env } from './config.js';
 import { commissionMinor, proportionalCommission } from './growth-domain.js';
 import { prisma } from './security.js';
+import { asStorePlanEntitlements, effectiveStorePlan } from './store-plan-domain.js';
 
 type AdjustmentInput = {
   type: AffiliateAdjustmentType;
@@ -34,7 +35,19 @@ export async function settleAffiliateForPaidOrder(orderId: string) {
     if (!click || click.convertedAt || click.expiresAt <= now || !click.consentGivenAt) return { created: 0 };
     let created = 0;
     for (const sellerOrder of order.sellerOrders) {
+      let storeAffiliateEligible = true;
+      if (sellerOrder.sellerId) {
+        const store = await tx.store.findUnique({ where: { sellerId: sellerOrder.sellerId }, select: { id: true } });
+        if (store) {
+          const participation = await tx.storeAffiliateProgram.findUnique({ where: { storeId: store.id } });
+          if (participation) {
+            const plan = await effectiveStorePlan(tx, store.id, now);
+            storeAffiliateEligible = participation.enabled && asStorePlanEntitlements(plan.version).affiliateToolsEnabled;
+          }
+        }
+      }
       for (const item of sellerOrder.items) {
+        if (!storeAffiliateEligible) continue;
         const eligible = (!click.productId || click.productId === item.productId) && (!order.affiliateClick!.link.sellerId || order.affiliateClick!.link.sellerId === sellerOrder.sellerId);
         if (!eligible) continue;
         const rules = await tx.affiliateCommissionRule.findMany({ where: { currency: order.currency, effectiveFrom: { lte: now }, OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }], AND: [{ OR: [{ productId: item.productId }, ...(item.product.categoryId ? [{ categoryId: item.product.categoryId }] : []), { productId: null, categoryId: null }] }] } });

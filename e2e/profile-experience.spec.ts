@@ -3,8 +3,6 @@ import { expect, test, type Page } from '@playwright/test';
 const password = 'Profile-E2E-Only-Password-42!';
 const validPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAYAAAAMJL+VAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAJUlEQVQ4jWPwKI/6T0vMMGqBx2gQeYymIo/RjFY+WlSUD/LSFAAuzCQu+qkxfwAAAABJRU5ErkJggg==', 'base64');
 const invalidSvg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>window.__unsafe=true</script></svg>');
-const avatarQuarantined = process.env.NODE_ENV === 'production' || !['false', '0', 'no', 'off'].includes((process.env.CONTENT_SCAN_REQUIRED ?? 'true').toLowerCase());
-
 function uniqueEmail(label: string) { return `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@example.test`; }
 
 async function login(page: Page, email: string, localPassword = 'LocalDemoOnly-ChangeMe-123!') {
@@ -28,19 +26,13 @@ async function csrfHeaders(page: Page) {
 async function uploadAvatar(page: Page) {
   await page.goto('/settings#profile');
   await page.locator('input[type="file"]').setInputFiles({ name: 'profile.png', mimeType: 'image/png', buffer: validPng });
-  const response = page.waitForResponse(item => item.url().endsWith('/api/account/avatar') && item.request().method() === 'POST');
+  const response = page.waitForResponse(item => item.url().endsWith('/api/account/avatar/uploads') && item.request().method() === 'POST');
   await page.getByRole('button', { name: 'Upload photo' }).click();
   const result = await response;
   const body = await result.json();
-  if (avatarQuarantined) {
-    expect(result.status(), JSON.stringify(body)).toBe(202);
-    expect(body).toMatchObject({ scanStatus: 'QUARANTINED' });
-    expect(body).not.toHaveProperty('avatarUrl');
-  } else {
-    expect(result.status(), JSON.stringify(body)).toBe(201);
-    expect(body).toMatchObject({ scanStatus: 'APPROVED', avatarUrl: '/api/account/avatar' });
-  }
-  return body.scanStatus as 'APPROVED' | 'QUARANTINED';
+  expect(result.status(), JSON.stringify(body)).toBe(503);
+  expect(body.error).toContain('Managed private media storage is unavailable');
+  return 'UNAVAILABLE' as const;
 }
 
 test('guest sees guest navigation only after the session check, and sign-in fields are empty', async ({ page }) => {
@@ -147,8 +139,7 @@ test('seller dashboard entry is role-aware and admin dashboard stays separate', 
   await adminContext.close();
 });
 
-test('profile name and normalized photo persist after refresh; failed replacement keeps the saved photo', async ({ page }) => {
-  test.skip(avatarQuarantined, 'Required scanning keeps new avatar files quarantined until a scanner approves them.');
+test('profile name persists and unavailable managed avatar storage preserves the fallback', async ({ page }) => {
   const { email } = await register(page);
   await page.goto('/');
   const trigger = page.getByRole('button', { name: 'Avatar Test Member, account menu' });
@@ -158,49 +149,30 @@ test('profile name and normalized photo persist after refresh; failed replacemen
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect(page.getByRole('button', { name: 'Avery Member, account menu' })).toBeVisible();
   await uploadAvatar(page);
-  const avatar = page.locator('.accountTrigger img.avatarImage');
-  await expect(avatar).toBeVisible();
-  const avatarSrc = await avatar.getAttribute('src');
-  expect(avatarSrc).toBe('/api/account/avatar');
-  const savedImage = await page.request.get('/api/account/avatar');
-  expect(savedImage.status()).toBe(200);
-  expect(savedImage.headers()['content-type']).toContain('image/webp');
-  expect(savedImage.headers()['cache-control']).toContain('no-store');
+  await expect(page.getByRole('alert')).toContainText('Managed private media storage is unavailable');
+  await expect(page.locator('.accountTrigger img.avatarImage')).toHaveCount(0);
+  await expect(page.locator('.accountTrigger .avatarFallback')).toHaveText('AM');
   await page.reload();
   await expect(page.getByRole('button', { name: 'Avery Member, account menu' })).toBeVisible();
-  await expect(page.locator('.accountTrigger img.avatarImage')).toBeVisible();
-
-  await page.route('**/api/account/avatar', async route => {
-    if (route.request().method() === 'POST') await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Simulated upload failure.' }) });
-    else await route.continue();
-  });
-  await page.locator('input[type="file"]').setInputFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: validPng });
-  await page.getByRole('button', { name: 'Upload photo' }).click();
-  await expect(page.getByRole('alert')).toContainText('Simulated upload failure.');
-  await expect(page.locator('.accountTrigger img.avatarImage')).toBeVisible();
-  await page.reload();
-  await expect(page.getByRole('button', { name: 'Avery Member, account menu' })).toBeVisible();
-  expect((await page.request.get('/api/account/avatar')).status()).toBe(200);
+  await expect(page.locator('.accountTrigger .avatarFallback')).toHaveText('AM');
+  expect((await page.request.get('/api/account/avatar')).status()).toBe(404);
   expect((await page.request.get('/api/auth/me')).ok()).toBe(true);
   expect(((await (await page.request.get('/api/auth/me')).json()).user).name).toBe('Avery Member');
   expect(email).toContain('@example.test');
 });
 
-test('required scanning keeps uploaded avatars private and preserves the fallback', async ({ page }) => {
-  test.skip(!avatarQuarantined, 'This path is covered when the E2E server requires media scanning.');
-  await register(page, 'Quarantined Avatar Member');
+test('avatar upload clearly reports that managed storage is unavailable without claiming success', async ({ page }) => {
+  await register(page, 'Storage Unavailable Member');
   await page.goto('/settings#profile');
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({ name: 'pending-profile.png', mimeType: 'image/png', buffer: validPng });
-  const uploadResponse = page.waitForResponse(response => response.url().endsWith('/api/account/avatar') && response.request().method() === 'POST');
+  const uploadResponse = page.waitForResponse(response => response.url().endsWith('/api/account/avatar/uploads') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Upload photo' }).click();
   const response = await uploadResponse;
-  expect(response.status()).toBe(202);
-  const result = await response.json() as { scanStatus: string; message: string };
-  expect(result.scanStatus).toBe('QUARANTINED');
-  await expect(page.getByText(result.message, { exact: true })).toBeVisible();
+  expect(response.status()).toBe(503);
+  await expect(page.getByRole('alert')).toContainText('Managed private media storage is unavailable');
   await expect(page.locator('.profileAvatar img')).toHaveCount(0);
-  await expect(page.locator('.accountTrigger .avatarFallback')).toHaveText('QA');
+  await expect(page.locator('.accountTrigger .avatarFallback')).toHaveText('SU');
   expect((await page.request.get('/api/account/avatar')).status()).toBe(404);
   await page.reload();
   await expect(page.locator('.profileAvatar img')).toHaveCount(0);
@@ -209,17 +181,15 @@ test('required scanning keeps uploaded avatars private and preserves the fallbac
 
 test('invalid and unauthorized profile photo uploads are rejected without changing the saved photo', async ({ page, browser }) => {
   const { user } = await register(page, 'Private Avatar Owner');
-  const uploadedStatus = await uploadAvatar(page);
+  await uploadAvatar(page);
   const before = await page.request.get('/api/account/avatar');
-  expect(before.status()).toBe(uploadedStatus === 'APPROVED' ? 200 : 404);
-  const beforeBytes = await before.body();
-  const invalid = await page.request.post('/api/account/avatar', { data: invalidSvg, headers: { ...(await csrfHeaders(page)), 'content-type': 'application/octet-stream' } });
+  expect(before.status()).toBe(404);
+  const invalid = await page.request.post('/api/account/avatar/uploads', { data: { fileName: 'unsafe.svg', contentType: 'image/svg+xml', sizeBytes: invalidSvg.length }, headers: await csrfHeaders(page) });
   expect(invalid.status()).toBe(415);
-  const oversized = await page.request.post('/api/account/avatar', { data: Buffer.alloc(5_000_001), headers: { ...(await csrfHeaders(page)), 'content-type': 'application/octet-stream' } });
+  const oversized = await page.request.post('/api/account/avatar/uploads', { data: { fileName: 'large.png', contentType: 'image/png', sizeBytes: 5_000_001 }, headers: await csrfHeaders(page) });
   expect(oversized.status()).toBe(413);
   const after = await page.request.get('/api/account/avatar');
   expect(after.status()).toBe(before.status());
-  if (uploadedStatus === 'APPROVED') expect(await after.body()).toEqual(beforeBytes);
   expect((await page.request.get('/content-media/not-a-public-avatar')).status()).toBe(404);
 
   const strangerContext = await browser.newContext();
@@ -232,7 +202,7 @@ test('invalid and unauthorized profile photo uploads are rejected without changi
   const guestContext = await browser.newContext();
   const guestPage = await guestContext.newPage();
   expect((await guestPage.request.get('/api/account/avatar')).status()).toBe(401);
-  expect((await guestPage.request.post('/api/account/avatar', { data: validPng, headers: { 'content-type': 'application/octet-stream' } })).status()).toBe(403);
+  expect((await guestPage.request.post('/api/account/avatar/uploads', { data: { fileName: 'profile.png', contentType: 'image/png', sizeBytes: validPng.length } })).status()).toBe(403);
   await guestContext.close();
 });
 

@@ -6,6 +6,7 @@ export const AUTH_CREDENTIAL_LIMIT = 60;
 export const API_REQUEST_LIMIT_WINDOW_MS = 60 * 1000;
 export const API_REQUEST_LIMIT = 300;
 export const E2E_API_REQUEST_LIMIT = 1200;
+export const E2E_AUTH_CREDENTIAL_LIMIT = 300;
 
 type RateLimitOptions = {
   credentialLimit?: number;
@@ -21,7 +22,7 @@ type RateLimitEnvironment = {
   WALLET_FUNDING_DISPOSABLE_DATABASE_ALLOWLIST?: string;
 };
 
-/** Opt into a larger still-bounded API budget only for the isolated E2E server. */
+/** Opt into larger, still-bounded request budgets only for the isolated E2E server. */
 export function resolveApiRateLimitOptions(environment: RateLimitEnvironment): RateLimitOptions {
   if (environment.E2E_API_RATE_LIMIT_OVERRIDE !== 'true') return {};
 
@@ -38,7 +39,10 @@ export function resolveApiRateLimitOptions(environment: RateLimitEnvironment): R
     throw new Error('E2E API rate-limit override requires the validated per-run disposable E2E database');
   }
 
-  return { apiLimit: E2E_API_REQUEST_LIMIT };
+  return {
+    apiLimit: E2E_API_REQUEST_LIMIT,
+    credentialLimit: E2E_AUTH_CREDENTIAL_LIMIT
+  };
 }
 
 /**

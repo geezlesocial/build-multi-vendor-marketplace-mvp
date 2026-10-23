@@ -34,6 +34,40 @@ describe('Store plan entitlements', () => {
     expect(legacyCompatibleEntitlements.vendorLimit).toBe(1);
     expect(legacyCompatibleEntitlements.staffSeatLimit).toBeGreaterThan(1_000_000);
     expect(legacyCompatibleEntitlements.customDomainEligible).toBe(false);
+    expect(legacyCompatibleEntitlements.blogPostLimit).toBeGreaterThan(1_000_000);
+    expect(legacyCompatibleEntitlements.contentPageLimit).toBeGreaterThan(1_000_000);
+    expect(legacyCompatibleEntitlements.mediaStorageLimitBytes).toBeGreaterThan(1_000_000);
+    expect(legacyCompatibleEntitlements.storeBusterEnabled).toBe(false);
+    expect(legacyCompatibleEntitlements.emailMarketingEnabled).toBe(false);
+    expect(legacyCompatibleEntitlements.affiliateToolsEnabled).toBe(false);
+  });
+
+  it('keeps basic blog and page publishing outside paid-only entitlements', () => {
+    const parsed = storePlanEntitlementsSchema.parse({
+      ...legacyCompatibleEntitlements,
+      staffSeatLimit: 100_000,
+      blogPostLimit: 3,
+      contentPageLimit: 2,
+      scheduledPublishingEnabled: false
+    });
+    expect(parsed.blogPostLimit).toBe(3);
+    expect(parsed.contentPageLimit).toBe(2);
+    expect(parsed.scheduledPublishingEnabled).toBe(false);
+  });
+
+  it('requires explicit positive quotas when plan-controlled growth tools are enabled', () => {
+    expect(() => storePlanEntitlementsSchema.parse({ ...legacyCompatibleEntitlements, storeBusterEnabled: true })).toThrow();
+    expect(() => storePlanEntitlementsSchema.parse({ ...legacyCompatibleEntitlements, emailMarketingEnabled: true })).toThrow();
+    expect(storePlanEntitlementsSchema.parse({
+      ...legacyCompatibleEntitlements,
+      staffSeatLimit: 100_000,
+      storeBusterEnabled: true,
+      storeBusterCampaignLimit: 2,
+      storeBusterMonthlyBudgetMinor: 2500,
+      emailMarketingEnabled: true,
+      emailSubscriberLimit: 500,
+      emailMonthlySendLimit: 2000
+    }).storeBusterCampaignLimit).toBe(2);
   });
 
   it('detects the exact quota boundary without off-by-one errors', () => {

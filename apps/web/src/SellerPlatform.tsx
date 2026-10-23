@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { BrandingImageControl } from './BrandingImageControl.js';
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
@@ -8,31 +9,42 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 const slugPreview = (name: string) => name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-type Theme = { themePreset: string; mobileTemplate: string; description: string; primaryColor: string; accentColor: string; font: string; sections: { type: 'featuredProducts'; title: string; productIds: string[] }[]; contactLinks: { label: string; url: string }[]; logoMediaId: string | null; bannerMediaId: string | null };
+type Theme = { themePreset: string; mobileTemplate: string; description: string; primaryColor: string; accentColor: string; font: string; sections: { type: 'featuredProducts'; title: string; productIds: string[] }[]; contactLinks: { label: string; url: string }[]; logoMediaId: string | null; faviconMediaId: string | null; bannerMediaId: string | null };
 type StorePlanEntitlements = { allowedThemes: string[]; mobileTemplates: string[] };
-const emptyTheme: Theme = { themePreset: 'CLASSIC', mobileTemplate: 'RESPONSIVE_STANDARD', description: '', primaryColor: '#1f6f5b', accentColor: '#e7b75a', font: 'system', sections: [], contactLinks: [], logoMediaId: null, bannerMediaId: null };
+const emptyTheme: Theme = { themePreset: 'CLASSIC', mobileTemplate: 'RESPONSIVE_STANDARD', description: '', primaryColor: '#1f6f5b', accentColor: '#e7b75a', font: 'system', sections: [], contactLinks: [], logoMediaId: null, faviconMediaId: null, bannerMediaId: null };
 
 export function SellerPlatform() {
   const [storeName, setStoreName] = useState('');
   const [slug, setSlug] = useState('');
   const [theme, setTheme] = useState<Theme>(emptyTheme);
+  const [publishedTheme, setPublishedTheme] = useState<Theme | null>(null);
+  const [brandingStaff, setBrandingStaff] = useState<{ userId: string; canManageStoreBranding: boolean; user: { name: string | null; email: string } }[]>([]);
   const [methods, setMethods] = useState<{ id: string; type: string; status: string; maskedIdentifier: string | null }[]>([]);
   const [planEntitlements, setPlanEntitlements] = useState<StorePlanEntitlements>({ allowedThemes: ['CLASSIC', 'EDITORIAL', 'BOUTIQUE'], mobileTemplates: ['RESPONSIVE_STANDARD', 'MOBILE_COMPACT', 'MOBILE_EDITORIAL'] });
   const [message, setMessage] = useState('');
+  const [initialLoading, setInitialLoading] = useState(true);
+  const initialLoadStarted = useRef(false);
 
   const load = async () => {
-    const [current, payoutMethods, plan] = await Promise.all([
-      api<{ name: string; slug: string; draft: Theme }>('/api/seller/store-theme'),
+    const [current, payoutMethods, plan, staff] = await Promise.all([
+      api<{ name: string; slug: string; draft: Theme; published: Theme | null }>('/api/seller/store-theme'),
       api<typeof methods>('/api/seller/payout-methods'),
-      api<{ entitlements: StorePlanEntitlements }>('/api/seller/plan')
+      api<{ entitlements: StorePlanEntitlements }>('/api/seller/plan'),
+      api<typeof brandingStaff>('/api/seller/store-branding/staff').catch(() => [])
     ]);
     setStoreName(current.name);
     setSlug(current.slug);
     setTheme({ ...emptyTheme, ...current.draft });
+    setPublishedTheme(current.published ? { ...emptyTheme, ...current.published } : null);
     setMethods(payoutMethods);
     setPlanEntitlements(plan.entitlements);
+    setBrandingStaff(staff);
   };
-  useEffect(() => { load().catch(error => setMessage(error.message)); }, []);
+  useEffect(() => {
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    load().catch(error => setMessage(error.message)).finally(() => setInitialLoading(false));
+  }, []);
 
   const saveTheme = async (publish = false) => {
     try {
@@ -61,21 +73,25 @@ export function SellerPlatform() {
     <p className="eyebrow">Seller tools</p>
     <h1>Store appearance and payout setup</h1>
     {message && <p className="notice" role="status">{message}</p>}
-    <div className="two">
+    {initialLoading ? <p className="empty" role="status">Loading store settings and plan limits…</p> : <div className="two">
       <div className="narrow">
         <h2>Store settings</h2>
-        <p className="muted">Your store URL is generated from the store name. The server checks reserved names and URL collisions before saving.</p>
+        <p className="muted">Your store URL is generated from the store name. The server checks reserved names and URL collisions before saving. New branding uploads go to shared managed storage and remain private until scanning approves them.</p>
         <p><a href="/seller/plan">View plan and usage</a></p>
         <label>Store name<input aria-label="Store name" value={storeName} onChange={event => setStoreName(event.target.value)} maxLength={120} required /></label>
         <p className="storeUrl" aria-live="polite">Public URL: <code>/store/{previewSlug || 'your-store'}</code></p>
         {slug && <p><a href={`/store/${slug}`}>View store</a></p>}
         <label>Store description<textarea value={theme.description} onChange={event => setTheme({ ...theme, description: event.target.value })} /></label>
+        <BrandingImageControl label="Store logo" ratio={3} value={theme.logoMediaId} publishedValue={publishedTheme?.logoMediaId} onChange={logoMediaId => setTheme(current => ({ ...current, logoMediaId }))} listUrl="/api/seller/store-media" uploadUrl="/api/seller/store-media/uploads" previewUrl={id => `/api/seller/store-media/${encodeURIComponent(id)}/preview`} quota />
+        <BrandingImageControl label="Store favicon" ratio={1} value={theme.faviconMediaId} publishedValue={publishedTheme?.faviconMediaId} onChange={faviconMediaId => setTheme(current => ({ ...current, faviconMediaId }))} listUrl="/api/seller/store-media" uploadUrl="/api/seller/store-media/uploads" previewUrl={id => `/api/seller/store-media/${encodeURIComponent(id)}/preview`} quota />
+        <BrandingImageControl label="Store banner" ratio={2.4} value={theme.bannerMediaId} publishedValue={publishedTheme?.bannerMediaId} onChange={bannerMediaId => setTheme(current => ({ ...current, bannerMediaId }))} listUrl="/api/seller/store-media" uploadUrl="/api/seller/store-media/uploads" previewUrl={id => `/api/seller/store-media/${encodeURIComponent(id)}/preview`} quota />
         <label>Theme preset<select aria-label="Theme preset" value={theme.themePreset} onChange={event => setTheme({ ...theme, themePreset: event.target.value })}>{themeOptions.map(option => <option key={option} value={option}>{option.replaceAll('_', ' ').toLowerCase()}</option>)}</select></label>
         <label>Mobile storefront template<select aria-label="Mobile storefront template" value={theme.mobileTemplate} onChange={event => setTheme({ ...theme, mobileTemplate: event.target.value })}>{mobileTemplateOptions.map(option => <option key={option} value={option}>{option.replaceAll('_', ' ').toLowerCase()}</option>)}</select></label>
         <label>Primary color<input value={theme.primaryColor} onChange={event => setTheme({ ...theme, primaryColor: event.target.value })} /></label>
         <label>Accent color<input value={theme.accentColor} onChange={event => setTheme({ ...theme, accentColor: event.target.value })} /></label>
         <label>Font<select value={theme.font} onChange={event => setTheme({ ...theme, font: event.target.value })}><option value="system">System</option><option value="serif">Serif</option><option value="rounded">Rounded</option></select></label>
         <div className="toolbar"><button className="primary" onClick={() => void saveTheme()}>Save draft</button><button onClick={() => void saveTheme(true)}>Publish</button></div>
+        <section className="storeBrandingStaff"><h3>Staff branding access</h3><p className="muted">Only grant this to staff who should edit the public store appearance. POS permission does not automatically grant branding access.</p>{brandingStaff.length ? brandingStaff.map(member => <label className="setting" key={member.userId}><span>{member.user.name || member.user.email}</span><input type="checkbox" aria-label={`Allow ${member.user.name || member.user.email} to manage store branding`} checked={member.canManageStoreBranding} onChange={async event => { try { await api(`/api/seller/store-branding/staff/${encodeURIComponent(member.userId)}`, { method: 'PATCH', body: JSON.stringify({ canManageStoreBranding: event.target.checked }) }); await load(); setMessage('Staff branding permission updated.'); } catch (error) { setMessage((error as Error).message); } }} /></label>) : <p className="empty">No staff accounts are assigned to this Store.</p>}</section>
       </div>
       <div className="narrow">
         <h2>Manual payout method</h2>
@@ -91,6 +107,6 @@ export function SellerPlatform() {
         </form>
         <div className="table">{methods.map(method => <div className="row" key={method.id}><span>{method.type} · {method.maskedIdentifier}</span><span>{method.status}</span></div>)}</div>
       </div>
-    </div>
+    </div>}
   </section>;
 }

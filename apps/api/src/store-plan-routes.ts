@@ -246,10 +246,13 @@ export function registerStorePlanRoutes(app: Express) {
     if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
     const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, include: { store: true, _count: { select: { staff: true, products: true } } } });
     if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
-    const [effective, productCount, storeCount] = await Promise.all([
+    const [effective, productCount, storeCount, blogPostCount, contentPageCount, mediaBytes] = await Promise.all([
       effectiveStorePlan(prisma, seller.store.id),
       prisma.product.count({ where: { sellerId: seller.id, status: { not: 'ARCHIVED' } } }),
-      prisma.store.count({ where: { sellerId: seller.id } })
+      prisma.store.count({ where: { sellerId: seller.id } }),
+      prisma.blogPost.count({ where: { storeId: seller.store.id, status: { not: 'ARCHIVED' } } }),
+      prisma.contentPage.count({ where: { storeId: seller.store.id, status: { not: 'ARCHIVED' } } }),
+      prisma.mediaAsset.aggregate({ where: { storeId: seller.store.id, uploadStatus: { not: 'FAILED' } }, _sum: { sizeBytes: true } })
     ]);
     const entitlements = asStorePlanEntitlements(effective.version);
     res.json({
@@ -278,7 +281,7 @@ export function registerStorePlanRoutes(app: Express) {
         introPriceMinor: null, introDurationDays: null, effectiveFrom: null, effectiveUntil: null
       },
       entitlements,
-      usage: { products: productCount, stores: storeCount, vendors: 1, staffSeats: seller._count.staff },
+      usage: { products: productCount, stores: storeCount, vendors: 1, staffSeats: seller._count.staff, blogPosts: blogPostCount, contentPages: contentPageCount, mediaStorageBytes: mediaBytes._sum.sizeBytes ?? 0 },
       notes: {
         connectors: 'Plan connectors describe eligibility only. Seller payment processing and seller payout integrations are not enabled by this plan.',
         customDomain: 'Eligibility does not provision DNS or TLS.',

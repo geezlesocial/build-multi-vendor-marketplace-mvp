@@ -20,16 +20,29 @@ test('settings cards and controls are balanced on desktop', async ({ page }) => 
   expect(Math.abs(profile!.width - pageContent!.width)).toBeLessThanOrEqual(2);
 
   const cards = page.locator('.settingsGrid > .settingsCard');
-  await expect(cards).toHaveCount(3);
-  const preferences = await cards.nth(0).boundingBox();
-  const security = await cards.nth(1).boundingBox();
-  const notifications = await cards.nth(2).boundingBox();
+  const cardHeadings = ['Language and currency', 'Security', 'Personalization', 'Notifications'];
+  await expect(cards).toHaveCount(cardHeadings.length);
+  for (const [index, heading] of cardHeadings.entries()) {
+    await expect(cards.nth(index).getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  }
+
+  const preferencesCard = cards.filter({ has: page.getByRole('heading', { name: 'Language and currency', exact: true }) });
+  const securityCard = cards.filter({ has: page.getByRole('heading', { name: 'Security', exact: true }) });
+  const personalizationCard = cards.filter({ has: page.getByRole('heading', { name: 'Personalization', exact: true }) });
+  const notificationsCard = cards.filter({ has: page.getByRole('heading', { name: 'Notifications', exact: true }) });
+  const preferences = await preferencesCard.boundingBox();
+  const security = await securityCard.boundingBox();
+  const personalization = await personalizationCard.boundingBox();
+  const notifications = await notificationsCard.boundingBox();
   expect(preferences).not.toBeNull();
   expect(security).not.toBeNull();
+  expect(personalization).not.toBeNull();
   expect(notifications).not.toBeNull();
   expect(Math.abs(preferences!.y - security!.y)).toBeLessThanOrEqual(2);
   expect(preferences!.x + preferences!.width).toBeLessThanOrEqual(security!.x);
-  expect(notifications!.y).toBeGreaterThan(preferences!.y);
+  expect(personalization!.y).toBeGreaterThan(preferences!.y);
+  expect(Math.abs(personalization!.y - notifications!.y)).toBeLessThanOrEqual(2);
+  expect(personalization!.x + personalization!.width).toBeLessThanOrEqual(notifications!.x);
 
   for (const label of ['Language', 'Display currency']) {
     const select = page.getByLabel(label);
@@ -50,7 +63,7 @@ test('settings cards and controls are balanced on desktop', async ({ page }) => 
   expect(passwordButtonBox).not.toBeNull();
   expect(passwordButtonBox!.width).toBeGreaterThanOrEqual(170);
 
-  const toggle = cards.nth(2).locator('.settingRow button');
+  const toggle = notificationsCard.locator('.settingRow button');
   const toggleBox = await toggle.boundingBox();
   const notificationLink = page.getByRole('link', { name: 'Open buyer or seller dashboard' });
   const linkBox = await notificationLink.boundingBox();
@@ -73,11 +86,16 @@ test('settings sections stack without horizontal overflow on mobile', async ({ p
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
 
   const cards = page.locator('.settingsGrid > .settingsCard');
-  await expect(cards).toHaveCount(3);
-  const boxes = await Promise.all([0, 1, 2].map(index => cards.nth(index).boundingBox()));
+  const cardHeadings = ['Language and currency', 'Security', 'Personalization', 'Notifications'];
+  await expect(cards).toHaveCount(cardHeadings.length);
+  for (const [index, heading] of cardHeadings.entries()) {
+    await expect(cards.nth(index).getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  }
+  const boxes = await Promise.all(cardHeadings.map((_, index) => cards.nth(index).boundingBox()));
   expect(boxes.every(Boolean)).toBe(true);
-  expect(boxes[0]!.y).toBeLessThan(boxes[1]!.y);
-  expect(boxes[1]!.y).toBeLessThan(boxes[2]!.y);
+  for (let index = 1; index < boxes.length; index += 1) {
+    expect(boxes[index]!.y).toBeGreaterThan(boxes[index - 1]!.y);
+  }
   for (const box of boxes) {
     expect(Math.abs(box!.x - boxes[0]!.x)).toBeLessThanOrEqual(2);
     expect(box!.width).toBeLessThanOrEqual(dimensions.clientWidth - 32);

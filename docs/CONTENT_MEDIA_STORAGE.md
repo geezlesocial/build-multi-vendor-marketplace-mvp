@@ -1,22 +1,31 @@
-# Content media and storage
+# Content media, private storage, and malware scanning
 
-## Local development
+## Current behavior and local development
 
-The local adapter stores files under `CONTENT_STORAGE_DIR` (default `storage/content`) using generated UUID keys. File bytes are not stored in PostgreSQL. The upload endpoint checks file signatures, not only browser MIME or filename extensions.
+New browser-selected media uses a two-step flow: the authenticated API creates a one-hour upload reservation and a five-minute, object-scoped upload authorization; the browser uploads directly to managed object storage without receiving storage credentials; then the API reads the object back, checks its size and declared metadata against the reservation, detects its content signature, computes a SHA-256 checksum, decodes and normalizes raster images, and records the completed asset in private quarantine. Images, videos, and the supported document/caption types are bounded by the configured per-file limits. Store uploads also reserve against the Store Plan media quota under a Store-row lock.
 
-Defaults:
+The local-development defaults intentionally leave `CONTENT_OBJECT_STORAGE_AVAILABLE=false` and `CONTENT_SCANNER_AVAILABLE=false`. In that state, new uploads fail with a clear unavailable response; the application does not silently fall back to local disk and does not report an upload as successful. Existing legacy local media can still be read through its existing guarded path. `CONTENT_SCAN_REQUIRED` remains for configuration compatibility but cannot bypass the scanner requirement or approve new uploads.
 
-- Images: 5,000,000 bytes
-- Video: 50,000,000 bytes
-- Documents/captions: 10,000,000 bytes
-- Allowed image signatures: PNG, JPEG, GIF, WebP
-- Allowed video signatures: MP4, WebM, Ogg
-- Allowed captions/documents: VTT, PDF, DOCX, XLSX, PPTX, CSV
+Supported upload formats are PNG, JPEG, WebP, and GIF images (avatars are limited to non-animated PNG/JPEG/WebP); MP4, WebM, and Ogg video; and the explicitly allowed VTT, PDF, CSV, DOCX, XLSX, and PPTX files. SVG, HTML, scripts, executables, and unsupported formats are rejected. Images are decoded and normalized server-side. The original approved avatar, branding image, or published Store theme remains in use until a replacement has completed validation and scanning and is explicitly selected/published where applicable.
 
-Executables, HTML, scripts, and active-content formats are rejected. Public delivery requires `MediaScanStatus.APPROVED`; with `CONTENT_SCAN_REQUIRED=true` uploads remain quarantined because no scanner is bundled.
+## Object storage setup
 
-## Production requirements
+`CONTENT_OBJECT_STORAGE_AVAILABLE=true` requires `CONTENT_OBJECT_STORAGE_BUCKET` and `CONTENT_OBJECT_STORAGE_REGION`. `CONTENT_OBJECT_STORAGE_ENDPOINT` is optional for an S3-compatible service. The server uses its AWS SDK credential chain; credentials must be supplied through the deployment identity/secret manager, never through the browser or application tables. Configure a private bucket, least-privilege server access, marketplace-origin CORS for the presigned POST, lifecycle/backup policy, capacity alerts, and an incident/recovery process. The owner pays any storage, egress, CDN, and hosting charges. This implementation does not create or exercise cloud resources.
 
-Local disk is not production storage. Before staging, configure a private object store/CDN adapter with encrypted-at-rest storage, access logging, retention/backup policy, range requests for video, and a malware scanner or approved scanning service. Add only secret names to deployment configuration; do not place keys in the repository or database. The owner pays storage, CDN, scanning, and hosting costs.
+## Malware scanning
 
-Public media should be served from the approved CDN with safe content type and disposition headers. Private, draft, and quarantined media must remain authorized-only and absent from sitemap/indexable HTML. Orphan cleanup must check both structured body references and SEO/featured-image references before deletion.
+The implemented adapter speaks ClamAV `clamd`'s `zINSTREAM` TCP protocol. `CONTENT_SCANNER_AVAILABLE=true` requires `CONTENT_SCANNER_HOST`; `CONTENT_SCANNER_PORT` defaults to `3310`, and `CONTENT_SCANNER_TIMEOUT_MS` defaults to `15000` (bounded to 100–120000 ms). Put `clamd` on a private, trusted network, allow access only from the API service, and monitor scanner health and signature updates. The `clamd` TCP protocol is not encrypted or authenticated, so it must not be exposed to public networks. See the [official ClamAV protocol documentation](https://docs.clamav.net/manual/Usage/ClamdProtocol.html).
+
+Only an explicit clean result changes a completed quarantined asset to `APPROVED`; a malware result changes it to `REJECTED`; missing scanner, malformed response, timeout, and scanner/network errors leave it quarantined with a safe error code. No scanner secrets or raw exception text are stored. Scan attempts use a unique attempt ID, atomic compare-and-set updates, attempt count, timestamps, and an audit event. An in-progress attempt can be reclaimed after the configured stale threshold; late/duplicate results cannot overwrite a newer attempt. Authenticated owners/admins can retry eligible quarantined scans. Test-only fake scanners exist only in test fixtures and cannot approve normal application uploads.
+
+## Privacy and delivery
+
+Public `/content-media/:id` delivery requires a completed, approved asset referenced by published CMS content, published platform/Store branding, or an approved product image. Quarantined, rejected, draft-only, unreferenced, private, or incomplete assets are not publicly delivered. Avatars use the authenticated account endpoint with private/no-store headers. Store media previews require authorized Store access. File responses set a detected content type, `nosniff`, and safe content disposition.
+
+The old raw CMS/avatar upload endpoints return `410`; all new uploads must use the reservation, direct-upload, and finalize flow. Store branding and product images share Store-owned media and its plan quota. Platform CMS and platform branding uploads are platform-scoped; avatars remain user-scoped. Database rows hold metadata and ownership/reference IDs, not file bytes.
+
+## Operations and limitations
+
+The migration adds purpose, scanner attempt state, timestamps, safe error/provider codes, and indexes; it does not rewrite media references or delete files. Reservation expiry is enforced at finalize. Store reservation cleanup is opportunistic during a new reservation; an operator still needs a reviewed, idempotent orphan-retention job for abandoned object uploads and completed unreferenced assets. Do not delete media solely by age: first check database references, including structured CMS blocks, SEO/featured images, platform/store branding, product images, and avatars.
+
+Provider-backed storage and scanner behavior were not exercised as part of local implementation. Until a managed object-storage account, deployment identity, private ClamAV service, scanner monitoring/signature-update policy, bucket CORS/lifecycle/backups, and end-to-end deployment verification are supplied and tested, uploads remain unavailable or quarantined. This does not establish production readiness or legal/security certification.

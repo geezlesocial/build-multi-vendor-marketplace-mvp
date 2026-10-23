@@ -6,6 +6,7 @@ type Store = { id: string; name: string; slug: string; description: string | nul
 type HomeData = { hero: { title: string; description: string }; categories: { id: string; name: string; slug: string; imageUrl: string | null }[]; featuredDeals: Product[]; productCollection: Product[]; featuredStores: Store[] };
 type SearchData = { products: (Product & { type: 'Product' })[]; stores: (Store & { type: 'Store' })[] };
 type MemberData = { orders: { orderNumber: string; status: string }[]; cart: { items: { quantity: number }[] }; favorites: unknown[] };
+type StoreRecommendation = { campaignId: string; impressionToken: string; product: { id: string; slug: string; name: string; description: string; priceMinor: number; currency: string; category: string | null; image: { url: string; alt: string } | null }; store: { id: string; name: string; slug: string }; placement: 'ORGANIC'; reason: string };
 
 const money = (minor: number, currency: string) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(minor / 100);
 
@@ -26,15 +27,28 @@ export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: 
   const [error, setError] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const [memberData, setMemberData] = useState<MemberData | null>(null);
+  const [recommendations, setRecommendations] = useState<StoreRecommendation[]>([]);
+  const [recommendationMessage, setRecommendationMessage] = useState('');
 
   useEffect(() => {
     request<HomeData>('/api/marketplace/home').then(setHome).catch(error => setError(error.message)).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    if (!user || user.role === 'ADMIN') { setMemberData(null); return; }
+    if (!user || user.role === 'ADMIN') { setMemberData(null); setRecommendations([]); setRecommendationMessage(''); return; }
     request<MemberData>('/api/dashboard/buyer').then(setMemberData).catch(() => setMemberData(null));
+    request<{ items: StoreRecommendation[]; message?: string }>('/api/store-buster/recommendations').then(result => { setRecommendations(result.items); setRecommendationMessage(result.message ?? ''); }).catch(() => { setRecommendations([]); setRecommendationMessage('Personalized recommendations are temporarily unavailable.'); });
   }, [user?.id, user?.name, user?.role]);
+
+  const trackRecommendationClick = (campaignId: string, impressionToken: string) => {
+    const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
+    void fetch(`/api/store-buster/campaigns/${encodeURIComponent(campaignId)}/click`, { method: 'POST', credentials: 'include', keepalive: true, headers: { 'Content-Type': 'application/json', ...(csrf ? { 'x-csrf-token': csrf } : {}) }, body: JSON.stringify({ impressionToken }) }).catch(() => undefined);
+  };
+  const recordCategoryInterest = (categoryId: string) => {
+    if (!user || user.role === 'ADMIN') return;
+    const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
+    void fetch('/api/store-buster/signals', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'x-csrf-token': csrf } : {}) }, body: JSON.stringify({ type: 'SEARCH_CATEGORY', categoryId }) }).catch(() => undefined);
+  };
 
   useEffect(() => {
     const value = query.trim();
@@ -72,6 +86,7 @@ export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: 
       <aside className="marketHeroVisual" aria-label="Featured marketplace preview"><div className="marketHeroVisualFrame">{cards[0]?.image ? <img src={cards[0].image.url} alt={cards[0].image.alt} /> : <div className="marketVisualFallback" aria-hidden="true"><span className="visualOrb visualOrbOne" /><span className="visualOrb visualOrbTwo" /><span className="visualShelf" /></div>}<div className="marketHeroVisualCaption"><span>Featured from the catalog</span><strong>{cards[0]?.name ?? 'Thoughtful finds, ready to explore'}</strong><small>{cards[0]?.store?.name ?? 'Approved independent stores'}</small></div></div></aside>
     </div>
     {user && user.role !== 'ADMIN' && <section className="memberHomePanel" aria-label="Your account overview"><div className="sectionHeading"><div><p className="eyebrow">A good place to pick up</p><h2>Your account at a glance</h2></div><a href="/settings#profile">Profile and settings</a></div>{memberData ? <div className="memberHomeStats"><a className="memberStat" href="/dashboard?tab=orders"><span>Recent orders</span><strong>{memberData.orders.length}</strong><small>{memberData.orders[0]?.orderNumber ?? 'Your order history is ready'}</small></a><a className="memberStat" href="/checkout"><span>In your cart</span><strong>{memberData.cart.items.reduce((sum, item) => sum + item.quantity, 0)}</strong><small>Continue to checkout when you’re ready</small></a><a className="memberStat" href="/dashboard?tab=favorites"><span>Saved favorites</span><strong>{memberData.favorites.length}</strong><small>Keep track of things you like</small></a></div> : <p className="muted" role="status">Your account summary is not available right now.</p>}</section>}
+    {user && user.role !== 'ADMIN' && (recommendations.length > 0 || recommendationMessage) && <section className="memberRecommendations" aria-labelledby="recommendations-title"><div className="sectionHeading"><div><p className="eyebrow">Optional personalization</p><h2 id="recommendations-title">Stores and products for you</h2></div><a href="/settings#personalization">Manage personalization</a></div>{recommendationMessage && <p className="muted" role="status">{recommendationMessage}</p>}{recommendations.length > 0 && <div className="grid">{recommendations.map(item => <article className="card productCard" key={`${item.campaignId}-${item.product.id}`}>{item.product.image ? <img src={item.product.image.url} alt={item.product.image.alt} /> : <div className="productVisual productVisualFallback" aria-hidden="true"><span className="productVisualLabel">{item.product.category ?? 'Recommended'}</span></div>}<div className="cardBody"><p className="eyebrow">Organic recommendation · {item.store.name}</p><h3><a href={`/products/${item.product.id}`} onClick={() => trackRecommendationClick(item.campaignId, item.impressionToken)}>{item.product.name}</a></h3><p>{item.reason}</p><div className="cardBottom"><strong>{money(item.product.priceMinor, item.product.currency)}</strong><a className="heroActionSecondary" href={`/store/${item.store.slug}`} onClick={() => trackRecommendationClick(item.campaignId, item.impressionToken)}>Visit store</a></div></div></article>)}</div>}</section>}
     <div className="marketSearchWrap">
       <label className="search marketSearch"><span>Search products and stores</span><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={handleKeyDown} placeholder="Try “canvas”, “home”, or a store name" aria-controls="market-search-results" aria-expanded={results.length > 0} aria-autocomplete="list" /></label>
       {searching && <span className="muted searchStatus">Searching catalog…</span>}
@@ -79,7 +94,7 @@ export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: 
       {query.trim().length >= 2 && !searching && !results.length && <p className="empty searchEmpty">No public products or stores matched that search.</p>}
       {error && <p className="notice" role="alert">{error}</p>}
     </div>
-    <section id="categories"><div className="sectionHeading"><div><p className="eyebrow">Browse by interest</p><h2>Start with a category</h2></div><span className="muted">Public, approved catalog</span></div><div className="categoryGrid">{home.categories.map(category => <button key={category.id} className="categoryChip" onClick={() => setQuery(category.name)}>{category.name}</button>)}</div></section>
+    <section id="categories"><div className="sectionHeading"><div><p className="eyebrow">Browse by interest</p><h2>Start with a category</h2></div><span className="muted">Public, approved catalog</span></div><div className="categoryGrid">{home.categories.map(category => <button key={category.id} className="categoryChip" onClick={() => { setQuery(category.name); recordCategoryInterest(category.id); }}>{category.name}</button>)}</div></section>
     <section id="featured"><div className="sectionHeading"><div><p className="eyebrow">Featured collection</p><h2>Good finds from active stores</h2></div><span className="muted">{user ? 'Add to your cart when signed in' : 'Sign in to add items'}</span></div><div className="grid">{cards.map(product => <article className="card productCard" key={product.id}>{product.image ? <img src={product.image.url} alt={product.image.alt} /> : <div className="productVisual productVisualFallback" aria-hidden="true"><span className="visualOrb visualOrbOne" /><span className="visualOrb visualOrbTwo" /><span className="visualShelf" /><span className="productVisualLabel">{product.category?.name ?? 'Featured'}</span></div>}<div className="cardBody"><p className="eyebrow">Product · {product.store?.name ?? 'Platform store'}</p><h3>{product.name}</h3><p>{product.description}</p><div className="cardBottom"><strong>{money(product.priceMinor, product.currency)}</strong><button onClick={() => user ? onAdd(product.id) : onSignIn()} disabled={product.availableStock < 1}>{product.availableStock > 0 ? 'Add to cart' : 'Out of stock'}</button></div><small>{product.availableStock} available</small></div></article>)}</div>{!cards.length && <div className="empty">No approved products are currently available.</div>}</section>
     <section id="stores"><div className="sectionHeading"><div><p className="eyebrow">Meet the stores</p><h2>Independent sellers, clearly labeled</h2></div></div><div className="storeGrid">{home.featuredStores.map(store => <a className="storeCard" key={store.id} href={`/store/${store.slug}`}><span className="storeLogo" aria-hidden="true"><span className="storeLogoMark" /></span><span><strong>{store.name}</strong><small>{store.description || 'View approved products'}</small></span><span aria-hidden="true">→</span></a>)}</div>{!home.featuredStores.length && <div className="empty">Approved stores will appear here.</div>}</section>
   </section>;

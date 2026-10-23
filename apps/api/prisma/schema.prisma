@@ -124,6 +124,21 @@ enum PaymentMethod {
   POS
 }
 
+enum IntegrationProvider {
+  STRIPE
+  PAYPAL
+}
+
+enum IntegrationContext {
+  MARKETPLACE_CHECKOUT
+  WALLET_FUNDING
+}
+
+enum IntegrationEnvironment {
+  SANDBOX
+  LIVE
+}
+
 enum PaymentStatus {
   PENDING
   PAID
@@ -192,6 +207,62 @@ enum MediaScanStatus {
   QUARANTINED
   APPROVED
   REJECTED
+}
+
+enum MediaPurpose {
+  GENERAL
+  AVATAR
+  PLATFORM_CONTENT
+  PLATFORM_BRANDING
+  STORE_MEDIA
+}
+
+enum MediaUploadStatus {
+  PENDING
+  VERIFYING
+  COMPLETE
+  FAILED
+}
+
+enum MediaStorageProvider {
+  LOCAL
+  OBJECT
+}
+
+enum StoreInterestSignalType {
+  PRODUCT_VIEW
+  SEARCH_CATEGORY
+  FAVORITE
+}
+
+enum StoreBusterCampaignStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  PAUSED
+  ENDED
+}
+
+enum StoreBusterCampaignGoal {
+  DISCOVERY
+  PRODUCT_VIEWS
+  STORE_VISITS
+}
+
+enum StoreEmailSubscriberStatus {
+  PENDING_CONFIRMATION
+  SUBSCRIBED
+  UNSUBSCRIBED
+  SUPPRESSED
+  BOUNCED
+}
+
+enum StoreEmailCampaignStatus {
+  DRAFT
+  QUEUED
+  SENT
+  CANCELLED
 }
 
 enum AffiliateStatus {
@@ -462,10 +533,15 @@ model User {
   walletWithdrawalRequests WalletWithdrawalRequest[]
   clubCoinEntries ClubCoinEntry[]
   clubCoinRedemptions ClubCoinRedemption[]
+  storeInterestSignals StoreInterestSignal[]
+  reviewedStoreBusterCampaigns StoreBusterCampaign[] @relation("StoreBusterCampaignReviewer")
+  storeBusterSettingsUpdates StoreBusterSettings[]
   clubCoinRulesCreated ClubCoinRule[] @relation("ClubCoinRuleCreator")
   storePlanVersionsCreated StorePlanVersion[] @relation("StorePlanVersionCreator")
   storePlanAssignmentsMade StorePlanAssignment[] @relation("StorePlanAssignmentAdmin")
   storePlanSubscriptionsRequested StoreSubscription[] @relation("StoreSubscriptionRequester")
+  providerConfigurationsCreated ProviderConfiguration[] @relation("ProviderConfigurationCreator")
+  providerConfigurationsUpdated ProviderConfiguration[] @relation("ProviderConfigurationUpdater")
 }
 
 model SavedAddress {
@@ -490,6 +566,8 @@ model UserPreference {
   userId          String   @unique
   language        String   @default("en")
   displayCurrency String   @default("USD")
+  personalizationEnabled Boolean @default(false)
+  personalizationConsentAt DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -547,15 +625,23 @@ model Store {
   themeRevisions StoreThemeRevision[]
   planAssignments StorePlanAssignment[]
   subscriptions   StoreSubscription[]
+  blogPosts       BlogPost[]
+  contentPages    ContentPage[]
+  mediaAssets     MediaAsset[]
+  storeBusterCampaigns StoreBusterCampaign[]
+  emailSubscribers StoreEmailSubscriber[]
+  emailCampaigns StoreEmailCampaign[]
+  affiliateProgram StoreAffiliateProgram?
 }
 
 model SellerStaff {
-  id       String @id @default(cuid())
-  sellerId String
-  userId   String
-  canPos   Boolean @default(true)
-  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
-  user     User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  id                     String  @id @default(cuid())
+  sellerId               String
+  userId                 String
+  canPos                 Boolean @default(true)
+  canManageStoreBranding Boolean @default(false)
+  seller                 Seller  @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  user                   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
   @@unique([sellerId, userId])
 }
 
@@ -572,6 +658,7 @@ model Category {
   children Category[] @relation("CategoryTree")
   products Product[]
   affiliateCommissionRules AffiliateCommissionRule[]
+  interestSignals StoreInterestSignal[]
   @@index([parentId, status, displayOrder])
 }
 
@@ -620,6 +707,8 @@ model Product {
   affiliateLinks AffiliateLink[]
   affiliateClicks AffiliateClick[]
   affiliateCommissionRules AffiliateCommissionRule[]
+  interestSignals StoreInterestSignal[]
+  storeBusterCampaigns StoreBusterCampaignProduct[]
   campaignProducts MarketingCampaignProduct[]
   conversationProducts Conversation[]
   @@index([status, categoryId])
@@ -629,11 +718,14 @@ model Product {
 }
 
 model ProductImage {
-  id        String @id @default(cuid())
-  productId String
-  url       String
-  alt       String
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id            String @id @default(cuid())
+  productId     String
+  mediaAssetId  String?
+  url           String
+  alt           String
+  product       Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  mediaAsset    MediaAsset? @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+  @@index([mediaAssetId])
 }
 
 model Inventory {
@@ -884,6 +976,38 @@ model PaymentMethodSettings {
   updatedAt DateTime @updatedAt
 }
 
+model ProviderConfiguration {
+  id             String                   @id @default(cuid())
+  provider       IntegrationProvider
+  context        IntegrationContext
+  environment    IntegrationEnvironment
+  name           String
+  enabled        Boolean                  @default(false)
+  archivedAt     DateTime?
+  lastCheckedAt  DateTime?
+  createdById    String
+  updatedById    String
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  createdBy      User                     @relation("ProviderConfigurationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy      User                     @relation("ProviderConfigurationUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
+  credentials    ProviderCredentialReference[]
+  @@index([provider, context, environment, archivedAt])
+  @@index([context, environment, enabled, archivedAt])
+}
+
+model ProviderCredentialReference {
+  id                String              @id @default(cuid())
+  configurationId   String
+  credentialKey     String
+  reference         String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  configuration     ProviderConfiguration @relation(fields: [configurationId], references: [id], onDelete: Restrict)
+  @@unique([configurationId, credentialKey])
+  @@index([configurationId])
+}
+
 model POSSession {
   id        String @id @default(cuid())
   sellerId  String
@@ -987,6 +1111,18 @@ model StorePlanVersion {
   customDomainEligible  Boolean                   @default(false)
   paymentConnectors     StorePaymentConnector[]   @default([])
   mobileTemplates       MobileStorefrontTemplate[] @default([RESPONSIVE_STANDARD])
+  blogPostLimit         Int                       @default(2147483647)
+  contentPageLimit      Int                       @default(2147483647)
+  mediaStorageLimitBytes Int                      @default(2147483647)
+  scheduledPublishingEnabled Boolean               @default(true)
+  advancedContentSeoEnabled Boolean                @default(true)
+  storeBusterEnabled    Boolean                   @default(false)
+  storeBusterCampaignLimit Int                    @default(0)
+  storeBusterMonthlyBudgetMinor Int               @default(0)
+  emailMarketingEnabled Boolean                   @default(false)
+  emailSubscriberLimit  Int                       @default(0)
+  emailMonthlySendLimit Int                       @default(0)
+  affiliateToolsEnabled Boolean                   @default(false)
   createdById           String?
   createdAt             DateTime                  @default(now())
   activatedAt           DateTime?
@@ -1455,6 +1591,7 @@ model BlogTag {
 
 model BlogPost {
   id             String             @id @default(cuid())
+  storeId        String?
   slug           String             @unique
   title          String
   excerpt        String?
@@ -1476,6 +1613,7 @@ model BlogPost {
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   category       BlogCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  store          Store?             @relation(fields: [storeId], references: [id], onDelete: Restrict)
   author         User               @relation("BlogPostAuthors", fields: [authorId], references: [id], onDelete: Restrict)
   editor         User               @relation("BlogPostEditors", fields: [editorId], references: [id], onDelete: Restrict)
   featuredImage  MediaAsset?        @relation("BlogFeaturedImage", fields: [featuredImageId], references: [id], onDelete: SetNull)
@@ -1485,6 +1623,7 @@ model BlogPost {
   previewTokens  ContentPreviewToken[]
   @@index([status, publishedAt])
   @@index([categoryId, status])
+  @@index([storeId, status, updatedAt])
 }
 
 model BlogPostTag {
@@ -1515,6 +1654,7 @@ model BlogPostRevision {
 
 model ContentPage {
   id             String             @id @default(cuid())
+  storeId        String?
   slug           String             @unique
   title          String
   bodyJson       Json
@@ -1539,11 +1679,13 @@ model ContentPage {
   parent         ContentPage?      @relation("PageTree", fields: [parentId], references: [id], onDelete: SetNull)
   children       ContentPage[]    @relation("PageTree")
   editor         User             @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  store          Store?            @relation(fields: [storeId], references: [id], onDelete: Restrict)
   ogImage        MediaAsset?      @relation("PageOgImage", fields: [ogImageId], references: [id], onDelete: SetNull)
   revisions      ContentPageRevision[]
   previewTokens  ContentPreviewToken[]
   @@index([status, publishedAt])
   @@index([parentId, navPlacement, navOrder])
+  @@index([storeId, status, updatedAt])
 }
 
 model ContentPageRevision {
@@ -1576,19 +1718,158 @@ model MediaAsset {
   durationMs    Int?
   checksum      String
   uploaderId    String
+  storeId       String?
+  purpose       MediaPurpose     @default(GENERAL)
+  uploadStatus  MediaUploadStatus @default(COMPLETE)
+  storageProvider MediaStorageProvider @default(LOCAL)
   altText       String?
   caption       String?
   scanStatus    MediaScanStatus @default(QUARANTINED)
+  scanAttemptCount Int            @default(0)
+  scanAttemptId String?           @unique
+  scanStartedAt DateTime?
+  scanCompletedAt DateTime?
+  scanErrorCode String?           @db.VarChar(64)
+  scannerProvider String?         @db.VarChar(32)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   uploader      User            @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+  store         Store?          @relation(fields: [storeId], references: [id], onDelete: Restrict)
   avatarUsers   User[]          @relation("UserAvatar")
   featuredPosts BlogPost[]      @relation("BlogFeaturedImage")
   blogOgPosts   BlogPost[]      @relation("BlogOgImage")
   pageOgPages   ContentPage[]   @relation("PageOgImage")
   storeLogos    Store[]         @relation("StoreLogo")
   storeBanners  Store[]         @relation("StoreBanner")
+  productImages ProductImage[]
   @@index([scanStatus, kind, createdAt])
+  @@index([storeId, uploadStatus, createdAt])
+}
+
+model StoreInterestSignal {
+  id         String                  @id @default(cuid())
+  userId     String
+  productId  String?
+  categoryId String?
+  type       StoreInterestSignalType
+  createdAt  DateTime                @default(now())
+  user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product    Product?                @relation(fields: [productId], references: [id], onDelete: SetNull)
+  category   Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  @@index([userId, createdAt])
+  @@index([userId, categoryId, createdAt])
+  @@index([userId, productId, createdAt])
+}
+
+model StoreBusterSettings {
+  id                     String   @id @default("default")
+  enabled                Boolean  @default(false)
+  sponsoredEnabled       Boolean  @default(false)
+  moderationRequired     Boolean  @default(true)
+  maxMonthlyBudgetMinor  Int      @default(0)
+  maxCampaignsPerStore   Int      @default(0)
+  pricePerClickMinor     Int      @default(0)
+  updatedById            String?
+  updatedAt              DateTime @updatedAt
+  updatedBy              User?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model StoreBusterCampaign {
+  id                    String                    @id @default(cuid())
+  storeId               String
+  name                  String
+  goal                  StoreBusterCampaignGoal
+  status                StoreBusterCampaignStatus @default(DRAFT)
+  sponsored             Boolean                   @default(false)
+  monthlyBudgetMinor    Int                       @default(0)
+  audienceCategoryIds   String[]                  @default([])
+  moderationReason      String?
+  reviewedById          String?
+  reviewedAt            DateTime?
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  store                 Store                     @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  reviewer              User?                     @relation("StoreBusterCampaignReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  products              StoreBusterCampaignProduct[]
+  metrics               StoreBusterDailyMetric[]
+  impressions           StoreBusterImpression[]
+  @@index([storeId, status, updatedAt])
+  @@index([status, sponsored, updatedAt])
+}
+
+model StoreBusterCampaignProduct {
+  campaignId String
+  productId  String
+  campaign   StoreBusterCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  product    Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  @@id([campaignId, productId])
+  @@index([productId])
+}
+
+model StoreBusterDailyMetric {
+  id          String   @id @default(cuid())
+  campaignId  String
+  day         DateTime @db.Date
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  createdAt   DateTime @default(now())
+  campaign    StoreBusterCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  @@unique([campaignId, day])
+  @@index([day])
+}
+
+model StoreBusterImpression {
+  id         String   @id @default(cuid())
+  campaignId String
+  tokenHash  String   @unique
+  day        DateTime @db.Date
+  expiresAt  DateTime
+  clickedAt  DateTime?
+  createdAt  DateTime @default(now())
+  campaign   StoreBusterCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  @@index([campaignId, day])
+  @@index([expiresAt])
+}
+
+model StoreAffiliateProgram {
+  id        String   @id @default(cuid())
+  storeId   String   @unique
+  enabled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Restrict)
+}
+
+model StoreEmailSubscriber {
+  id                       String                     @id @default(cuid())
+  storeId                  String
+  email                    String
+  status                   StoreEmailSubscriberStatus @default(PENDING_CONFIRMATION)
+  consentRecordedAt        DateTime?
+  consentSource            String?
+  confirmationTokenHash    String?                    @unique
+  unsubscribeTokenHash     String                     @unique
+  suppressedAt             DateTime?
+  suppressionReason        String?
+  bouncedAt                DateTime?
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
+  store                    Store                      @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  @@unique([storeId, email])
+  @@index([storeId, status, createdAt])
+}
+
+model StoreEmailCampaign {
+  id          String   @id @default(cuid())
+  storeId     String
+  name        String
+  subject     String
+  contentJson Json
+  status      StoreEmailCampaignStatus @default(DRAFT)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  @@index([storeId, status, updatedAt])
 }
 
 model SlugRedirect {
