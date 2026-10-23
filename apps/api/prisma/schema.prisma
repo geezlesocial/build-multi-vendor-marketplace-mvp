@@ -124,6 +124,12 @@ enum PaymentMethod {
   POS
 }
 
+enum SellerShippingDiscountType {
+  FREE
+  FIXED
+  PERCENTAGE
+}
+
 enum IntegrationProvider {
   STRIPE
   PAYPAL
@@ -604,6 +610,7 @@ model Seller {
   payoutMethods SellerPayoutMethod[]
   payoutLedgerEntries SellerPayoutLedgerEntry[]
   payouts SellerPayout[]
+  shippingServices SellerShippingService[]
 }
 
 model Store {
@@ -640,6 +647,7 @@ model SellerStaff {
   userId                 String
   canPos                 Boolean @default(true)
   canManageStoreBranding Boolean @default(false)
+  canManageShipping      Boolean @default(false)
   seller                 Seller  @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   user                   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
   @@unique([sellerId, userId])
@@ -711,6 +719,7 @@ model Product {
   storeBusterCampaigns StoreBusterCampaignProduct[]
   campaignProducts MarketingCampaignProduct[]
   conversationProducts Conversation[]
+  shippingDiscountProducts SellerShippingDiscountProduct[]
   @@index([status, categoryId])
   @@index([sellerId, status])
   @@index([brandId, status])
@@ -802,6 +811,7 @@ model SellerOrder {
   sellerId   String?
   status     OrderStatus @default(PENDING)
   totalMinor Int
+  shippingSnapshotJson Json?
   parent     ParentOrder @relation(fields: [parentId], references: [id], onDelete: Restrict)
   seller     Seller? @relation(fields: [sellerId], references: [id], onDelete: SetNull)
   items      OrderItem[]
@@ -867,6 +877,7 @@ model ProcessedWebhookEvent {
 model MarketplaceSettings {
   id               String  @id @default("default")
   multiVendorEnabled Boolean @default(true)
+  sellerShippingEnabled Boolean @default(true)
   liveShoppingEnabled Boolean @default(false)
   affiliateEnabled Boolean @default(false)
   affiliateFundingConfigured Boolean @default(false)
@@ -900,6 +911,69 @@ model MarketplaceSettings {
   clubCoinName String @default("Club Coins")
   clubCoinIconUrl String?
   updatedAt         DateTime @updatedAt
+}
+
+model SellerShippingService {
+  id                String   @id @default(cuid())
+  sellerId          String
+  name              String   @db.VarChar(120)
+  enabled           Boolean  @default(true)
+  feeMinor          Int
+  currency          String   @default("USD") @db.VarChar(3)
+  estimatedMinDays  Int?
+  estimatedMaxDays  Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  seller            Seller   @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  zones             SellerShippingZone[]
+  discounts         SellerShippingDiscount[]
+
+  @@index([sellerId, enabled])
+}
+
+model SellerShippingZone {
+  id          String   @id @default(cuid())
+  serviceId   String
+  countryCode String   @db.VarChar(2)
+  regionKey   String   @default("") @db.VarChar(100)
+  regionLabel String?  @db.VarChar(100)
+  cityKey     String   @default("") @db.VarChar(100)
+  cityLabel   String?  @db.VarChar(100)
+  service     SellerShippingService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, countryCode, regionKey, cityKey])
+  @@index([countryCode, regionKey, cityKey])
+}
+
+model SellerShippingDiscount {
+  id                  String   @id @default(cuid())
+  serviceId           String
+  name                String   @db.VarChar(120)
+  type                SellerShippingDiscountType
+  amountMinor         Int?
+  basisPoints         Int?
+  priority            Int      @default(0)
+  startsAt            DateTime?
+  endsAt              DateTime?
+  minimumQuantity     Int?
+  minimumSubtotalMinor Int?
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  service             SellerShippingService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  products            SellerShippingDiscountProduct[]
+
+  @@index([serviceId, enabled, priority])
+}
+
+model SellerShippingDiscountProduct {
+  discountId String
+  productId  String
+  discount   SellerShippingDiscount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  product    Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@id([discountId, productId])
+  @@index([productId])
 }
 
 model LiveSession {
