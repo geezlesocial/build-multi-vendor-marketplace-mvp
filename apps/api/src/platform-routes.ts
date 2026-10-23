@@ -120,7 +120,7 @@ export function registerPlatformRoutes(app: Express) {
     const data = settingUpdateData(input);
     if (input.sellerPayoutsEnabled && !input.payoutFundingConfigured && !old.payoutFundingConfigured) throw fail(409, 'Configure the seller payout funding policy before enabling payouts');
     const updated = await prisma.marketplaceSettings.update({ where: { id: 'default' }, data });
-    await audit(actor.id, 'PLATFORM_SETTINGS_CHANGED', 'MarketplaceSettings', 'default', { old: { sellerApprovalPolicy: old.sellerApprovalPolicy, productApprovalPolicy: old.productApprovalPolicy, sellerPayoutsEnabled: old.sellerPayoutsEnabled, payoutFundingConfigured: old.payoutFundingConfigured, payoutHoldDays: old.payoutHoldDays, payoutMinimumMinor: old.payoutMinimumMinor }, new: data, reason: input.reason });
+    await audit(actor.id, 'PLATFORM_SETTINGS_CHANGED', 'MarketplaceSettings', 'default', { old: { sellerShippingEnabled: old.sellerShippingEnabled, sellerApprovalPolicy: old.sellerApprovalPolicy, productApprovalPolicy: old.productApprovalPolicy, sellerPayoutsEnabled: old.sellerPayoutsEnabled, payoutFundingConfigured: old.payoutFundingConfigured, payoutHoldDays: old.payoutHoldDays, payoutMinimumMinor: old.payoutMinimumMinor }, new: data, reason: input.reason });
     res.json(updated);
   }));
 
@@ -165,22 +165,23 @@ export function registerPlatformRoutes(app: Express) {
     if (!actor.sellerId) throw fail(403, 'Seller scope required');
     const seller = await prisma.seller.findFirst({ where: { id: actor.sellerId, userId: actor.id }, select: { id: true } });
     if (!seller) throw fail(403, 'Only the Store owner can manage branding permissions.');
-    res.json(await prisma.sellerStaff.findMany({ where: { sellerId: seller.id }, orderBy: { id: 'asc' }, select: { id: true, userId: true, canManageStoreBranding: true, user: { select: { name: true, email: true } } } }));
+    res.json(await prisma.sellerStaff.findMany({ where: { sellerId: seller.id }, orderBy: { id: 'asc' }, select: { id: true, userId: true, canManageStoreBranding: true, canManageShipping: true, user: { select: { name: true, email: true } } } }));
   }));
   app.patch('/api/seller/store-branding/staff/:userId', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
     const actor = user(res);
     if (!actor.sellerId) throw fail(403, 'Seller scope required');
     const seller = await prisma.seller.findFirst({ where: { id: actor.sellerId, userId: actor.id }, select: { id: true } });
     if (!seller) throw fail(403, 'Only the Store owner can manage branding permissions.');
-    const input = z.object({ canManageStoreBranding: z.boolean() }).strict().parse(req.body);
+    const input = z.object({ canManageStoreBranding: z.boolean().optional(), canManageShipping: z.boolean().optional() }).strict().refine(value => value.canManageStoreBranding !== undefined || value.canManageShipping !== undefined).parse(req.body);
     const membership = await prisma.sellerStaff.findFirst({ where: { sellerId: seller.id, userId: param(req.params.userId) } });
     if (!membership) return res.status(404).json({ error: 'Staff member not found for this Store.' });
     const updated = await prisma.$transaction(async tx => {
       const staff = await tx.sellerStaff.update({ where: { id: membership.id }, data: input });
-      await tx.auditLog.create({ data: { actorId: actor.id, action: input.canManageStoreBranding ? 'STORE_BRANDING_STAFF_AUTHORIZED' : 'STORE_BRANDING_STAFF_REVOKED', entity: 'SellerStaff', entityId: staff.id, metadata: { sellerId: seller.id } } });
+      if (input.canManageStoreBranding !== undefined) await tx.auditLog.create({ data: { actorId: actor.id, action: input.canManageStoreBranding ? 'STORE_BRANDING_STAFF_AUTHORIZED' : 'STORE_BRANDING_STAFF_REVOKED', entity: 'SellerStaff', entityId: staff.id, metadata: { sellerId: seller.id, permission: 'canManageStoreBranding' } } });
+      if (input.canManageShipping !== undefined) await tx.auditLog.create({ data: { actorId: actor.id, action: input.canManageShipping ? 'SELLER_SHIPPING_STAFF_AUTHORIZED' : 'SELLER_SHIPPING_STAFF_REVOKED', entity: 'SellerStaff', entityId: staff.id, metadata: { sellerId: seller.id, permission: 'canManageShipping' } } });
       return staff;
     });
-    res.json({ userId: updated.userId, canManageStoreBranding: updated.canManageStoreBranding });
+    res.json({ userId: updated.userId, canManageStoreBranding: updated.canManageStoreBranding, canManageShipping: updated.canManageShipping });
   }));
   app.get('/api/seller/store-theme', requireAuth, requireRole(...storeBrandingRoles), run(async (_req, res) => { const actor = user(res); if (!actor.sellerId) throw fail(403, 'Seller scope required'); const store = await authorizedBrandingStore(actor); if (!store) throw fail(403, 'Approved Store owner or authorized branding staff required'); res.json({ storeId: store.id, name: store.name, slug: store.slug, publicPath: `/store/${store.slug}`, draft: store.themeDraftJson ?? store.themePublishedJson ?? storeThemeSchema.parse({}), published: store.themePublishedJson, publishedAt: store.themePublishedAt }); }));
   app.put('/api/seller/store-theme', requireAuth, requireRole(...storeBrandingRoles), run(async (req, res) => {

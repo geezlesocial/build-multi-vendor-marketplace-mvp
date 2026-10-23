@@ -26,11 +26,13 @@ import { registerStoreMediaRoutes } from './store-media-routes.js';
 import { registerBrandingMediaRoutes } from './branding-media-routes.js';
 import { registerStoreGrowthRoutes } from './store-growth-routes.js';
 import { registerProductMediaRoutes } from './product-media-routes.js';
+import { registerShippingRoutes } from './shipping-routes.js';
 import { livePaymentActivationBlock } from './provider-activation.js';
 import { asStorePlanEntitlements, effectiveStorePlan, isAtLimit } from './store-plan-domain.js';
 import { reverseAffiliateForOrder, settleAffiliateForPaidOrder } from './affiliate-ledger.js';
 import { referralTokenHash, verifySignedReferralToken } from './growth-domain.js';
 import { createApiRateLimiters, resolveApiRateLimitOptions } from './api-rate-limits.js';
+import { assertShippingSelectionsMatch, buildSellerShippingQuote, verifyCheckoutShippingQuote, type ShippingCartRecord } from './shipping-routes.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -68,6 +70,7 @@ registerStoreMediaRoutes(app);
 registerBrandingMediaRoutes(app);
 registerStoreGrowthRoutes(app);
 registerProductMediaRoutes(app);
+registerShippingRoutes(app);
 if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => console.error(error instanceof Error ? error.message : 'Content scheduler failed')), 60_000);
 
 const asyncRoute = (handler: express.RequestHandler): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -265,8 +268,7 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   if (liveActivationBlock) return res.status(503).json(liveActivationBlock);
   const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { inventory: true, seller: true } } } } } });
   if (!cart?.items.length) return res.status(400).json({ error: 'Cart is empty' });
-  const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
-  if (!settings?.multiVendorEnabled && cart.items.some(i => i.product.sellerId)) return res.status(409).json({ error: 'Seller products are unavailable while multi-vendor mode is disabled' });
+  const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { affiliateEnabled: true, affiliateAttributionRule: true } });
   const affiliateToken = input.affiliateToken ?? req.cookies?.affiliate_attribution as string | undefined;
   if (affiliateToken && !settings?.affiliateEnabled) return res.status(409).json({ error: 'Affiliate attribution is disabled' });
   const signed = affiliateToken ? verifySignedReferralToken(affiliateToken, env.AFFILIATE_SIGNING_SECRET ?? env.PASSWORD_PEPPER) : false;
@@ -279,21 +281,82 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   if (affiliateClick && affiliateClick.affiliate.userId === user.id) return res.status(409).json({ error: 'Self-referrals are not eligible' });
   if (affiliateClick?.productId && !cart.items.some(item => item.productId === affiliateClick.productId)) return res.status(409).json({ error: 'The referred product must be in the order' });
   if (affiliateClick?.link.sellerId && !cart.items.some(item => item.product.sellerId === affiliateClick.link.sellerId)) return res.status(409).json({ error: 'The referred store must be in the order' });
-  const totalMinor = cart.items.reduce((sum, item) => sum + (item.variant?.priceMinor ?? item.product.priceMinor) * item.quantity, 0);
-  if (method === PaymentMethod.COD && settings?.codMaxMinor && totalMinor > settings.codMaxMinor) return res.status(409).json({ error: 'Order is above the configured COD limit' });
   const grouped = new Map<string, typeof cart.items>();
   for (const item of cart.items) { if ((item.variant?.stock ?? item.product.inventory?.quantity ?? 0) < item.quantity) return res.status(409).json({ error: `Insufficient stock for ${item.product.name}` }); const key = item.product.sellerId ?? 'platform'; grouped.set(key, [...(grouped.get(key) ?? []), item]); }
-  const order = await prisma.$transaction(async tx => {
-    for (const item of cart.items) { const updated = item.variant ? await tx.productVariant.updateMany({ where: { id: item.variant.id, stock: { gte: item.quantity } }, data: { stock: { decrement: item.quantity } } }) : await tx.inventory.updateMany({ where: { productId: item.productId, quantity: { gte: item.quantity } }, data: { quantity: { decrement: item.quantity } } }); if (updated.count !== 1) throw new Error(`Stock changed for ${item.product.name}`); }
-    const created = await tx.parentOrder.create({ data: { orderNumber: orderNumber(), buyerId: user.id, affiliateClickId: affiliateClick?.id, buyerEmail: input.buyerEmail, buyerName: input.buyerName, addressJson: input.address, totalMinor, currency: env.CURRENCY, sellerOrders: { create: [...grouped.entries()].map(([sellerId, items]) => ({ sellerId: sellerId === 'platform' ? null : sellerId, totalMinor: items.reduce((s, i) => s + (i.variant?.priceMinor ?? i.product.priceMinor) * i.quantity, 0), items: { create: items.map(i => ({ productId: i.productId, variantId: i.variant?.id, variantName: i.variant?.name, productName: i.product.name, unitPriceMinor: i.variant?.priceMinor ?? i.product.priceMinor, quantity: i.quantity })) } })) }, payment: { create: { method, status: PaymentStatus.PENDING } } } });
-    await tx.cartItem.deleteMany({ where: { cartId: cart.id } }); return created;
+  const committed = await prisma.$transaction(async tx => {
+    const freshCart = await tx.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { inventory: true, seller: { include: { store: true } } } } } } } });
+    if (!freshCart?.items.length) throw Object.assign(new Error('Cart changed; refresh and try again'), { statusCode: 409, code: 'SHIPPING_CART_STALE' });
+    const freshGroups = new Map<string, typeof freshCart.items>();
+    for (const item of freshCart.items) {
+      if (item.product.status !== ProductStatus.APPROVED || (item.product.sellerId && item.product.seller?.status !== SellerStatus.APPROVED)) throw Object.assign(new Error(`Product ${item.product.name} is no longer available`), { statusCode: 409 });
+      const key = item.product.sellerId ?? 'platform';
+      freshGroups.set(key, [...(freshGroups.get(key) ?? []), item]);
+    }
+    const sellerGroups = [...freshGroups.entries()].filter(([sellerId]) => sellerId !== 'platform');
+    const currentSettings = await tx.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { multiVendorEnabled: true, sellerShippingEnabled: true, codMaxMinor: true } });
+    if (sellerGroups.length && !currentSettings?.multiVendorEnabled) throw Object.assign(new Error('Seller products are unavailable while multi-vendor mode is disabled'), { statusCode: 409 });
+    let shippingTotalMinor = 0;
+    let totalMinor = freshCart.items.reduce((sum, item) => sum + (item.variant?.priceMinor ?? item.product.priceMinor) * item.quantity, 0);
+    if (!Number.isSafeInteger(totalMinor) || totalMinor < 0 || totalMinor > 2_147_483_647) throw Object.assign(new Error('Order total exceeds the supported integer minor-unit limit'), { statusCode: 409, code: 'ORDER_TOTAL_OUT_OF_RANGE' });
+    const shippingBySeller = new Map<string, { snapshot: Prisma.InputJsonValue; shippingMinor: number }>();
+    let shippingBreakdown: { storeName: string; serviceName: string; feeMinor: number; discountMinor: number; shippingMinor: number }[] = [];
+    if (sellerGroups.length) {
+      if (currentSettings?.sellerShippingEnabled === false) throw Object.assign(new Error('Seller-managed shipping is disabled. Seller shipments cannot be checked out.'), { statusCode: 409, code: 'SHIPPING_DISABLED' });
+      const verifiedQuote = verifyCheckoutShippingQuote({ token: input.shippingQuoteToken, userId: user.id, address: input.address, items: freshCart.items as ShippingCartRecord[] });
+      const selections = Object.fromEntries(verifiedQuote.selections.map(selection => [selection.sellerId, selection.serviceId]));
+      const currentQuote = await buildSellerShippingQuote(tx, user.id, input.address, freshCart.items as ShippingCartRecord[], selections);
+      assertShippingSelectionsMatch(verifiedQuote, currentQuote.shipments.map(shipment => shipment.selected));
+      shippingTotalMinor = currentQuote.shippingTotalMinor;
+      totalMinor += shippingTotalMinor;
+      shippingBreakdown = currentQuote.shipments.map(shipment => ({ storeName: shipment.storeName, serviceName: shipment.selected.serviceName, feeMinor: shipment.selected.feeMinor, discountMinor: shipment.selected.discountMinor, shippingMinor: shipment.selected.shippingMinor }));
+      for (const shipment of currentQuote.shipments) {
+        const snapshot = {
+          version: 1, serviceId: shipment.selected.serviceId, serviceName: shipment.selected.serviceName,
+          destination: input.address, zoneId: shipment.selected.zoneId, feeMinor: shipment.selected.feeMinor,
+          discountMinor: shipment.selected.discountMinor, shippingMinor: shipment.selected.shippingMinor,
+          currency: shipment.selected.currency, estimatedMinDays: shipment.selected.estimatedMinDays,
+          estimatedMaxDays: shipment.selected.estimatedMaxDays, discount: shipment.selected.discount
+        } as Prisma.InputJsonValue;
+        shippingBySeller.set(shipment.sellerId, { snapshot, shippingMinor: shipment.selected.shippingMinor });
+      }
+    } else if (input.shippingQuoteToken) {
+      throw Object.assign(new Error('The cart changed after shipping was calculated. Recalculate the order total.'), { statusCode: 409, code: 'SHIPPING_QUOTE_STALE' });
+    }
+    if (method === PaymentMethod.COD && currentSettings?.codMaxMinor != null && totalMinor > currentSettings.codMaxMinor) throw Object.assign(new Error('Order is above the configured COD limit'), { statusCode: 409 });
+    for (const item of freshCart.items) {
+      const updated = item.variant
+        ? await tx.productVariant.updateMany({ where: { id: item.variant.id, status: ProductStatus.APPROVED, stock: { gte: item.quantity } }, data: { stock: { decrement: item.quantity } } })
+        : await tx.inventory.updateMany({ where: { productId: item.productId, quantity: { gte: item.quantity } }, data: { quantity: { decrement: item.quantity } } });
+      if (updated.count !== 1) throw Object.assign(new Error(`Stock changed for ${item.product.name}`), { statusCode: 409, code: 'SHIPPING_CART_STALE' });
+    }
+    const created = await tx.parentOrder.create({ data: {
+      orderNumber: orderNumber(), buyerId: user.id, affiliateClickId: affiliateClick?.id,
+      buyerEmail: input.buyerEmail, buyerName: input.buyerName, addressJson: input.address,
+      totalMinor, currency: env.CURRENCY,
+      sellerOrders: { create: [...freshGroups.entries()].map(([sellerId, items]) => {
+        const itemTotalMinor = items.reduce((sum, item) => sum + (item.variant?.priceMinor ?? item.product.priceMinor) * item.quantity, 0);
+        return {
+          sellerId: sellerId === 'platform' ? null : sellerId,
+          totalMinor: itemTotalMinor,
+          shippingSnapshotJson: sellerId === 'platform' ? undefined : shippingBySeller.get(sellerId)?.snapshot,
+          items: { create: items.map(item => ({ productId: item.productId, variantId: item.variant?.id, variantName: item.variant?.name, productName: item.product.name, unitPriceMinor: item.variant?.priceMinor ?? item.product.priceMinor, quantity: item.quantity })) }
+        };
+      }) }, payment: { create: { method, status: PaymentStatus.PENDING } }
+    } });
+    await tx.cartItem.deleteMany({ where: { cartId: freshCart.id } });
+    return { order: created, shippingTotalMinor, shippingBreakdown };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).catch(error => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') throw Object.assign(new Error('Cart or shipping settings changed while checkout was being validated. Recalculate shipping and retry.'), { statusCode: 409, code: 'SHIPPING_QUOTE_STALE' });
+    throw error;
   });
+  const order = committed.order;
+  const totalMinor = order.totalMinor;
   let paymentAction: unknown = null;
   try {
     if (method === PaymentMethod.STRIPE) { const session = await createStripeCheckout({ id: order.id, orderNumber: order.orderNumber, totalMinor, currency: env.CURRENCY, buyerEmail: input.buyerEmail }, `${env.WEB_ORIGIN}/orders/${order.id}?payment=success`, `${env.WEB_ORIGIN}/orders/${order.id}?payment=cancelled`); await prisma.payment.update({ where: { parentId: order.id }, data: { providerRef: session.id } }); paymentAction = { provider: 'STRIPE', checkoutUrl: session.url }; }
     if (method === PaymentMethod.PAYPAL) { const pp = await createPaypalOrder({ id: order.id, orderNumber: order.orderNumber, totalMinor, currency: env.CURRENCY }); await prisma.payment.update({ where: { parentId: order.id }, data: { providerRef: pp.id } }); paymentAction = { provider: 'PAYPAL', providerOrderId: pp.id, approvalUrl: pp.links?.find(link => link.rel === 'approve')?.href }; }
   } catch (error) { await prisma.payment.update({ where: { parentId: order.id }, data: { status: PaymentStatus.FAILED } }); return res.status(502).json({ error: error instanceof Error ? error.message : 'Payment provider unavailable', orderId: order.id }); }
-  res.status(201).json({ orderId: order.id, orderNumber: order.orderNumber, payment: paymentAction, paymentStatus: method === PaymentMethod.COD ? 'PENDING' : 'AWAITING_PROVIDER' });
+  res.status(201).json({ orderId: order.id, orderNumber: order.orderNumber, totalMinor: order.totalMinor, shippingTotalMinor: committed.shippingTotalMinor, shippingBreakdown: committed.shippingBreakdown, currency: order.currency, payment: paymentAction, paymentStatus: method === PaymentMethod.COD ? 'PENDING' : 'AWAITING_PROVIDER' });
 }));
 
 app.post('/api/orders/:id/paypal-capture', requireAuth, asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const order = await prisma.parentOrder.findFirst({ where: { id: routeParam(req.params.id), buyerId: user.id }, include: { payment: true } }); if (!order || order.payment?.method !== PaymentMethod.PAYPAL || !order.payment.providerRef) return res.status(404).json({ error: 'Order not found' }); const captured = await capturePaypalOrder(order.payment.providerRef); if (captured.status !== 'COMPLETED') return res.status(409).json({ error: 'PayPal capture is not completed' }); await prisma.payment.update({ where: { parentId: order.id }, data: { status: PaymentStatus.PAID, paidAt: new Date() } }); await prisma.parentOrder.update({ where: { id: order.id }, data: { status: OrderStatus.CONFIRMED } }); await settleAffiliateForPaidOrder(order.id); res.json({ ok: true, status: captured.status }); }));

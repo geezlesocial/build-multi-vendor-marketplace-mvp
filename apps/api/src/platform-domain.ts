@@ -63,6 +63,7 @@ export const payoutMethodSchema = z.object({
 }).strict();
 
 export const platformSettingsSchema = z.object({
+  sellerShippingEnabled: z.boolean().optional(),
   sellerApprovalPolicy: z.enum(['MANUAL', 'AUTOMATIC']).optional(),
   productApprovalPolicy: z.enum(['MANUAL', 'AUTOMATIC']).optional(),
   sellerPayoutsEnabled: z.boolean().optional(),

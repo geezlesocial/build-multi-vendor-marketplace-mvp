@@ -100,7 +100,11 @@ test('manual seller payout flow stays separate from checkout and requires admin 
   expect(product?.id).toBeTruthy();
   const added = await buyerPage.request.post('/api/cart/items', { data: { productId: product.id, quantity: 1 }, headers: await csrfHeaders(buyerPage) });
   expect(added.status()).toBe(201);
-  const checkout = await buyerPage.request.post('/api/orders/checkout', { data: { buyerEmail, buyerName: 'Local Buyer', address: { line1: '1 Test Street', city: 'Test City', region: 'TS', postalCode: '1000', country: 'US' }, method: 'COD' }, headers: await csrfHeaders(buyerPage) });
+  const address = { line1: '1 Test Street', city: 'Test City', region: 'TS', postalCode: '1000', country: 'US' };
+  const shippingQuote = await buyerPage.request.post('/api/shipping/quote', { data: { address }, headers: await csrfHeaders(buyerPage) });
+  expect(shippingQuote.status(), await shippingQuote.text()).toBe(200);
+  const shippingBody = await shippingQuote.json() as { quoteToken: string };
+  const checkout = await buyerPage.request.post('/api/orders/checkout', { data: { buyerEmail, buyerName: 'Local Buyer', address, method: 'COD', shippingQuoteToken: shippingBody.quoteToken }, headers: await csrfHeaders(buyerPage) });
   expect(checkout.status()).toBe(201);
   const orderId = (await checkout.json() as { orderId: string }).orderId;
   const collected = await page.request.post(`/api/orders/${orderId}/cod-collect`, { data: {}, headers: await csrfHeaders(page) });

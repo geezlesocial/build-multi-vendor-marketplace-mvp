@@ -68,6 +68,7 @@ Provider sandbox tests require the corresponding environment variables in `.env`
 - `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
 - `GET /api/cart`, `POST /api/cart/items`, `PATCH /api/cart/items/:productId`
 - `POST /api/orders/checkout`, `POST /api/orders/:id/paypal-capture`, `GET /api/orders`
+- `GET/POST/PATCH /api/seller/shipping/services`, `POST /api/seller/shipping/discounts`, `POST /api/shipping/quote`, `GET /api/admin/shipping`
 - `POST /api/pos/sales`, `GET /api/pos/receipts/:id`
 - `GET/PATCH /api/admin/settings`, `GET/PATCH /api/admin/sellers`, `GET /api/admin/orders`, `GET /api/admin/audit`
 - `GET/PUT /api/admin/platform/branding`, `POST /api/admin/platform/branding/publish`, `GET/PATCH /api/admin/platform/settings`
@@ -79,6 +80,7 @@ Provider sandbox tests require the corresponding environment variables in `.env`
 
 See `docs/PAYMENTS.md` before connecting a provider. See `docs/PRODUCTION_LAUNCH_CHECKLIST.md` before any staging or launch decision.
 See `docs/LIVE_SHOPPING.md` before enabling live shopping.
+See `docs/SELLER_SHIPPING.md` for zone matching, discount precedence, immutable order snapshots, and carrier-integration limits.
 
 ## Growth modules
 

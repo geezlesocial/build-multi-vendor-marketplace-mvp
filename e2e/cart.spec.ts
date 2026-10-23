@@ -83,6 +83,11 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
   await page.getByLabel('City').fill('Test City');
   await page.getByLabel('Region').fill('TS');
   await page.getByLabel('Postal code').fill('1000');
+  await page.getByRole('button', { name: 'Calculate shipping' }).click();
+  const deliveryService = page.getByRole('combobox', { name: 'Delivery service for Demo Store' });
+  await expect(deliveryService).toBeVisible();
+  await expect(page.locator('.summary .total strong')).toHaveText('$29.00');
+  await expect(deliveryService).toHaveValue('local-demo-shipping-service');
   await page.getByRole('button', { name: 'Place order' }).click();
 
   const confirmation = page.locator('.orderConfirmation');
@@ -90,11 +95,13 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
   await expect(confirmation).toContainText('Order confirmed');
   await expect(confirmation).toContainText(/MV-\d{8}-[A-Z0-9]+/);
   const confirmationTotal = confirmation.locator('dl div').filter({ hasText: 'Total' }).locator('dd');
-  await expect(confirmationTotal).toHaveText('$24.00');
+  await expect(confirmationTotal).toHaveText('$29.00');
   await expect(confirmation).toContainText('COD (Cash on delivery)');
   await expect(confirmation).toContainText('Pending');
   const summaryTotal = page.locator('.summary .total strong');
   await expect(summaryTotal).toHaveText((await confirmationTotal.textContent())!.trim());
+  await expect(page.locator('.summary')).toContainText('Standard local delivery');
+  await expect(page.locator('.summary')).toContainText('$5.00');
   await expect(page.getByText('Your cart is empty.')).toBeVisible();
   await expect(page.getByText('Added to cart')).not.toBeVisible();
   await expect(page.getByRole('link', { name: /Cart/ })).toContainText('0');

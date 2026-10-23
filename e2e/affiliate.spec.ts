@@ -58,7 +58,11 @@ test('admin controls attribution and a consented COD conversion creates one pend
   const click = await buyerPage.request.post(`/api/affiliate/clicks/${link.code}`, { data: { consent: true, visitorKey: 'local-e2e-visitor-0001' }, headers: await csrf(buyerPage) });
   expect(click.status()).toBe(200);
   const clickBody = await click.json() as { token: string };
-  const checkout = await buyerPage.request.post('/api/orders/checkout', { data: { buyerEmail, buyerName: 'Local Buyer', address: { line1: '1 Test Street', city: 'Test City', region: 'TS', postalCode: '1000', country: 'US' }, method: 'COD', affiliateToken: clickBody.token }, headers: await csrf(buyerPage) });
+  const address = { line1: '1 Test Street', city: 'Test City', region: 'TS', postalCode: '1000', country: 'US' };
+  const shipping = await buyerPage.request.post('/api/shipping/quote', { data: { address }, headers: await csrf(buyerPage) });
+  expect(shipping.status(), await shipping.text()).toBe(200);
+  const shippingBody = await shipping.json() as { quoteToken: string };
+  const checkout = await buyerPage.request.post('/api/orders/checkout', { data: { buyerEmail, buyerName: 'Local Buyer', address, method: 'COD', affiliateToken: clickBody.token, shippingQuoteToken: shippingBody.quoteToken }, headers: await csrf(buyerPage) });
   const checkoutBody = await checkout.text();
   expect(checkout.status(), checkoutBody).toBe(201);
   const order = JSON.parse(checkoutBody) as { orderId: string };
