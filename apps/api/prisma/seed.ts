@@ -14,6 +14,13 @@ async function main() {
   const demoShipping = await prisma.sellerShippingService.upsert({ where: { id: 'local-demo-shipping-service' }, update: { sellerId: seller.id, name: 'Standard local delivery', enabled: true, feeMinor: 500, currency: env.CURRENCY, estimatedMinDays: 2, estimatedMaxDays: 5 }, create: { id: 'local-demo-shipping-service', sellerId: seller.id, name: 'Standard local delivery', enabled: true, feeMinor: 500, currency: env.CURRENCY, estimatedMinDays: 2, estimatedMaxDays: 5 } });
   await prisma.sellerShippingZone.upsert({ where: { id: 'local-demo-shipping-zone-us' }, update: { serviceId: demoShipping.id, countryCode: 'US', regionKey: '', regionLabel: null, cityKey: '', cityLabel: null }, create: { id: 'local-demo-shipping-zone-us', serviceId: demoShipping.id, countryCode: 'US', regionKey: '', regionLabel: null, cityKey: '', cityLabel: null } });
   const store = await prisma.store.findUnique({ where: { sellerId: seller.id } });
+  if (store) {
+    const usd = await prisma.currencyCatalogEntry.findUnique({ where: { code: 'USD' }, select: { active: true, checkoutEnabled: true } });
+    if (usd) await prisma.storeCurrencyOffer.createMany({
+      data: [{ storeId: store.id, currency: 'USD', displayEnabled: true, checkoutEnabled: usd.active && usd.checkoutEnabled }],
+      skipDuplicates: true
+    });
+  }
   if (store && !await prisma.storePlanAssignment.findFirst({ where: { storeId: store.id, status: 'ACTIVE' } })) {
     await prisma.storePlanAssignment.create({ data: { storeId: store.id, planVersionId: 'legacy-compatible-store-plan-v1', source: 'LEGACY_BOOTSTRAP', reason: 'Local demo compatibility assignment' } });
   }

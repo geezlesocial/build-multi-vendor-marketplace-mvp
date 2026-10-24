@@ -66,6 +66,16 @@ test('admin controls attribution and a consented COD conversion creates one pend
   const checkoutBody = await checkout.text();
   expect(checkout.status(), checkoutBody).toBe(201);
   const order = JSON.parse(checkoutBody) as { orderId: string };
+  const beforeDelivery = await page.request.post(`/api/orders/${order.orderId}/cod-collect`, { data: {}, headers: await csrf(page) });
+  expect(beforeDelivery.status()).toBe(409);
+  expect((await beforeDelivery.json() as { code: string }).code).toBe('COD_DELIVERY_REQUIRED');
+  const sellerOrdersResponse = await sellerPage.request.get('/api/orders');
+  expect(sellerOrdersResponse.ok(), await sellerOrdersResponse.text()).toBeTruthy();
+  const sellerOrderParent = (await sellerOrdersResponse.json() as { id: string; sellerOrders: { id: string; sellerId: string }[] }[]).find(item => item.id === order.orderId);
+  const sellerOrder = sellerOrderParent?.sellerOrders[0];
+  expect(sellerOrder).toBeTruthy();
+  const fulfilled = await sellerPage.request.post(`/api/sellers/${sellerOrder!.sellerId}/orders/${sellerOrder!.id}/status`, { data: { status: 'FULFILLED' }, headers: await csrf(sellerPage) });
+  expect(fulfilled.status(), await fulfilled.text()).toBe(200);
   const collected = await page.request.post(`/api/orders/${order.orderId}/cod-collect`, { data: {}, headers: await csrf(page) });
   expect(collected.status()).toBe(200);
   const duplicateCollection = await page.request.post(`/api/orders/${order.orderId}/cod-collect`, { data: {}, headers: await csrf(page) });

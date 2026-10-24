@@ -41,5 +41,5 @@ export async function capturePaypalOrder(providerOrderId: string) {
   const token = await paypalAccessToken();
   const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders/${encodeURIComponent(providerOrderId)}/capture`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': crypto.randomUUID() } });
   if (!response.ok) throw new Error(`PayPal capture failed (${response.status})`);
-  return response.json() as Promise<{ id: string; status: string; purchase_units?: { payments?: { captures?: { id: string; status: string }[] } }[] }>;
+  return response.json() as Promise<{ id: string; status: string; purchase_units?: { payments?: { captures?: { id: string; status: string; amount?: { currency_code: string; value: string } }[] } }[] }>;
 }

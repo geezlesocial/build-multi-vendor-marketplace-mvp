@@ -35,6 +35,7 @@ async function createSellerFixture(label: string) {
   const user = await prisma.user.create({ data: { email: `shipping-${label}-${suffix}@example.test`, name: `Shipping ${label} ${suffix}`, role: Role.SELLER, passwordHash: template.passwordHash } });
   const seller = await prisma.seller.create({ data: { userId: user.id, status: SellerStatus.APPROVED } });
   const store = await prisma.store.create({ data: { sellerId: seller.id, name: `Shipping Store ${label} ${suffix}`, slug: `shipping-store-${label}-${suffix}` } });
+  await prisma.storeCurrencyOffer.create({ data: { storeId: store.id, currency: 'USD', displayEnabled: true, checkoutEnabled: true } });
   const product = await prisma.product.create({ data: {
     sellerId: seller.id, name: `Shipping Product ${label} ${suffix}`, slug: `shipping-product-${label}-${suffix}`,
     description: 'Synthetic shipping regression fixture', priceMinor: 3500, status: ProductStatus.APPROVED,

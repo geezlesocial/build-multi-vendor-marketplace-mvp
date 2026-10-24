@@ -1,0 +1,22 @@
+.addressMapPicker{display:grid;gap:.65rem;min-width:0;margin:1rem 0;padding:1rem;border:1px solid #dce4dc;border-radius:1rem;background:#fff}
+.addressMapPicker legend{padding:0 .35rem;font-weight:750}
+.addressMapPicker>p{margin:.1rem 0;line-height:1.5}
+.addressMap{height:clamp(250px,38vw,390px);min-width:0;border:1px solid #dce4dc;border-radius:.75rem;overflow:hidden;background:#eef2ed;z-index:0}
+.mapAttribution{font-size:.75rem;color:#536158}
+.mapAttribution a{color:#315d47}
+.currencyOfferList{display:grid;gap:.6rem;margin:1rem 0;padding:1rem;border:1px solid #dce4dc;border-radius:1rem;background:#fff}
+.currencyOfferList legend{font-weight:750;padding:0 .35rem}
+.currencyOfferList .checkRow{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(150px,.6fr);align-items:center;gap:.6rem;padding:.5rem 0;border-bottom:1px solid #edf0ec}
+.currencyOfferList .checkRow input{width:1.1rem;height:1.1rem;margin:0}
+.sellerCurrencyPage,.sellerCommissionPage,.adminCurrencyCommission{min-width:0}
+.sellerCurrencyPage>.setting,.sellerCommissionPage>.setting{grid-template-columns:minmax(0,1fr) minmax(180px,.65fr);align-items:center}
+.displayEstimate{display:grid;gap:.3rem;margin:.8rem 0;padding:.85rem;border:1px solid #cdddcf;border-radius:.8rem;background:#eef5ed}
+.displayEstimate small{line-height:1.45;color:#536158}
+.currencyAdminRow{grid-template-columns:minmax(150px,1.2fr) minmax(110px,.7fr) repeat(3,minmax(100px,.65fr)) minmax(150px,.8fr) minmax(120px,.65fr)}
+.currencyAdminRow .checkRow{display:flex;align-items:center;gap:.35rem;white-space:nowrap}
+.currencyAdminRow .checkRow input{width:1.05rem;height:1.05rem;margin:0}
+.commissionReview{display:grid;gap:.7rem;margin:1rem 0}
+.commissionReview label{display:grid;grid-template-columns:minmax(180px,1fr) minmax(160px,.7fr);gap:.5rem;align-items:center}
+.adminCurrencyCommission .cardBody{margin:1rem 0}
+@media(max-width:900px){.currencyAdminRow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.addressMapPicker{padding:.75rem}.addressMap{height:300px}.currencyOfferList .checkRow{grid-template-columns:auto minmax(0,1fr)}.currencyOfferList .checkRow small{grid-column:2}.sellerCurrencyPage>.setting,.sellerCommissionPage>.setting,.commissionReview label{grid-template-columns:minmax(0,1fr)}.currencyAdminRow{grid-template-columns:minmax(0,1fr)}}
