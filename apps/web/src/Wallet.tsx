@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatMinor } from './money.js';
 
 type GateState = { walletEnabled: boolean; walletFundingEnabled: boolean; walletTransfersEnabled: boolean; walletCheckoutEnabled: boolean; walletWithdrawalsEnabled: boolean; walletEmergencyPause: boolean; moneyMovementHardDisabled: boolean; walletFundingProviderReady: boolean; clubCoinsEnabled: boolean; clubCoinsEarnEnabled: boolean; clubCoinsRedeemEnabled: boolean; clubCoinsHardDisabled: boolean; clubCoinName: string };
 type WalletResponse = { account: { status: string; balances: Array<{ currency: string; availableMinor: number; pendingMinor: number; heldMinor: number; frozenMinor: number }> }; transactions: Array<{ id: string; amountMinor: number; direction: string; currency: string; status: string; type: string; createdAt: string }>; gates: GateState };
@@ -12,7 +13,7 @@ async function request<T>(path: string, options: RequestInit = {}) {
   return body as T;
 }
 
-const money = (minor: number, currency: string) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(minor / 100);
+const money = (minor: number, currency: string) => formatMinor(minor, currency);
 
 export function Wallet() {
   const [data, setData] = useState<WalletResponse | null>(null);

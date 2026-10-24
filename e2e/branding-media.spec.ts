@@ -80,9 +80,23 @@ test('browser flow saves a quarantined branding draft, blocks publication, and r
   let signedUploadCount = 0;
   let candidateUploaded = false;
   let lastSavedLogo: string | null = previousId;
+  let brandingReadCount = 0;
+  let delayNextBrandingRead = false;
+  let releaseDelayedBrandingRead: (() => void) | null = null;
+  let notifyDelayedBrandingReadStarted: (() => void) | null = null;
+  const delayedBrandingRead = new Promise<void>(resolve => { releaseDelayedBrandingRead = resolve; });
+  const delayedBrandingReadStarted = new Promise<void>(resolve => { notifyDelayedBrandingReadStarted = resolve; });
 
   await page.route('**/api/admin/platform/branding', async route => {
-    if (route.request().method() === 'GET') return route.fulfill({ json: { draftJson: savedDraft, publishedJson: published } });
+    if (route.request().method() === 'GET') {
+      brandingReadCount += 1;
+      if (delayNextBrandingRead) {
+        delayNextBrandingRead = false;
+        notifyDelayedBrandingReadStarted?.();
+        await delayedBrandingRead;
+      }
+      return route.fulfill({ json: { draftJson: savedDraft, publishedJson: published } });
+    }
     if (route.request().method() === 'PUT') {
       savedDraft = await route.request().postDataJSON();
       lastSavedLogo = savedDraft.logoMediaId;
@@ -110,19 +124,27 @@ test('browser flow saves a quarantined branding draft, blocks publication, and r
 
   await page.goto('/admin/platform');
   await page.getByRole('button', { name: 'Branding', exact: true }).click();
+  await expect.poll(() => brandingReadCount).toBe(1);
   const logoGroup = page.getByRole('group', { name: 'Primary logo' });
   await logoGroup.getByLabel('Choose primary logo image').setInputFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: png });
   await logoGroup.getByRole('button', { name: 'Upload primary logo replacement' }).click();
   await expect(logoGroup.getByRole('status')).toContainText('not available publicly until scanning approves it');
   await expect(logoGroup.getByRole('status')).toContainText('current public image remains active meanwhile');
+  await expect(logoGroup.getByLabel('Primary logo from media library')).toHaveValue(candidateId);
   await expect(logoGroup.getByText('Draft preview · quarantined')).toBeVisible();
   expect(signedUploadCount).toBe(1);
 
+  delayNextBrandingRead = true;
   const saveCandidateResponsePromise = page.waitForResponse(response => response.url().includes('/api/admin/platform/branding') && response.request().method() === 'PUT');
   await page.getByRole('button', { name: 'Save branding draft' }).click();
   const saveCandidateResponse = await saveCandidateResponsePromise;
   expect(saveCandidateResponse.status()).toBe(200);
   expect((await saveCandidateResponse.json()).draftJson.logoMediaId).toBe(candidateId);
+  await delayedBrandingReadStarted;
+  await page.getByLabel('Tagline').fill('Edited while server refresh is in flight');
+  releaseDelayedBrandingRead?.();
+  releaseDelayedBrandingRead = null;
+  await expect(page.getByLabel('Tagline')).toHaveValue('Edited while server refresh is in flight');
   await expect(page.getByText('Saved', { exact: true })).toBeVisible();
   expect(lastSavedLogo).toBe(candidateId);
   let dialogMessage = '';

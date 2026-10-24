@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import './SellerShipping.css';
+import { formatMinor } from './money.js';
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
@@ -15,7 +16,7 @@ type Listing = { id: string; name: string; status: string };
 type ShippingData = { currency: string; services: Service[] };
 type ZoneForm = { countryCode: string; region: string; city: string };
 const blankZone = (): ZoneForm => ({ countryCode: 'US', region: '', city: '' });
-const money = (minor: number, currency: string) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(minor / 100);
+const money = (minor: number, currency: string) => formatMinor(minor, currency);
 
 export function SellerShipping() {
   const [data, setData] = useState<ShippingData | null>(null);

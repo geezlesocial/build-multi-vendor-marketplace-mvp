@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AdminIntegrations } from './AdminIntegrations.js';
 import { AffiliateAdmin } from './AffiliateAdmin.js';
 import { StorePlanAdmin } from './StorePlanAdmin.js';
 import { AdminStoreGrowth } from './AdminStoreGrowth.js';
 import { BrandingImageControl } from './BrandingImageControl.js';
+import { formatMinor } from './money.js';
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
@@ -23,12 +24,12 @@ const adminNavigation = [
   { group: 'Overview', items: [{ id: 'overview', label: 'Overview' }] },
   { group: 'Marketplace', items: [{ id: 'orders', label: 'Orders' }, { id: 'taxonomy', label: 'Catalog & categories' }, { id: 'vendors', label: 'Sellers & stores' }, { id: 'shipping', label: 'Seller-managed shipping' }] },
   { group: 'Plans and billing', items: [{ id: 'plans', label: 'Store plans' }] },
-  { group: 'Payments', items: [{ id: 'methods', label: 'Payment methods' }, { id: 'transactions', label: 'Transactions' }, { id: 'payouts', label: 'Seller payouts' }, { id: 'refunds', label: 'Refunds & disputes', planned: true }] },
+  { group: 'Payments', items: [{ id: 'methods', label: 'Payment methods' }, { id: 'transactions', label: 'Transactions' }, { id: 'commissions', label: 'Seller commissions' }, { id: 'payouts', label: 'Seller payouts' }, { id: 'refunds', label: 'Refunds & disputes', planned: true }] },
   { group: 'Growth', items: [{ id: 'affiliate', label: 'Affiliate program' }, { id: 'store-growth', label: 'Store Buster & email' }, { id: 'promotions', label: 'Promotions & ads', planned: true }, { id: 'coins', label: 'Club Coins' }] },
   { group: 'Members and security', items: [{ id: 'members', label: 'Members & security', planned: true }] },
   { group: 'Support and messaging', items: [{ id: 'support', label: 'Support & messaging', planned: true }] },
   { group: 'Integrations & APIs', items: [{ id: 'providers', label: 'Provider configurations' }, { id: 'webhooks', label: 'Webhooks & API status', planned: true }] },
-  { group: 'Platform settings', items: [{ id: 'branding', label: 'Branding' }, { id: 'settings', label: 'Policies' }, { id: 'availability', label: 'Availability & localization' }] },
+  { group: 'Platform settings', items: [{ id: 'branding', label: 'Branding' }, { id: 'settings', label: 'Policies' }, { id: 'availability', label: 'Availability & localization' }, { id: 'currencies', label: 'Currency catalog & FX' }] },
   { group: 'Governance', items: [{ id: 'audit', label: 'Audit log' }] }
 ];
 
@@ -47,6 +48,9 @@ export function PlatformAdmin() {
   const [tab, setTab] = useState(requestedSection && ['providers', 'methods', 'store-growth'].includes(requestedSection) ? requestedSection : requestedSection === 'integrations' ? 'providers' : 'overview');
   const [initialLoadState, setInitialLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [branding, setBranding] = useState<Branding>(defaultBranding);
+  const brandingRevision = useRef(0);
+  const latestLoadRequest = useRef(0);
+  const initialLoadStarted = useRef(false);
   const [publishedBranding, setPublishedBranding] = useState<Branding | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [shippingAdmin, setShippingAdmin] = useState<ShippingAdmin | null>(null);
@@ -62,25 +66,33 @@ export function PlatformAdmin() {
   const [categoryForm, setCategoryForm] = useState({ name: '', slug: '' });
   const [brandForm, setBrandForm] = useState({ name: '', slug: '' });
 
+  function updateBranding<K extends keyof Branding>(key: K, value: Branding[K]) {
+    brandingRevision.current += 1;
+    setBranding(current => ({ ...current, [key]: value }));
+  }
+
   const load = async () => {
+    const requestId = ++latestLoadRequest.current;
+    const draftRevision = brandingRevision.current;
     const [b, s, a, v, c, br, r, p, o, log, ship] = await Promise.all([
       api<{ draftJson?: Branding; publishedJson?: Branding | null }>('/api/admin/platform/branding'), api<Settings>('/api/admin/platform/settings'), api<Availability>('/api/admin/platform/availability'), api<{ items: typeof vendors }>('/api/admin/vendors'), api<typeof categories>('/api/admin/categories'), api<typeof brands>('/api/admin/brands'), api<typeof readiness>('/api/admin/payout-readiness'), api<typeof payouts>('/api/admin/payouts'), api<AdminOrder[]>('/api/admin/orders'), api<AuditEntry[]>('/api/admin/audit'), api<ShippingAdmin>('/api/admin/shipping')
     ]);
-    setBranding(b.draftJson ?? defaultBranding); setPublishedBranding(b.publishedJson ?? null); setSettings(s); setShippingAdmin(ship); setAvailability(a); setVendors(v.items); setCategories(c); setBrands(br); setReadiness(r); setPayouts(p); setOrders(o); setAuditEntries(log);
+    if (requestId !== latestLoadRequest.current) return;
+    setBranding(current => brandingRevision.current === draftRevision ? b.draftJson ?? defaultBranding : current); setPublishedBranding(b.publishedJson ?? null); setSettings(s); setShippingAdmin(ship); setAvailability(a); setVendors(v.items); setCategories(c); setBrands(br); setReadiness(r); setPayouts(p); setOrders(o); setAuditEntries(log);
   };
   const loadInitial = async () => {
     try { await load(); setInitialLoadState('ready'); }
     catch (error) { setMessage((error as Error).message); setInitialLoadState('error'); }
   };
-  useEffect(() => { void loadInitial(); }, []);
+  useEffect(() => { if (initialLoadStarted.current) return; initialLoadStarted.current = true; void loadInitial(); }, []);
   const retryInitialLoad = () => { setInitialLoadState('loading'); void loadInitial(); };
   const action = async (path: string, options: RequestInit = {}) => { try { await api(path, options); await load(); setMessage('Saved'); } catch (error) { setMessage((error as Error).message); } };
   const patchSetting = (key: keyof Settings, value: boolean | number | string) => action('/api/admin/platform/settings', { method: 'PATCH', body: JSON.stringify({ [key]: value, reason: 'Updated in platform administration' }) });
   const selectTab = (next: string) => { setTab(next); const url = new URL(window.location.href); url.searchParams.set('section', next); window.history.replaceState({}, '', url); };
   const pendingSellers = vendors.filter(vendor => vendor.status === 'PENDING').length;
   const requestedPayouts = payouts.filter(payout => payout.status === 'REQUESTED').length;
-  const formatMoney = (minor: number, currency: string) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(minor / 100);
-  return <section className="page adminControlCenter"><p className="eyebrow">Platform administration</p><h1>Control center</h1><p className="muted">Manage implemented marketplace operations and review areas that are still gated or planned.</p>{message && <p className="notice" role="status">{message}</p>}<div className="adminControlLayout"><nav className="adminControlNav" aria-label="Platform administration sections">{adminNavigation.map(group => <div className="adminNavGroup" key={group.group}><h2>{group.group}</h2>{group.items.map(item => item.planned ? <div className="adminNavPlanned" key={item.id}><span>{item.label}</span><small>Planned</small></div> : <button type="button" key={item.id} className={tab === item.id ? 'active' : ''} aria-current={tab === item.id ? 'page' : undefined} onClick={() => { if (item.id === 'coins') { window.location.assign('/admin/wallet'); return; } selectTab(item.id); }}>{item.label}</button>)}</div>)}</nav><main className="adminControlMain" aria-live="polite">
+  const formatMoney = (minor: number, currency: string) => formatMinor(minor, currency);
+  return <section className="page adminControlCenter"><p className="eyebrow">Platform administration</p><h1>Control center</h1><p className="muted">Manage implemented marketplace operations and review areas that are still gated or planned.</p>{message && <p className="notice" role="status">{message}</p>}<div className="adminControlLayout"><nav className="adminControlNav" aria-label="Platform administration sections">{adminNavigation.map(group => <div className="adminNavGroup" key={group.group}><h2>{group.group}</h2>{group.items.map(item => item.planned ? <div className="adminNavPlanned" key={item.id}><span>{item.label}</span><small>Planned</small></div> : <button type="button" key={item.id} className={tab === item.id ? 'active' : ''} aria-current={tab === item.id ? 'page' : undefined} onClick={() => { if (item.id === 'coins') { window.location.assign('/admin/wallet'); return; } if (item.id === 'currencies') { window.location.assign('/admin/currencies'); return; } if (item.id === 'commissions') { window.location.assign('/admin/commissions'); return; } selectTab(item.id); }}>{item.label}</button>)}</div>)}</nav><main className="adminControlMain" aria-live="polite">
     {initialLoadState === 'loading' && <div className="empty" role="status">Loading platform administration…</div>}
     {initialLoadState === 'error' && <div className="empty" role="alert"><p>Platform administration could not be loaded. Your settings have not been changed.</p><button type="button" onClick={retryInitialLoad}>Retry loading settings</button></div>}
     {initialLoadState === 'ready' && <>
@@ -91,9 +103,9 @@ export function PlatformAdmin() {
     {plannedDescriptions[tab] && <section><p className="eyebrow">Not available</p><h2>{adminNavigation.flatMap(group => group.items).find(item => item.id === tab)?.label}</h2><div className="empty"><strong>Planned / disabled</strong><p>{plannedDescriptions[tab]}</p></div></section>}
     {tab === 'branding' && <div className="brandingEditor"><h2>Platform branding</h2><p className="muted">Changes are drafted first. Uploaded assets enter private quarantine; only scanner-approved media can be published. A failed or pending replacement does not alter the current public identity.</p>
       <div className="two">
-        <div className="narrow"><label>Platform name<input value={branding.platformName} onChange={event => setBranding({ ...branding, platformName: event.target.value })} /></label><label>Short name<input value={branding.shortName} onChange={event => setBranding({ ...branding, shortName: event.target.value })} /></label><label>Description<textarea value={branding.description} onChange={event => setBranding({ ...branding, description: event.target.value })} /></label><label>SEO description<textarea value={branding.seoDescription} onChange={event => setBranding({ ...branding, seoDescription: event.target.value })} /></label><label>Tagline<input value={branding.tagline} onChange={event => setBranding({ ...branding, tagline: event.target.value })} /></label><label>Support email<input type="email" value={branding.supportEmail ?? ''} onChange={event => setBranding({ ...branding, supportEmail: event.target.value || null })} /></label><label>Support URL<input type="url" value={branding.supportUrl ?? ''} onChange={event => setBranding({ ...branding, supportUrl: event.target.value || null })} /></label></div>
+        <div className="narrow"><label>Platform name<input value={branding.platformName} onChange={event => updateBranding('platformName', event.target.value)} /></label><label>Short name<input value={branding.shortName} onChange={event => updateBranding('shortName', event.target.value)} /></label><label>Description<textarea value={branding.description} onChange={event => updateBranding('description', event.target.value)} /></label><label>SEO description<textarea value={branding.seoDescription} onChange={event => updateBranding('seoDescription', event.target.value)} /></label><label>Tagline<input value={branding.tagline} onChange={event => updateBranding('tagline', event.target.value)} /></label><label>Support email<input type="email" value={branding.supportEmail ?? ''} onChange={event => updateBranding('supportEmail', event.target.value || null)} /></label><label>Support URL<input type="url" value={branding.supportUrl ?? ''} onChange={event => updateBranding('supportUrl', event.target.value || null)} /></label></div>
         <div className="brandingImageGrid">
-          {([['logoMediaId', 'Primary logo', 3], ['alternateLogoMediaId', 'Alternate logo', 3], ['faviconMediaId', 'Favicon', 1], ['defaultAvatarMediaId', 'Default profile avatar', 1], ['socialImageMediaId', 'Social sharing image', 1.91]] as const).map(([key, label, ratio]) => <BrandingImageControl key={key} label={label} ratio={ratio} value={branding[key]} publishedValue={publishedBranding ? publishedBranding[key] : null} onChange={id => setBranding({ ...branding, [key]: id })} listUrl="/api/admin/platform/branding-media" uploadUrl="/api/admin/platform/branding-media/uploads" previewUrl={id => `/api/admin/platform/branding-media/${encodeURIComponent(id)}/preview`} />)}
+          {([['logoMediaId', 'Primary logo', 3], ['alternateLogoMediaId', 'Alternate logo', 3], ['faviconMediaId', 'Favicon', 1], ['defaultAvatarMediaId', 'Default profile avatar', 1], ['socialImageMediaId', 'Social sharing image', 1.91]] as const).map(([key, label, ratio]) => <BrandingImageControl key={key} label={label} ratio={ratio} value={branding[key]} publishedValue={publishedBranding ? publishedBranding[key] : null} onChange={id => updateBranding(key, id)} listUrl="/api/admin/platform/branding-media" uploadUrl="/api/admin/platform/branding-media/uploads" previewUrl={id => `/api/admin/platform/branding-media/${encodeURIComponent(id)}/preview`} />)}
         </div>
       </div>
       <div className="toolbar"><button className="primary" onClick={() => action('/api/admin/platform/branding', { method: 'PUT', body: JSON.stringify(branding) })}>Save branding draft</button><button onClick={() => { if (window.confirm('Publish this branding version? Only approved images will be made public; pending replacements are rejected and the current branding remains active.')) void action('/api/admin/platform/branding/publish', { method: 'POST', body: '{}' }); }}>Publish approved branding</button></div>

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { formatMinor } from './money.js';
 
 type Product = { id: string; name: string; slug: string; description: string; priceMinor: number; currency: string; availableStock: number; images?: { url: string; alt: string }[]; seller?: { store?: { name: string; slug: string } } };
-const money = (minor: number, currency: string) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(minor / 100);
+const money = (minor: number, currency: string) => formatMinor(minor, currency);
 
 export function ProductPage({ id }: { id: string }) {
   const [product, setProduct] = useState<Product | null>(null);

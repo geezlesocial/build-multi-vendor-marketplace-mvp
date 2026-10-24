@@ -151,6 +151,33 @@ enum PaymentStatus {
   FAILED
   CANCELLED
   REFUNDED
+  DISPUTED
+}
+
+enum SellerCommissionPolicyType {
+  ZERO
+  FIXED_PER_ORDER
+  PERCENTAGE
+  PERCENTAGE_PLUS_FIXED
+}
+
+enum SellerCommissionPolicyStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  RETIRED
+}
+
+enum SellerCommissionEntryType {
+  ACCRUAL
+  REVERSAL
+  ADJUSTMENT
+}
+
+enum SellerCommissionReviewStatus {
+  NEEDS_ALLOCATION
+  POSTED
+  IGNORED
 }
 
 enum OrderStatus {
@@ -548,6 +575,9 @@ model User {
   storePlanSubscriptionsRequested StoreSubscription[] @relation("StoreSubscriptionRequester")
   providerConfigurationsCreated ProviderConfiguration[] @relation("ProviderConfigurationCreator")
   providerConfigurationsUpdated ProviderConfiguration[] @relation("ProviderConfigurationUpdater")
+  manualExchangeRatesCreated ManualExchangeRateVersion[] @relation("ManualExchangeRateCreator")
+  sellerCommissionPoliciesCreated SellerCommissionPolicyVersion[] @relation("SellerCommissionPolicyCreator")
+  sellerCommissionReviewsCreated SellerCommissionReviewEvent[] @relation("SellerCommissionReviewCreator")
 }
 
 model SavedAddress {
@@ -560,6 +590,8 @@ model SavedAddress {
   region     String
   postalCode String
   country    String
+  latitude   Float?
+  longitude  Float?
   isDefault  Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -577,6 +609,82 @@ model UserPreference {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CurrencyCatalogEntry {
+  code                 String   @id @db.VarChar(3)
+  numericCode          String?  @db.VarChar(3)
+  name                 String   @db.VarChar(100)
+  symbol               String   @db.VarChar(16)
+  minorUnitExponent    Int
+  region               String   @db.VarChar(32)
+  active               Boolean  @default(true)
+  displayEnabled       Boolean  @default(false)
+  storePricingEnabled  Boolean  @default(false)
+  checkoutEnabled      Boolean  @default(false)
+  subscriptionEnabled  Boolean  @default(false)
+  settlementEnabled    Boolean  @default(false)
+  reportingEnabled     Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  baseStores           Store[] @relation("StoreBaseCurrency")
+  storeOffers          StoreCurrencyOffer[]
+  baseRates            ExchangeRateSnapshot[] @relation("FxBaseCurrency")
+  quoteRates           ExchangeRateSnapshot[] @relation("FxQuoteCurrency")
+  manualBaseRates      ManualExchangeRateVersion[] @relation("ManualFxBaseCurrency")
+  manualQuoteRates     ManualExchangeRateVersion[] @relation("ManualFxQuoteCurrency")
+  commissionReportingEntries SellerCommissionLedgerEntry[] @relation("CommissionReportingCurrency")
+  orderItemCurrencies OrderItem[] @relation("OrderItemCurrencySnapshot")
+  orderItemDisplayCurrencies OrderItem[] @relation("OrderItemDisplayCurrency")
+  @@index([active, displayEnabled, region])
+}
+
+model StoreCurrencyOffer {
+  id             String   @id @default(cuid())
+  storeId        String
+  currency       String   @db.VarChar(3)
+  displayEnabled Boolean  @default(true)
+  checkoutEnabled Boolean @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  currencyEntry  CurrencyCatalogEntry @relation(fields: [currency], references: [code], onDelete: Restrict)
+  @@unique([storeId, currency])
+  @@index([currency, displayEnabled])
+}
+
+model ExchangeRateSnapshot {
+  id             String   @id @default(cuid())
+  baseCurrency   String   @db.VarChar(3)
+  quoteCurrency  String   @db.VarChar(3)
+  rate           Decimal  @db.Decimal(30, 12)
+  provider       String   @db.VarChar(40)
+  sourceDate     DateTime @db.Date
+  fetchedAt      DateTime @default(now())
+  baseEntry      CurrencyCatalogEntry @relation("FxBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict)
+  quoteEntry     CurrencyCatalogEntry @relation("FxQuoteCurrency", fields: [quoteCurrency], references: [code], onDelete: Restrict)
+  @@unique([baseCurrency, quoteCurrency, provider, sourceDate])
+  @@index([baseCurrency, quoteCurrency, fetchedAt])
+}
+
+model ManualExchangeRateVersion {
+  id             String   @id @default(cuid())
+  storeId        String?
+  version        Int
+  baseCurrency   String   @db.VarChar(3)
+  quoteCurrency  String   @db.VarChar(3)
+  rate           Decimal  @db.Decimal(30, 12)
+  effectiveFrom  DateTime
+  effectiveUntil DateTime?
+  reason         String   @db.VarChar(500)
+  createdById    String
+  createdAt      DateTime @default(now())
+  store          Store?   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  baseEntry      CurrencyCatalogEntry @relation("ManualFxBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict)
+  quoteEntry     CurrencyCatalogEntry @relation("ManualFxQuoteCurrency", fields: [quoteCurrency], references: [code], onDelete: Restrict)
+  createdBy      User     @relation("ManualExchangeRateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  @@unique([storeId, baseCurrency, quoteCurrency, version])
+  @@index([storeId, baseCurrency, quoteCurrency, effectiveFrom, effectiveUntil])
 }
 
 model Session {
@@ -611,6 +719,7 @@ model Seller {
   payoutLedgerEntries SellerPayoutLedgerEntry[]
   payouts SellerPayout[]
   shippingServices SellerShippingService[]
+  sellerCommissionLedgerEntries SellerCommissionLedgerEntry[]
 }
 
 model Store {
@@ -619,6 +728,7 @@ model Store {
   name        String
   description String?
   slug        String @unique @default(cuid())
+  baseCurrency String @default("USD") @db.VarChar(3)
   logoMediaId String?
   bannerMediaId String?
   contactJson Json?
@@ -627,6 +737,7 @@ model Store {
   themePublishedJson Json?
   themePublishedAt DateTime?
   seller      Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  baseCurrencyEntry CurrencyCatalogEntry @relation("StoreBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict)
   logoMedia MediaAsset? @relation("StoreLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
   bannerMedia MediaAsset? @relation("StoreBanner", fields: [bannerMediaId], references: [id], onDelete: SetNull)
   themeRevisions StoreThemeRevision[]
@@ -639,6 +750,9 @@ model Store {
   emailSubscribers StoreEmailSubscriber[]
   emailCampaigns StoreEmailCampaign[]
   affiliateProgram StoreAffiliateProgram?
+  currencyOffers StoreCurrencyOffer[]
+  manualExchangeRates ManualExchangeRateVersion[]
+  sellerCommissionPolicies SellerCommissionPolicyVersion[]
 }
 
 model SellerStaff {
@@ -647,6 +761,7 @@ model SellerStaff {
   userId                 String
   canPos                 Boolean @default(true)
   canManageStoreBranding Boolean @default(false)
+  canManageCurrency      Boolean @default(false)
   canManageShipping      Boolean @default(false)
   seller                 Seller  @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   user                   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
@@ -802,6 +917,8 @@ model ParentOrder {
   payment        Payment?
   affiliateClick AffiliateClick? @relation("AffiliateConversion", fields: [affiliateClickId], references: [id], onDelete: SetNull)
   affiliateAdjustments AffiliateAdjustment[]
+  commissionReviewEvents SellerCommissionReviewEvent[]
+  processedWebhookEvents ProcessedWebhookEvent[]
   @@index([buyerId, createdAt])
 }
 
@@ -812,10 +929,14 @@ model SellerOrder {
   status     OrderStatus @default(PENDING)
   totalMinor Int
   shippingSnapshotJson Json?
+  commissionSnapshotJson Json?
+  commissionPolicyVersionId String?
   parent     ParentOrder @relation(fields: [parentId], references: [id], onDelete: Restrict)
   seller     Seller? @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  commissionPolicyVersion SellerCommissionPolicyVersion? @relation(fields: [commissionPolicyVersionId], references: [id], onDelete: Restrict)
   items      OrderItem[]
   payoutLedgerEntries SellerPayoutLedgerEntry[]
+  sellerCommissionEntries SellerCommissionLedgerEntry[]
   @@index([sellerId, status])
 }
 
@@ -826,6 +947,10 @@ model OrderItem {
   productName   String
   unitPriceMinor Int
   quantity      Int
+  currencySnapshot String? @db.VarChar(3)
+  displayAmountMinor Int?
+  displayCurrency String? @db.VarChar(3)
+  fxSnapshotJson Json?
   variantId     String?
   variantName   String?
   sellerOrder   SellerOrder @relation(fields: [sellerOrderId], references: [id], onDelete: Restrict)
@@ -834,6 +959,9 @@ model OrderItem {
   affiliateCommissions CommissionLedger[]
   affiliateAdjustments AffiliateAdjustment[]
   payoutLedgerEntries SellerPayoutLedgerEntry[]
+  sellerCommissionEntries SellerCommissionLedgerEntry[]
+  currencySnapshotEntry CurrencyCatalogEntry? @relation("OrderItemCurrencySnapshot", fields: [currencySnapshot], references: [code], onDelete: Restrict)
+  displayCurrencyEntry CurrencyCatalogEntry? @relation("OrderItemDisplayCurrency", fields: [displayCurrency], references: [code], onDelete: Restrict)
   @@index([variantId])
 }
 
@@ -868,10 +996,23 @@ model ProcessedWebhookEvent {
   provider   PaymentMethod
   eventId    String
   receivedAt DateTime @default(now())
+  providerOccurredAt DateTime?
   eventType  String?
   reviewReason String?
+  parentOrderId String?
+  amountMinor Int?
+  currency String? @db.VarChar(3)
+  providerObjectRef String?
+  paymentLookupRef String?
+  captureConfirmed Boolean?
+  metadataOrderId String?
+  providerTotalMinor Int?
+  identityVerified Boolean @default(true)
+  parentOrder ParentOrder? @relation(fields: [parentOrderId], references: [id], onDelete: Restrict)
   @@unique([provider, eventId])
   @@index([provider, reviewReason])
+  @@index([parentOrderId, provider, receivedAt])
+  @@index([provider, providerObjectRef, reviewReason])
 }
 
 model MarketplaceSettings {
@@ -1204,6 +1345,7 @@ model StorePlanVersion {
   creator               User?                     @relation("StorePlanVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
   assignments           StorePlanAssignment[]
   subscriptions         StoreSubscription[]
+  sellerCommissionPolicies SellerCommissionPolicyVersion[]
   @@unique([planId, version])
   @@index([planId, status, version])
 }
@@ -2008,6 +2150,89 @@ model WholesaleTierPrice {
   variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
   @@unique([productId, variantId, minQuantity])
   @@index([productId, minQuantity])
+}
+
+model SellerCommissionPolicyVersion {
+  id             String                     @id @default(cuid())
+  version        Int
+  status         SellerCommissionPolicyStatus @default(DRAFT)
+  storeId        String?
+  planVersionId  String?
+  type           SellerCommissionPolicyType
+  currency       String                     @db.VarChar(3)
+  fixedMinor     Int?
+  basisPoints    Int?
+  minimumMinor   Int?
+  capMinor       Int?
+  effectiveFrom  DateTime?
+  effectiveUntil DateTime?
+  reason         String                     @db.VarChar(500)
+  createdById    String
+  createdAt      DateTime                   @default(now())
+  activatedAt    DateTime?
+  store          Store?                     @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  planVersion    StorePlanVersion?          @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
+  creator        User                       @relation("SellerCommissionPolicyCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  sellerOrders   SellerOrder[]
+  entries        SellerCommissionLedgerEntry[]
+  @@unique([storeId, version])
+  @@unique([planVersionId, version])
+  @@index([storeId, status, effectiveFrom])
+  @@index([planVersionId, status, effectiveFrom])
+}
+
+model SellerCommissionLedgerEntry {
+  id                 String                    @id @default(cuid())
+  sellerId           String
+  sellerOrderId      String
+  orderItemId        String?
+  policyVersionId    String?
+  entryType          SellerCommissionEntryType
+  amountMinor        Int
+  eligibleBaseMinor  Int
+  currency           String                    @db.VarChar(3)
+  idempotencyKey     String                    @unique
+  sourceEventId      String?
+  reversalOfId       String?
+  reason             String?
+  reportingAmountMinor Int?
+  reportingCurrency  String?                   @db.VarChar(3)
+  reportingSnapshotJson Json?
+  createdAt          DateTime                  @default(now())
+  seller             Seller                    @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  sellerOrder        SellerOrder               @relation(fields: [sellerOrderId], references: [id], onDelete: Restrict)
+  orderItem          OrderItem?                @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  policyVersion      SellerCommissionPolicyVersion? @relation(fields: [policyVersionId], references: [id], onDelete: Restrict)
+  reportingCurrencyEntry CurrencyCatalogEntry? @relation("CommissionReportingCurrency", fields: [reportingCurrency], references: [code], onDelete: Restrict)
+  reversalOf         SellerCommissionLedgerEntry? @relation("SellerCommissionReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals          SellerCommissionLedgerEntry[] @relation("SellerCommissionReversal")
+  @@index([sellerId, currency, createdAt])
+  @@index([sellerOrderId, createdAt])
+  @@index([orderItemId])
+  @@index([sourceEventId])
+  @@index([reversalOfId])
+}
+
+model SellerCommissionReviewEvent {
+  id                String                       @id @default(cuid())
+  parentOrderId     String
+  provider          String?                      @db.VarChar(30)
+  providerEventId   String?                      @db.VarChar(200)
+  status            SellerCommissionReviewStatus @default(NEEDS_ALLOCATION)
+  amountMinor       Int
+  currency          String                       @db.VarChar(3)
+  idempotencyKey    String                       @unique
+  reason            String                       @db.VarChar(500)
+  allocationJson    Json?
+  reviewedById      String?
+  reviewedAt        DateTime?
+  resolutionReason  String?                      @db.VarChar(500)
+  createdAt         DateTime                     @default(now())
+  parentOrder       ParentOrder                  @relation(fields: [parentOrderId], references: [id], onDelete: Restrict)
+  reviewedBy        User?                        @relation("SellerCommissionReviewCreator", fields: [reviewedById], references: [id], onDelete: Restrict)
+  @@unique([provider, providerEventId])
+  @@index([status, createdAt])
+  @@index([parentOrderId, createdAt])
 }
 
 model AffiliateProfile {

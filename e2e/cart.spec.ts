@@ -36,7 +36,21 @@ test('buyer can update, remove, and empty the cart without CSRF errors', async (
   await page.request.patch(`/api/cart/items/${product.id}`, { data: { quantity: 0 }, headers });
 
   await page.goto('/');
+  const addResponsePromise = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/cart/items' && response.request().method() === 'POST';
+  });
   await page.getByRole('button', { name: 'Add to cart' }).first().click();
+  const addResponse = await addResponsePromise;
+  expect(addResponse.status()).toBe(201);
+  expect(await addResponse.json()).toMatchObject({ productId: product.id, quantity: 1 });
+  const persistedCartResponse = await page.request.get('/api/cart');
+  expect(persistedCartResponse.status()).toBe(200);
+  const persistedCart = await persistedCartResponse.json() as { items: { productId: string; quantity: number }[] };
+  expect(persistedCart.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ productId: product.id, quantity: 1 })
+  ]));
+
   const cartLink = page.getByRole('link', { name: /Cart/ });
   await expect(cartLink).toHaveAttribute('href', '/checkout');
   await cartLink.click();
