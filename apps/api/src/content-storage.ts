@@ -45,8 +45,13 @@ export class LocalContentStorage implements ContentStorage {
 }
 
 export class S3ContentStorage implements ContentStorage {
-  private readonly client = new S3Client({ region: env.CONTENT_OBJECT_STORAGE_REGION!, ...(env.CONTENT_OBJECT_STORAGE_ENDPOINT ? { endpoint: env.CONTENT_OBJECT_STORAGE_ENDPOINT, forcePathStyle: true } : {}) });
-  private readonly bucket = env.CONTENT_OBJECT_STORAGE_BUCKET!;
+  private readonly client: S3Client;
+  private readonly bucket: string;
+
+  constructor(options?: { client: S3Client; bucket: string }) {
+    this.client = options?.client ?? new S3Client({ region: env.CONTENT_OBJECT_STORAGE_REGION!, ...(env.CONTENT_OBJECT_STORAGE_ENDPOINT ? { endpoint: env.CONTENT_OBJECT_STORAGE_ENDPOINT, forcePathStyle: true } : {}) });
+    this.bucket = options?.bucket ?? env.CONTENT_OBJECT_STORAGE_BUCKET!;
+  }
 
   async createUploadForm(key: string, contentType: string, maxBytes: number): Promise<DirectUploadForm> {
     return createPresignedPost(this.client, { Bucket: this.bucket, Key: key, Expires: 300, Fields: { 'Content-Type': contentType, success_action_status: '201' }, Conditions: [['eq', '$Content-Type', contentType], ['content-length-range', 1, maxBytes], ['eq', '$success_action_status', '201']] });

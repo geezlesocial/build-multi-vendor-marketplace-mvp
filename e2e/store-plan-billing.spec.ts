@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { Prisma, PrismaClient, Role, SellerStatus } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import Stripe from 'stripe';
 import { randomUUID } from 'node:crypto';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
 
@@ -23,6 +24,14 @@ async function signIn(page: Page, email: string, password = demoPassword) {
 async function csrfHeaders(page: Page) {
   const csrf = (await page.context().cookies()).find(cookie => cookie.name === 'marketplace_csrf')?.value;
   return csrf ? { 'x-csrf-token': csrf } : {};
+}
+
+const webhookSigner = new Stripe('sk_test_e2e_local_only_unused');
+const billingWebhookSecret = 'whsec_e2e_local_only_synthetic_signing_key';
+async function postSignedBillingEvent(page: Page, event: { id: string; type: string; created: number; data: { object: Record<string, unknown> } }) {
+  const payload = JSON.stringify(event);
+  const signature = webhookSigner.webhooks.generateTestHeaderString({ payload, secret: billingWebhookSecret });
+  return page.request.post('/api/webhooks/stripe/store-billing', { data: payload, headers: { 'content-type': 'application/json', 'stripe-signature': signature } });
 }
 
 async function createIsolatedSeller() {
@@ -204,4 +213,187 @@ test('pending billing history, invoice idempotency, and provider-event dedupe re
     await otherContext.close();
     await admin.close();
   }
+});
+
+test('signed Stripe sandbox events grant entitlements only after a paid invoice and reconcile refunds idempotently', async ({ page }) => {
+  await signIn(page, adminEmail);
+  const plansResponse = await page.request.get('/api/admin/store-plans');
+  const plans = await plansResponse.json() as { id: string; key: string; versions: { id: string; version: number; status: string; monthlyPriceMinor: number; annualPriceMinor: number }[] }[];
+  const paidVersion = plans.flatMap(plan => plan.versions.map(version => ({ plan, ...version }))).find(row => row.plan.key.startsWith('billing-') && row.status === 'ACTIVE' && row.monthlyPriceMinor > 0);
+  expect(paidVersion, 'the preceding billing test creates an active paid plan fixture').toBeTruthy();
+  const isolated = await createIsolatedSeller();
+  const stripeSubscriptionId = `sub_${randomUUID().replaceAll('-', '')}`;
+  const localSubscription = await prisma.storeSubscription.create({ data: {
+    storeId: isolated.storeId, planVersionId: paidVersion!.id, requestedById: isolated.userId,
+    provider: 'STRIPE', providerSubscriptionId: stripeSubscriptionId, status: 'PENDING', interval: 'MONTHLY', currency: 'USD',
+    monthlyPriceMinor: paidVersion!.monthlyPriceMinor, annualPriceMinor: paidVersion!.annualPriceMinor,
+    introPriceMinor: null, introDurationDays: null, freeTrialDays: 0, termIntervals: null,
+    expirationBehavior: 'DOWNGRADE_TO_LEGACY', cancellationPolicy: 'CANCEL_AT_TERM_END',
+    termsSnapshot: { schemaVersion: 1, provider: 'STRIPE', sandbox: true, agreedPriceMinor: paidVersion!.monthlyPriceMinor } satisfies Prisma.InputJsonObject
+  } });
+  const eventCreated = Math.floor(Date.now() / 1000);
+  const ignoredActiveEvent = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'customer.subscription.updated', created: eventCreated,
+    data: { object: { id: stripeSubscriptionId, object: 'subscription', status: 'active', created: eventCreated, current_period_start: eventCreated, current_period_end: eventCreated + 30 * 86400, cancel_at_period_end: false, metadata: { storeSubscriptionId: localSubscription.id, storeId: isolated.storeId } } }
+  });
+  expect(ignoredActiveEvent.status(), await ignoredActiveEvent.text()).toBe(200);
+  expect((await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } })).status).toBe('PENDING');
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: isolated.storeId, planVersionId: paidVersion!.id, status: 'ACTIVE' } })).toBe(0);
+
+  const invoiceId = `in_${randomUUID().replaceAll('-', '')}`;
+  const paidInvoiceEvent = {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'invoice.paid', created: eventCreated,
+    data: { object: { id: invoiceId, object: 'invoice', currency: 'usd', amount_paid: paidVersion!.monthlyPriceMinor, amount_due: paidVersion!.monthlyPriceMinor, subscription: stripeSubscriptionId, period_start: eventCreated - 30 * 86400, period_end: eventCreated } }
+  };
+  const paidResponse = await postSignedBillingEvent(page, paidInvoiceEvent);
+  expect(paidResponse.status(), await paidResponse.text()).toBe(200);
+  expect(await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } })).toMatchObject({ status: 'ACTIVE', expiresAt: null });
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: isolated.storeId, planVersionId: paidVersion!.id, status: 'ACTIVE', source: 'SUBSCRIPTION' } })).toBe(1);
+  expect(await prisma.storeSubscriptionInvoice.count({ where: { subscriptionId: localSubscription.id, providerInvoiceId: invoiceId, status: 'PAID' } })).toBe(1);
+  const paidAuditCount = await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: localSubscription.id, action: 'STORE_SUBSCRIPTION_INVOICE_PAID' } });
+  expect(paidAuditCount).toBe(1);
+  const duplicatePaidResponse = await postSignedBillingEvent(page, paidInvoiceEvent);
+  expect(duplicatePaidResponse.status(), await duplicatePaidResponse.text()).toBe(200);
+  expect(await duplicatePaidResponse.json()).toMatchObject({ duplicate: true, reconciliation: 'APPLIED' });
+  expect(await prisma.storeSubscriptionInvoice.count({ where: { subscriptionId: localSubscription.id } })).toBe(1);
+  expect(await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: localSubscription.id, action: 'STORE_SUBSCRIPTION_INVOICE_PAID' } })).toBe(paidAuditCount);
+  const staleFailureResponse = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'invoice.payment_failed', created: eventCreated + 1,
+    data: { object: { id: invoiceId, object: 'invoice', currency: 'usd', amount_due: paidVersion!.monthlyPriceMinor, subscription: stripeSubscriptionId, period_start: eventCreated, period_end: eventCreated + 30 * 86400 } }
+  });
+  expect(staleFailureResponse.status(), await staleFailureResponse.text()).toBe(200);
+  expect((await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } })).status).toBe('ACTIVE');
+  expect((await prisma.storeSubscriptionInvoice.findUniqueOrThrow({ where: { idempotencyKey: `stripe-invoice-${invoiceId}` } })).status).toBe('PAID');
+
+  const badFailureInvoiceId = `in_${randomUUID().replaceAll('-', '')}`;
+  const badFailureEvent = {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'invoice.payment_failed', created: eventCreated,
+    data: { object: { id: badFailureInvoiceId, object: 'invoice', currency: 'usd', amount_due: paidVersion!.monthlyPriceMinor + 1, subscription: stripeSubscriptionId, period_start: eventCreated, period_end: eventCreated + 30 * 86400 } }
+  };
+  const rejectedFailure = await postSignedBillingEvent(page, badFailureEvent);
+  expect(rejectedFailure.status(), await rejectedFailure.text()).toBe(500);
+  expect((await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } })).status).toBe('ACTIVE');
+  expect(await prisma.storeSubscriptionInvoice.findFirst({ where: { providerInvoiceId: badFailureInvoiceId } })).toBeNull();
+  expect(await prisma.storeSubscriptionEvent.findUniqueOrThrow({ where: { provider_providerEventId: { provider: 'STRIPE', providerEventId: badFailureEvent.id } } })).toMatchObject({ status: 'FAILED', errorCode: 'INVOICE_AMOUNT_MISMATCH' });
+
+  const failureEvent = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'invoice.payment_failed', created: eventCreated,
+    data: { object: { id: `in_${randomUUID().replaceAll('-', '')}`, object: 'invoice', currency: 'usd', amount_due: paidVersion!.monthlyPriceMinor, subscription: stripeSubscriptionId, period_start: eventCreated, period_end: eventCreated + 30 * 86400 } }
+  });
+  expect(failureEvent.status(), await failureEvent.text()).toBe(200);
+  const pastDue = await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } });
+  expect(pastDue.status).toBe('PAST_DUE');
+  expect(pastDue.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 6 * 86_400_000);
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: isolated.storeId, planVersionId: paidVersion!.id, status: 'ACTIVE' } })).toBe(1);
+  const initialGraceEnd = pastDue.expiresAt!.getTime();
+  const repeatedFailure = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'invoice.payment_failed', created: eventCreated + 60,
+    data: { object: { id: `in_${randomUUID().replaceAll('-', '')}`, object: 'invoice', currency: 'usd', amount_due: paidVersion!.monthlyPriceMinor, subscription: stripeSubscriptionId, period_start: eventCreated, period_end: eventCreated + 30 * 86400 } }
+  });
+  expect(repeatedFailure.status(), await repeatedFailure.text()).toBe(200);
+  expect((await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } })).expiresAt!.getTime()).toBe(initialGraceEnd);
+  const repeatedPastDueState = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'customer.subscription.updated', created: eventCreated + 120,
+    data: { object: { id: stripeSubscriptionId, object: 'subscription', status: 'past_due', created: eventCreated - 1, current_period_start: eventCreated, current_period_end: eventCreated + 30 * 86400, cancel_at_period_end: false, metadata: { storeSubscriptionId: localSubscription.id, storeId: isolated.storeId } } }
+  });
+  expect(repeatedPastDueState.status(), await repeatedPastDueState.text()).toBe(200);
+  expect((await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } })).expiresAt!.getTime()).toBe(initialGraceEnd);
+
+  const refundEvent = {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'charge.refunded', created: eventCreated,
+    data: { object: { id: `ch_${randomUUID().replaceAll('-', '')}`, object: 'charge', currency: 'usd', amount_refunded: Math.floor(paidVersion!.monthlyPriceMinor / 2), invoice: invoiceId } }
+  };
+  const refundResponse = await postSignedBillingEvent(page, refundEvent);
+  expect(refundResponse.status(), await refundResponse.text()).toBe(200);
+  const refundedInvoice = await prisma.storeSubscriptionInvoice.findUniqueOrThrow({ where: { idempotencyKey: `stripe-invoice-${invoiceId}` } });
+  expect(refundedInvoice).toMatchObject({ status: 'PARTIALLY_REFUNDED', refundedMinor: Math.floor(paidVersion!.monthlyPriceMinor / 2) });
+  const refundAuditCount = await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: localSubscription.id, action: 'STORE_SUBSCRIPTION_REFUND_RECORDED' } });
+  expect(refundAuditCount).toBe(1);
+  const duplicateRefundResponse = await postSignedBillingEvent(page, refundEvent);
+  expect(duplicateRefundResponse.status(), await duplicateRefundResponse.text()).toBe(200);
+  expect(await prisma.storeSubscriptionInvoice.findUniqueOrThrow({ where: { id: refundedInvoice.id } })).toMatchObject({ refundedMinor: refundedInvoice.refundedMinor, status: 'PARTIALLY_REFUNDED' });
+  expect(await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: localSubscription.id, action: 'STORE_SUBSCRIPTION_REFUND_RECORDED' } })).toBe(refundAuditCount);
+  const staleRefund = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'charge.refunded', created: eventCreated + 120,
+    data: { object: { id: refundEvent.data.object.id, object: 'charge', currency: 'usd', amount_refunded: Math.max(0, Math.floor(paidVersion!.monthlyPriceMinor / 2) - 1), invoice: invoiceId } }
+  });
+  expect(staleRefund.status(), await staleRefund.text()).toBe(200);
+  expect(await prisma.storeSubscriptionInvoice.findUniqueOrThrow({ where: { id: refundedInvoice.id } })).toMatchObject({ refundedMinor: refundedInvoice.refundedMinor, status: 'PARTIALLY_REFUNDED' });
+  expect(await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: localSubscription.id, action: 'STORE_SUBSCRIPTION_REFUND_RECORDED' } })).toBe(refundAuditCount);
+  const stalePaidEvent = await postSignedBillingEvent(page, { ...paidInvoiceEvent, id: `evt_${randomUUID().replaceAll('-', '')}`, created: eventCreated + 120 });
+  expect(stalePaidEvent.status(), await stalePaidEvent.text()).toBe(200);
+  expect((await prisma.storeSubscription.findUniqueOrThrow({ where: { id: localSubscription.id } })).status).toBe('PAST_DUE');
+  expect(await prisma.storeSubscriptionInvoice.findUniqueOrThrow({ where: { id: refundedInvoice.id } })).toMatchObject({ refundedMinor: refundedInvoice.refundedMinor, status: 'PARTIALLY_REFUNDED' });
+
+  const trialStore = await createIsolatedSeller();
+  const trialSubscriptionId = `sub_${randomUUID().replaceAll('-', '')}`;
+  const trialEndsAt = eventCreated + 14 * 86_400;
+  const trialSubscription = await prisma.storeSubscription.create({ data: {
+    storeId: trialStore.storeId, planVersionId: paidVersion!.id, requestedById: trialStore.userId,
+    provider: 'STRIPE', providerSubscriptionId: trialSubscriptionId, status: 'PENDING', interval: 'MONTHLY', currency: 'USD',
+    monthlyPriceMinor: paidVersion!.monthlyPriceMinor, annualPriceMinor: paidVersion!.annualPriceMinor,
+    introPriceMinor: null, introDurationDays: null, freeTrialDays: 14, termIntervals: null,
+    expirationBehavior: 'DOWNGRADE_TO_LEGACY', cancellationPolicy: 'CANCEL_AT_TERM_END',
+    termsSnapshot: { schemaVersion: 1, provider: 'STRIPE', sandbox: true, agreedPriceMinor: paidVersion!.monthlyPriceMinor, freeTrialDays: 14 } satisfies Prisma.InputJsonObject
+  } });
+  const trialEvent = {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'customer.subscription.created', created: eventCreated,
+    data: { object: { id: trialSubscriptionId, object: 'subscription', status: 'trialing', created: eventCreated, current_period_start: eventCreated, current_period_end: trialEndsAt, trial_end: trialEndsAt, cancel_at_period_end: false, metadata: { storeSubscriptionId: trialSubscription.id, storeId: trialStore.storeId } } }
+  };
+  const trialResponse = await postSignedBillingEvent(page, trialEvent);
+  expect(trialResponse.status(), await trialResponse.text()).toBe(200);
+  expect(await prisma.storeSubscription.findUniqueOrThrow({ where: { id: trialSubscription.id } })).toMatchObject({ status: 'TRIALING', trialEndsAt: new Date(trialEndsAt * 1000) });
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: trialStore.storeId, planVersionId: paidVersion!.id, source: 'SUBSCRIPTION', status: 'ACTIVE' } })).toBe(1);
+  const trialAuditCount = await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: trialSubscription.id, action: 'STORE_SUBSCRIPTION_TRIAL_STARTED' } });
+  expect(trialAuditCount).toBe(1);
+  const duplicateTrialState = await postSignedBillingEvent(page, { ...trialEvent, id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'customer.subscription.updated' });
+  expect(duplicateTrialState.status(), await duplicateTrialState.text()).toBe(200);
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: trialStore.storeId, planVersionId: paidVersion!.id, source: 'SUBSCRIPTION', status: 'ACTIVE' } })).toBe(1);
+  expect(await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: trialSubscription.id, action: 'STORE_SUBSCRIPTION_TRIAL_STARTED' } })).toBe(trialAuditCount);
+  const scheduledCancellation = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'customer.subscription.updated', created: eventCreated + 1,
+    data: { object: { id: trialSubscriptionId, object: 'subscription', status: 'trialing', created: eventCreated, current_period_start: eventCreated, current_period_end: trialEndsAt, trial_end: trialEndsAt, cancel_at_period_end: true, metadata: { storeSubscriptionId: trialSubscription.id, storeId: trialStore.storeId } } }
+  });
+  expect(scheduledCancellation.status(), await scheduledCancellation.text()).toBe(200);
+  expect(await prisma.storeSubscription.findUniqueOrThrow({ where: { id: trialSubscription.id } })).toMatchObject({ status: 'TRIALING', cancelAtPeriodEnd: true, expiresAt: new Date(trialEndsAt * 1000) });
+  const deletedAtTermEnd = await postSignedBillingEvent(page, {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'customer.subscription.deleted', created: eventCreated + 2,
+    data: { object: { id: trialSubscriptionId, object: 'subscription', status: 'canceled', created: eventCreated, current_period_start: eventCreated, current_period_end: trialEndsAt, trial_end: trialEndsAt, cancel_at_period_end: true, metadata: { storeSubscriptionId: trialSubscription.id, storeId: trialStore.storeId } } }
+  });
+  expect(deletedAtTermEnd.status(), await deletedAtTermEnd.text()).toBe(200);
+  expect(await prisma.storeSubscription.findUniqueOrThrow({ where: { id: trialSubscription.id } })).toMatchObject({ status: 'CANCELLED', cancelAtPeriodEnd: true, expiresAt: new Date(trialEndsAt * 1000) });
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: trialStore.storeId, planVersionId: paidVersion!.id, source: 'SUBSCRIPTION', status: 'ACTIVE' } })).toBe(1);
+
+  // Late valid provider snapshots must not resurrect a subscription after a
+  // cancellation transition. Record a paid invoice for reconciliation while
+  // retaining the terminal subscription and access-expiry state.
+  const cancelledExpiry = (await prisma.storeSubscription.findUniqueOrThrow({ where: { id: trialSubscription.id } })).expiresAt;
+  const latePaidInvoiceId = `in_${randomUUID().replaceAll('-', '')}`;
+  const latePaidEvent = {
+    id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'invoice.paid', created: eventCreated + 3,
+    data: { object: { id: latePaidInvoiceId, object: 'invoice', currency: 'usd', amount_paid: paidVersion!.monthlyPriceMinor, amount_due: paidVersion!.monthlyPriceMinor, subscription: trialSubscriptionId, period_start: trialEndsAt, period_end: trialEndsAt + 30 * 86400 } }
+  };
+  const latePaidResponse = await postSignedBillingEvent(page, latePaidEvent);
+  expect(latePaidResponse.status(), await latePaidResponse.text()).toBe(200);
+  expect(await prisma.storeSubscription.findUniqueOrThrow({ where: { id: trialSubscription.id } })).toMatchObject({ status: 'CANCELLED', expiresAt: cancelledExpiry });
+  expect(await prisma.storeSubscriptionInvoice.findFirst({ where: { subscriptionId: trialSubscription.id, providerInvoiceId: latePaidInvoiceId } })).toMatchObject({ status: 'PAID', amountMinor: paidVersion!.monthlyPriceMinor });
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: trialStore.storeId, planVersionId: paidVersion!.id, source: 'SUBSCRIPTION', status: 'ACTIVE' } })).toBe(1);
+  const terminalInvoiceAuditCount = await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: trialSubscription.id, action: 'STORE_SUBSCRIPTION_INVOICE_PAID' } });
+  expect(terminalInvoiceAuditCount).toBe(1);
+  const duplicateLatePaid = await postSignedBillingEvent(page, latePaidEvent);
+  expect(await duplicateLatePaid.json()).toMatchObject({ duplicate: true, reconciliation: 'APPLIED' });
+  expect(await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: trialSubscription.id, action: 'STORE_SUBSCRIPTION_INVOICE_PAID' } })).toBe(terminalInvoiceAuditCount);
+
+  const lateTrialEvent = { ...trialEvent, id: `evt_${randomUUID().replaceAll('-', '')}`, type: 'customer.subscription.updated', created: eventCreated + 4 };
+  const lateTrialResponse = await postSignedBillingEvent(page, lateTrialEvent);
+  expect(lateTrialResponse.status(), await lateTrialResponse.text()).toBe(200);
+  expect(await prisma.storeSubscription.findUniqueOrThrow({ where: { id: trialSubscription.id } })).toMatchObject({ status: 'CANCELLED', expiresAt: cancelledExpiry });
+  expect(await prisma.storePlanAssignment.count({ where: { storeId: trialStore.storeId, planVersionId: paidVersion!.id, source: 'SUBSCRIPTION', status: 'ACTIVE' } })).toBe(1);
+  expect(await prisma.auditLog.count({ where: { entity: 'StoreSubscription', entityId: trialSubscription.id, action: 'STORE_SUBSCRIPTION_TRIAL_STARTED' } })).toBe(1);
+
+  const invalidEventId = `evt_invalid_${randomUUID().replaceAll('-', '')}`;
+  const beforeInvalid = await prisma.storeSubscriptionEvent.count({ where: { providerEventId: invalidEventId } });
+  const invalidResponse = await page.request.post('/api/webhooks/stripe/store-billing', { data: JSON.stringify({ id: invalidEventId, type: 'invoice.paid', created: eventCreated, data: { object: { id: 'in_invalid' } } }), headers: { 'content-type': 'application/json', 'stripe-signature': 'invalid' } });
+  expect(invalidResponse.status()).toBe(400);
+  expect(await prisma.storeSubscriptionEvent.count({ where: { providerEventId: invalidEventId } })).toBe(beforeInvalid);
 });

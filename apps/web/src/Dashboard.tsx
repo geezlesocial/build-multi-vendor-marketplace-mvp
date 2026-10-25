@@ -16,7 +16,7 @@ type Workspace = 'buyer' | 'seller';
 type WorkspaceTabs = { buyer: string; seller: string };
 const allowedTabs: Record<Workspace, string[]> = {
   buyer: ['overview', 'orders', 'cart', 'favorites', 'messages', 'notifications', 'profile', 'addresses', 'affiliate'],
-  seller: ['overview', 'products', 'orders', 'shipping', 'messages', 'store', 'payouts', 'pos', 'live']
+  seller: ['overview', 'products', 'orders', 'shipping', 'messages', 'store', 'currency', 'commission', 'payouts', 'pos', 'live']
 };
 function readDashboardLocation(): { mode: Workspace; tab: string } {
   const params = new URLSearchParams(window.location.search);

@@ -52,6 +52,22 @@ test('seller workspace switching survives direct URLs, refresh, and browser hist
   await expect(page.getByRole('heading', { name: 'Seller dashboard' })).toBeVisible();
 });
 
+test('seller currency and commission dashboard tabs open from direct URLs and navigation', async ({ page }) => {
+  await login(page, 'seller.local@example.test');
+  await page.goto('/dashboard?mode=seller&tab=currency');
+  await expect(page.getByRole('heading', { name: 'Currency and display' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Currency', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Currency and display' })).toBeVisible();
+
+  const backLink = page.getByRole('link', { name: 'Back to dashboard' });
+  await expect(backLink).toHaveCSS('color', 'rgb(49, 93, 71)');
+  await page.getByRole('button', { name: 'Commission', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard\?mode=seller&tab=commission/);
+  await expect(page.getByRole('heading', { name: 'Commission and adjustments' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Commission', exact: true })).toHaveAttribute('aria-current', 'page');
+});
+
 test('seller dashboard renders historical gross totals separately with explicit currency codes', async ({ page }) => {
   await login(page, 'seller.local@example.test');
   await page.route('**/api/dashboard/seller', route => route.fulfill({
