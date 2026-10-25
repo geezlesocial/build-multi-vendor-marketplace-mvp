@@ -19,6 +19,11 @@ const webServerEnv = {
   // Browser runs must never inherit usable provider or money-movement settings.
   STRIPE_SECRET_KEY: '',
   STRIPE_WEBHOOK_SECRET: '',
+  // Synthetic signing material lets browser tests exercise signature handling;
+  // the separate outbound sandbox gate is forced off, so no Stripe call occurs.
+  STORE_PLAN_BILLING_SANDBOX_ENABLED: 'false',
+  STRIPE_STORE_BILLING_SECRET_KEY: 'sk_test_e2e_local_only_unused',
+  STRIPE_STORE_BILLING_WEBHOOK_SECRET: 'whsec_e2e_local_only_synthetic_signing_key',
   PAYPAL_CLIENT_ID: '',
   PAYPAL_CLIENT_SECRET: '',
   PAYPAL_WEBHOOK_ID: '',

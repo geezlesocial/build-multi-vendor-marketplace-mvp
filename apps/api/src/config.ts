@@ -17,6 +17,11 @@ const envSchema = z.object({
   FX_REFERENCE_MAX_AGE_HOURS: z.coerce.number().int().min(24).max(72).default(36),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  // SaaS Store billing is a separate Stripe integration and remains off unless
+  // explicitly configured for non-production test mode.
+  STORE_PLAN_BILLING_SANDBOX_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  STRIPE_STORE_BILLING_SECRET_KEY: z.string().optional(),
+  STRIPE_STORE_BILLING_WEBHOOK_SECRET: z.string().optional(),
   PAYPAL_CLIENT_ID: z.string().optional(),
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_BASE_URL: z.string().url().default('https://api-m.sandbox.paypal.com'),
@@ -51,6 +56,17 @@ const envSchema = z.object({
   WALLET_FUNDING_TREASURY_ACCOUNT_ID: z.string().trim().min(1).optional(),
   CLUB_COINS_HARD_DISABLED: clubCoinsHardDisabledSchema
 }).superRefine((value, context) => {
+  if (value.STORE_PLAN_BILLING_SANDBOX_ENABLED) {
+    if (value.NODE_ENV === 'production') {
+      context.addIssue({ code: 'custom', path: ['STORE_PLAN_BILLING_SANDBOX_ENABLED'], message: 'Stripe Store billing sandbox cannot be enabled in production.' });
+    }
+    if (!value.STRIPE_STORE_BILLING_SECRET_KEY?.startsWith('sk_test_')) {
+      context.addIssue({ code: 'custom', path: ['STRIPE_STORE_BILLING_SECRET_KEY'], message: 'Stripe Store billing requires a dedicated Stripe test-mode secret key.' });
+    }
+    if (!value.STRIPE_STORE_BILLING_WEBHOOK_SECRET || value.STRIPE_STORE_BILLING_WEBHOOK_SECRET.length < 16) {
+      context.addIssue({ code: 'custom', path: ['STRIPE_STORE_BILLING_WEBHOOK_SECRET'], message: 'A dedicated Stripe Store billing webhook secret is required.' });
+    }
+  }
   if (value.CONTENT_OBJECT_STORAGE_AVAILABLE && (!value.CONTENT_OBJECT_STORAGE_BUCKET || !value.CONTENT_OBJECT_STORAGE_REGION)) {
     context.addIssue({ code: 'custom', path: ['CONTENT_OBJECT_STORAGE_BUCKET'], message: 'Object storage requires a bucket and region before it can be enabled.' });
   }

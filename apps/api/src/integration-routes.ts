@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { env } from './config.js';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { livePaymentActivationBlock } from './provider-activation.js';
+import { storePlanBillingSandboxEnabled } from './stripe-store-billing.js';
 import { credentialKeysFor, evaluateProviderReadiness, redactProviderAuditReason, validateCredentialReferences, type CredentialReferences, type ProviderContext, type ProviderEnvironment, type ProviderName } from './provider-integrations-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -82,10 +83,12 @@ export function registerIntegrationRoutes(app: Express) {
       configurations: configurations.map(safeConfiguration),
       paymentMethods: Object.values(PaymentMethod).map(method => ({ method, enabled: enabledByMethod.get(method) ?? false })),
       liveConfigurationGate: env.LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE,
+      storeBillingSandbox: { enabled: storePlanBillingSandboxEnabled, liveBillingEnabled: false },
       notes: {
         secrets: 'The application stores references only. Secret values are read from the deployment environment; no provider connectivity check is performed.',
         checkout: 'The existing buyer payment-method switch remains authoritative for new sessions. Provider configuration records are inventory/readiness only; live-mode activation remains blocked until provider verification is implemented. Eligibility does not connect seller accounts.',
-        wallet: env.MONEY_MOVEMENT_HARD_DISABLED ? 'Wallet funding is still blocked by the independent money-movement hard-disable.' : 'Wallet movement remains subject to its existing provider and marketplace gates.'
+        wallet: env.MONEY_MOVEMENT_HARD_DISABLED ? 'Wallet funding is still blocked by the independent money-movement hard-disable.' : 'Wallet movement remains subject to its existing provider and marketplace gates.',
+        storeBilling: storePlanBillingSandboxEnabled ? 'Stripe test-mode Store billing sandbox is explicitly enabled; this is not live billing.' : 'Stripe test-mode Store billing is disabled by default and configured separately from buyer checkout.'
       }
     });
   }));

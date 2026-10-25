@@ -1,10 +1,13 @@
 import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
+import { createHash } from 'node:crypto';
 import { Prisma, Role, SellerStatus, StorePlanAssignmentStatus, StorePlanStatus, StorePlanVersionStatus } from '@prisma/client';
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { asStorePlanEntitlements, effectiveStorePlan, isAtLimit, storePlanEntitlementsSchema } from './store-plan-domain.js';
 import { formatMinorAmount, isFreePlan, planPricingInputSchema, resolvePlanPricing } from './store-plan-pricing.js';
+import { env } from './config.js';
+import { stripeStoreBillingProvider, storePlanBillingSandboxEnabled, stripeStoreBillingTermsSupported } from './stripe-store-billing.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -306,22 +309,29 @@ export function registerStorePlanRoutes(app: Express) {
       include: { plan: { select: { key: true, name: true } } },
       orderBy: [{ monthlyPriceMinor: 'asc' }, { planId: 'asc' }, { version: 'desc' }]
     });
-    res.json({ checkoutAvailable: false, checkoutUnavailableReason: 'Plan checkout is not configured. The platform must select and verify a subscription billing provider before sellers can subscribe.', offers: versions.map(version => ({
+    const providerReady = storePlanBillingSandboxEnabled;
+    const unavailableReason = providerReady ? 'Stripe test-mode sandbox is enabled; no live billing is available.' : 'Stripe Store billing sandbox is disabled.';
+    res.json({ checkoutAvailable: providerReady, checkoutUnavailableReason: unavailableReason, offers: versions.map(version => {
+      const terms = stripeStoreBillingTermsSupported(version);
+      return {
       id: version.id, plan: { key: version.plan.key, name: version.name }, version: version.version, description: version.description,
       currency: version.currency, monthlyPriceMinor: version.monthlyPriceMinor, annualPriceMinor: version.annualPriceMinor,
       annualDiscountPercent: version.annualDiscountPercent, defaultInterval: version.defaultInterval,
       termIntervals: version.termIntervals, expirationBehavior: version.expirationBehavior,
       cancellationPolicy: version.cancellationPolicy, freeTrialDays: version.freeTrialDays,
       introPriceMinor: version.introPriceMinor, introDurationDays: version.introDurationDays,
-      entitlements: asStorePlanEntitlements(version)
-    })) });
+      entitlements: asStorePlanEntitlements(version), checkoutSupported: providerReady && terms.supported,
+      checkoutUnavailableReason: !providerReady ? unavailableReason : terms.reason
+      };
+    }) });
   }));
 
   app.get('/api/seller/billing', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
     const user = actor(res);
     if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
-    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } } } });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } }, user: { select: { email: true } } } });
     if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
+    if (!seller.user.email) return res.status(409).json({ code: 'SELLER_EMAIL_REQUIRED', error: 'An email address is required for subscription checkout.' });
     const subscriptions = await prisma.storeSubscription.findMany({
       where: { storeId: seller.store.id },
       orderBy: { createdAt: 'desc' },
@@ -336,21 +346,102 @@ export function registerStorePlanRoutes(app: Express) {
         invoices: { select: { id: true, status: true, amountMinor: true, refundedMinor: true, currency: true, periodStart: true, periodEnd: true, dueAt: true, paidAt: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 50 }
       }
     });
-    const current = subscriptions.find(item => ['TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID'].includes(item.status)) ?? null;
+    const now = new Date();
+    const current = subscriptions.find(item => ['TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID'].includes(item.status) || (item.status === 'CANCELLED' && item.expiresAt !== null && item.expiresAt > now)) ?? null;
+    const providerReady = storePlanBillingSandboxEnabled;
     res.json({
-      checkoutAvailable: false,
-      checkoutUnavailableReason: 'Subscription checkout is unavailable because this deployment has no configured subscription provider or verified subscription webhook. No subscription payment has been simulated.',
+      checkoutAvailable: providerReady,
+      cancellationAvailable: Boolean(stripeStoreBillingProvider()),
+      checkoutUnavailableReason: providerReady ? 'Stripe test-mode sandbox is enabled; this is not live billing.' : 'Subscription checkout is unavailable because the Stripe Store billing sandbox is disabled. No subscription payment has been simulated.',
       current,
       subscriptions,
       historyAvailable: subscriptions.length > 0
     });
   }));
 
-  app.post('/api/seller/billing/subscribe', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
+  app.post('/api/seller/billing/subscribe', requireAuth, requireRole(...sellerRoles), run(async (req, res) => {
     const user = actor(res);
     if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
-    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } } } });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } }, user: { select: { email: true } } } });
     if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
-    return res.status(503).json({ code: 'PLAN_BILLING_DISABLED', error: 'Plan checkout is unavailable until a subscription provider, signed webhook handling, and sandbox verification are configured.' });
+    if (!storePlanBillingSandboxEnabled) return res.status(503).json({ code: 'PLAN_BILLING_DISABLED', error: 'Stripe Store billing sandbox is disabled. No subscription or entitlement change was created.' });
+    const provider = stripeStoreBillingProvider();
+    if (!provider) return res.status(503).json({ code: 'PLAN_BILLING_DISABLED', error: 'Stripe Store billing sandbox is not configured. No subscription or entitlement change was created.' });
+    if (!seller.user.email) return res.status(409).json({ code: 'SELLER_EMAIL_REQUIRED', error: 'An email address is required for subscription checkout.' });
+    const body = z.object({ planVersionId: z.string().trim().min(1).max(80), interval: z.enum(['MONTHLY', 'ANNUAL']) }).strict().parse(req.body);
+    const clientKey = req.get('Idempotency-Key');
+    if (!clientKey || !/^[A-Za-z0-9._:-]{16,128}$/.test(clientKey)) return res.status(400).json({ code: 'IDEMPOTENCY_KEY_REQUIRED', error: 'Provide an Idempotency-Key between 16 and 128 safe characters.' });
+    const requestKeyHash = createHash('sha256').update(clientKey).digest('hex');
+    const prepared = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${seller.store!.id} FOR UPDATE`;
+      const existing = await tx.storeSubscription.findUnique({ where: { storeId_requestKeyHash: { storeId: seller.store!.id, requestKeyHash } }, include: { planVersion: { include: { plan: true } }, store: { include: { seller: { include: { user: true } } } } } });
+      if (existing) {
+        if (existing.planVersionId !== body.planVersionId || existing.interval !== body.interval) throw fail(409, 'This idempotency key was already used for different plan terms.');
+        if (existing.status !== 'PENDING') throw fail(409, 'This idempotent checkout request is no longer pending. Start a new request only after reviewing the current subscription state.');
+        return { subscription: existing, duplicate: true };
+      }
+      const outstanding = await tx.storeSubscription.findFirst({ where: { storeId: seller.store!.id, status: { in: ['PENDING', 'TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID', 'CANCELLED'] }, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, select: { id: true } });
+      if (outstanding) throw fail(409, 'This Store already has a pending or active subscription. Resolve it before starting another checkout.');
+      const version = await tx.storePlanVersion.findUnique({ where: { id: body.planVersionId }, include: { plan: true } });
+      const now = new Date();
+      if (!version || version.status !== StorePlanVersionStatus.ACTIVE || version.plan.status !== StorePlanStatus.ACTIVE || version.plan.key === 'legacy-compatible' || (version.effectiveFrom && version.effectiveFrom > now) || (version.effectiveUntil && version.effectiveUntil <= now)) throw fail(409, 'This plan version is not available for subscription checkout.');
+      const termsSupport = stripeStoreBillingTermsSupported(version);
+      if (!termsSupport.supported) throw Object.assign(fail(409, termsSupport.reason!), { code: 'PLAN_BILLING_TERMS_UNSUPPORTED' });
+      const amountMinor = body.interval === 'ANNUAL' ? version.annualPriceMinor : version.monthlyPriceMinor;
+      if (amountMinor <= 0 || isFreePlan(version)) throw fail(409, 'Free plans do not require subscription checkout.');
+      if (version.freeTrialDays > 0) {
+        const priorTrial = await tx.storeSubscription.findFirst({ where: { storeId: seller.store!.id, freeTrialDays: { gt: 0 }, OR: [{ trialEndsAt: { not: null } }, { status: { in: ['TRIALING', 'ACTIVE', 'PAST_DUE', 'UNPAID', 'EXPIRED'] } }] }, select: { id: true } });
+        if (priorTrial) throw fail(409, 'A free trial has already been used by this Store.');
+      }
+      const currentAssignment = await tx.storePlanAssignment.findFirst({ where: { storeId: seller.store!.id, status: 'ACTIVE', effectiveFrom: { lte: now }, OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }] }, orderBy: { effectiveFrom: 'desc' } });
+      const termsSnapshot = {
+        schemaVersion: 1, provider: 'STRIPE', sandbox: true, storeId: seller.store!.id,
+        planVersionId: version.id, planKey: version.plan.key, planName: version.name, planVersion: version.version,
+        interval: body.interval, currency: version.currency, monthlyPriceMinor: version.monthlyPriceMinor,
+        annualPriceMinor: version.annualPriceMinor, agreedPriceMinor: amountMinor,
+        freeTrialDays: version.freeTrialDays, cancellationPolicy: version.cancellationPolicy,
+        expirationBehavior: version.expirationBehavior, taxTreatment: 'NOT_COLLECTED_IN_SANDBOX',
+        proration: 'NONE', previousPlanVersionId: currentAssignment?.planVersionId ?? null,
+        createdAt: now.toISOString()
+      } satisfies Prisma.InputJsonObject;
+      const subscription = await tx.storeSubscription.create({
+        data: {
+          storeId: seller.store!.id, planVersionId: version.id, requestedById: user.id,
+          provider: 'STRIPE', status: 'PENDING', interval: body.interval, currency: version.currency,
+          monthlyPriceMinor: version.monthlyPriceMinor, annualPriceMinor: version.annualPriceMinor,
+          introPriceMinor: null, introDurationDays: null, freeTrialDays: version.freeTrialDays,
+          termIntervals: null, expirationBehavior: version.expirationBehavior,
+          cancellationPolicy: version.cancellationPolicy, termsSnapshot, requestKeyHash
+        },
+        include: { planVersion: { include: { plan: true } }, store: { include: { seller: { include: { user: true } } } } }
+      });
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'STORE_SUBSCRIPTION_CHECKOUT_REQUESTED', entity: 'StoreSubscription', entityId: subscription.id, metadata: { storeId: seller.store!.id, planVersionId: version.id, interval: body.interval, currency: version.currency, amountMinor, sandbox: true } } });
+      return { subscription, duplicate: false };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+
+    const subscription = prepared.subscription;
+    const amountMinor = body.interval === 'ANNUAL' ? subscription.annualPriceMinor ?? 0 : subscription.monthlyPriceMinor;
+    let checkout;
+    try {
+      if (subscription.providerCheckoutSessionId) {
+        checkout = await provider.retrieveCheckout(subscription.providerCheckoutSessionId);
+        if (!checkout.url || checkout.status !== 'open') return res.status(409).json({ code: 'CHECKOUT_SESSION_UNAVAILABLE', error: 'The existing sandbox checkout session is no longer open. Review your subscription history before starting another request.' });
+        checkout = { ...checkout, subscriptionId: subscription.providerSubscriptionId };
+      } else {
+        if (prepared.duplicate && subscription.createdAt.getTime() < Date.now() - 20 * 60 * 60 * 1000) return res.status(409).json({ code: 'CHECKOUT_RECONCILIATION_REQUIRED', error: 'The previous checkout request is too old to retry safely. Wait for provider reconciliation or contact support; a second session was not created.' });
+        checkout = await provider.createCheckout({
+          subscriptionId: subscription.id, storeId: subscription.storeId, storeName: subscription.store.name,
+          planName: subscription.planVersion.name, planVersion: subscription.planVersion.version,
+          interval: body.interval, currency: 'USD', unitAmountMinor: amountMinor, trialDays: subscription.freeTrialDays,
+          sellerEmail: seller.user.email,
+          successUrl: `${env.WEB_ORIGIN}/seller/plan?billing=success`,
+          cancelUrl: `${env.WEB_ORIGIN}/seller/plan?billing=cancelled`
+        });
+      }
+      await prisma.storeSubscription.update({ where: { id: subscription.id }, data: { provider: 'STRIPE', providerCheckoutSessionId: checkout.id, ...(checkout.subscriptionId ? { providerSubscriptionId: checkout.subscriptionId } : {}) } });
+    } catch {
+      return res.status(502).json({ code: 'BILLING_PROVIDER_UNAVAILABLE', error: 'Stripe sandbox checkout could not be created. Retry with the same Idempotency-Key; no entitlement was granted.' });
+    }
+    return res.status(prepared.duplicate ? 200 : 201).json({ subscriptionId: subscription.id, checkoutUrl: checkout.url, sandbox: true, duplicate: prepared.duplicate });
   }));
 }

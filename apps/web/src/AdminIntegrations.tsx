@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 type CredentialStatus = { key: string; referenceConfigured: boolean; referenceType: string; maskedReference: string | null; runtimeValuePresent: boolean };
 type ProviderConfiguration = { id: string; provider: 'STRIPE' | 'PAYPAL'; context: 'MARKETPLACE_CHECKOUT' | 'WALLET_FUNDING'; environment: 'SANDBOX' | 'LIVE'; name: string; enabled: boolean; archivedAt: string | null; lastCheckedAt: string | null; readiness: { ready: boolean; code: string; message: string; credentials: CredentialStatus[] }; credentialReferences: CredentialStatus[] };
 type PaymentMethod = { method: 'STRIPE' | 'PAYPAL' | 'COD' | 'POS'; enabled: boolean };
-type IntegrationData = { configurations: ProviderConfiguration[]; paymentMethods: PaymentMethod[]; liveConfigurationGate: boolean; notes: { secrets: string; checkout: string; wallet: string } };
+type IntegrationData = { configurations: ProviderConfiguration[]; paymentMethods: PaymentMethod[]; liveConfigurationGate: boolean; storeBillingSandbox: { enabled: boolean; liveBillingEnabled: false }; notes: { secrets: string; checkout: string; wallet: string; storeBilling: string } };
 type Provider = 'STRIPE' | 'PAYPAL';
 type Context = 'MARKETPLACE_CHECKOUT' | 'WALLET_FUNDING';
 type ReferenceField = 'apiSecret' | 'webhookSecret' | 'clientId' | 'clientSecret' | 'webhookId';
@@ -117,7 +117,7 @@ export function AdminIntegrations({ section = 'providers' }: { section?: 'provid
       </form>
     </section>
 
-    <section className="card cardBody"><h3>Other payment contexts</h3><p>{data.notes.checkout}</p><p>{data.notes.wallet}</p><p className="muted">Store subscription billing still returns PLAN_BILLING_DISABLED. Seller-owned provider accounts and Stripe Connect/PayPal Payouts transfers are not implemented by this registry. Wallet and Club Coins hard-disable policy is unchanged.</p></section></>}
+    <section className="card cardBody"><h3>Other payment contexts</h3><p>{data.notes.checkout}</p><p>{data.notes.wallet}</p><p>{data.notes.storeBilling}</p><p className="muted">Store Plan checkout uses a separate Stripe test-mode-only gate and is disabled by default. It does not reuse buyer checkout, enable live billing, or connect seller payment accounts. Seller-owned provider accounts and Stripe Connect/PayPal Payouts transfers are not implemented by this registry. Wallet and Club Coins hard-disable policy is unchanged.</p></section></>}
 
     {section === 'methods' && <section className="card cardBody" aria-labelledby="payment-method-title">
       <h3 id="payment-method-title">Buyer checkout payment methods</h3>
