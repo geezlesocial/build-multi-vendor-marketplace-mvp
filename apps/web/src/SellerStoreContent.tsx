@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { uploadToSignedPost } from './media-upload.js';
 
 type ContentItem = { id: string; title: string; slug: string; status: string; bodyJson: { type?: string; text?: string; mediaId?: string; alt?: string }[]; excerpt?: string | null };
 type Data = { store: { id: string; name: string; slug: string }; posts: ContentItem[]; pages: ContentItem[]; entitlements: { blogPostLimit: number; contentPageLimit: number; mediaStorageLimitBytes: number; scheduledPublishingEnabled: boolean; advancedContentSeoEnabled: boolean }; publicPrefix: string };
@@ -16,21 +17,6 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 const slugFromTitle = (value: string) => value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').replace(/-{2,}/g, '-').slice(0, 150);
 const draftFor = (storeId: string) => `marketlane:store-content-draft:${storeId}`;
-
-function uploadToSignedPost(url: string, fields: Record<string, string>, file: File, onProgress: (percent: number) => void) {
-  return new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', url);
-    xhr.withCredentials = false;
-    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
-    xhr.onerror = () => reject(new Error('Managed storage could not be reached. Try again.'));
-    xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error('Managed storage rejected the upload. Choose the file again or retry.'));
-    const form = new FormData();
-    Object.entries(fields).forEach(([key, value]) => form.append(key, value));
-    form.append('file', file);
-    xhr.send(form);
-  });
-}
 
 export function SellerStoreContent() {
   const [data, setData] = useState<Data | null>(null);

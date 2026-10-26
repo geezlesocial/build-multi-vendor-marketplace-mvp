@@ -1,0 +1,4 @@
+.discountEntry{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.65rem}
+.discountEntry label{min-width:0}
+.discountEntry button{min-height:3rem}
+@media(max-width:520px){.discountEntry{grid-template-columns:minmax(0,1fr)}.discountEntry button{justify-self:start}}

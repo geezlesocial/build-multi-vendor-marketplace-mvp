@@ -5,6 +5,7 @@ export type SessionUser = {
   email: string;
   name: string;
   role: 'BUYER' | 'SELLER' | 'CASHIER' | 'ADMIN' | 'CONTENT_EDITOR';
+  emailVerifiedAt?: string | null;
   sellerId?: string;
   avatarUrl?: string;
 };

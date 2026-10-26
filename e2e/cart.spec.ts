@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
 const buyerEmail = 'buyer.local@example.test';
@@ -26,6 +27,55 @@ test('guest is prompted to sign in instead of sending a cart mutation', async ({
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await expect(page.getByRole('status')).toContainText('Sign in to add items to your cart.');
   expect(cartMutationSent).toBe(false);
+});
+
+test('guest opening a product detail page is sent to sign in without a cart mutation', async ({ page }) => {
+  const catalog = await page.request.get('/api/products?q=Demo%20Canvas%20Tote');
+  expect(catalog.ok(), await catalog.text()).toBeTruthy();
+  const product = (await catalog.json() as { items: { id: string }[] }).items[0];
+  expect(product).toBeTruthy();
+
+  let cartMutationSent = false;
+  page.on('request', request => {
+    if (request.url().includes('/api/cart/items') && request.method() !== 'GET') cartMutationSent = true;
+  });
+
+  await page.goto(`/products/${product.id}`);
+  await page.getByRole('button', { name: 'Add to cart' }).click();
+
+  await expect(page).toHaveURL(/\/\?auth=login$/);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  expect(cartMutationSent).toBe(false);
+});
+
+test('buyer can add to cart from a product detail page and the header count refreshes', async ({ page }) => {
+  const suffix = randomUUID();
+  const registration = await page.request.post('/api/auth/register', { data: {
+    name: 'Product Detail Buyer',
+    email: `product-detail-${suffix}@example.test`,
+    password
+  } });
+  expect(registration.status(), await registration.text()).toBe(201);
+
+  const catalog = await page.request.get('/api/products?q=Demo%20Canvas%20Tote');
+  expect(catalog.ok(), await catalog.text()).toBeTruthy();
+  const product = (await catalog.json() as { items: { id: string }[] }).items[0];
+  expect(product).toBeTruthy();
+
+  await page.goto(`/products/${product.id}`);
+  const addResponsePromise = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/cart/items' && response.request().method() === 'POST';
+  });
+  await page.getByRole('button', { name: 'Add to cart' }).click();
+  const addResponse = await addResponsePromise;
+  expect(addResponse.status(), await addResponse.text()).toBe(201);
+  expect(await addResponse.json()).toMatchObject({ productId: product.id, quantity: 1 });
+  await expect(page.locator('.cartButton b')).toHaveText('1');
+
+  const savedCart = await page.request.get('/api/cart');
+  expect(savedCart.ok(), await savedCart.text()).toBeTruthy();
+  expect(await savedCart.json()).toMatchObject({ items: [expect.objectContaining({ productId: product.id, quantity: 1 })] });
 });
 
 test('buyer can update, remove, and empty the cart without CSRF errors', async ({ page }) => {

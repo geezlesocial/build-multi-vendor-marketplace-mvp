@@ -1,0 +1,9 @@
+.adminPlatformStore{display:grid;gap:1rem;min-width:0}
+.adminPlatformStore>header h2{margin:.15rem 0 .35rem}
+.adminPlatformAccess,.adminPlatformStoreDetails{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}
+.adminPlatformAccess h3,.adminPlatformStoreDetails h3{margin:.15rem 0 .35rem}
+.adminPlatformStoreCreate{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}
+.adminPlatformStoreCreate h3,.adminPlatformStoreCreate>p,.adminPlatformStoreCreate>button{grid-column:1/-1}
+.adminPlatformStoreCreate label{display:grid;gap:.35rem}
+.adminPlatformStoreCreate small{color:var(--muted,#68746d)}
+@media(max-width:700px){.adminPlatformAccess,.adminPlatformStoreDetails{flex-direction:column}.adminPlatformStoreCreate{grid-template-columns:1fr}.adminPlatformStoreCreate h3,.adminPlatformStoreCreate>p,.adminPlatformStoreCreate>button{grid-column:auto}}
