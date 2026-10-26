@@ -24,6 +24,7 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",
+    "i18n-iso-countries": "^7.14.0",
     "livekit-server-sdk": "^2.19.2",
     "multi-vendor-marketplace-mvp": "file:../..",
     "nodemailer": "^10.2.1",

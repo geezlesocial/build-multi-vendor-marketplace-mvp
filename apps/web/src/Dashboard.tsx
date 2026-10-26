@@ -7,6 +7,7 @@ import { SellerCommissionStatement, SellerStoreCurrency } from './SellerStoreCur
 import { PRODUCT_MEDIA_ACCEPT, PRODUCT_MEDIA_LIMITS, productMediaCounts, productMediaKindForFile, uploadContentType, uploadToSignedPostWithType } from './media-upload.js';
 import { CatalogFields, type CatalogBrand, type CatalogCategory, type CatalogProductType } from './CatalogFields.js';
 import { SellerDiscounts } from './SellerDiscounts.js';
+import { SellerAds } from './SellerAds.js';
 import { SellerDropshipping } from './SellerDropshipping.js';
 import { LiveShopping, SellerLiveStudio } from './LiveShopping.js';
 import { OrderResolutionPanel } from './OrderResolutionPanel.js';
@@ -24,7 +25,7 @@ type Workspace = 'buyer' | 'seller';
 type WorkspaceTabs = { buyer: string; seller: string };
 const allowedTabs: Record<Workspace, string[]> = {
   buyer: ['overview', 'orders', 'cart', 'favorites', 'messages', 'notifications', 'profile', 'addresses', 'affiliate', 'live'],
-  seller: ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'messages', 'store', 'currency', 'commission', 'payouts', 'pos', 'live']
+  seller: ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'ads', 'messages', 'store', 'currency', 'commission', 'payouts', 'pos', 'live']
 };
 function readDashboardLocation(): { mode: Workspace; tab: string } {
   const params = new URLSearchParams(window.location.search);
@@ -281,13 +282,13 @@ function Addresses({ data, reload }: { data: BuyerData; reload: () => void }) {
 
 function SellerDashboard({ data, tab, setTab, reload }: { data: SellerData | null; tab: string; setTab: (value: string) => void; reload: () => void }) {
   if (!data) return null;
-  const tabs = ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'messages', 'store', 'currency', 'commission', 'payouts', 'pos', 'live'];
+  const tabs = ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'ads', 'messages', 'store', 'currency', 'commission', 'payouts', 'pos', 'live'];
   return <>
     <Tabs items={tabs} active={tab} setActive={setTab} />
     <nav className="sellerQuickLinks" aria-label="Store tools">
       <a href="/seller/plan"><small>Account</small><strong>Plan and usage</strong></a>
       <a href="/seller/content"><small>Brand experience</small><strong>Content studio</strong></a>
-      <a href="/seller/growth"><small>Marketing</small><strong>Store growth</strong></a>
+      <a href="/dashboard?mode=seller&amp;tab=ads"><small>Marketing</small><strong>Ads &amp; growth</strong></a>
       <a href="/seller/currency"><small>Finance</small><strong>Store currency</strong></a>
     </nav>
     {tab === 'overview' && <><div className="heroPills"><span>{data.products.length} products</span><span>{data.summary.orderCount} orders</span>{data.summary.grossByCurrency.length ? data.summary.grossByCurrency.map(total => <span key={total.currency}>Gross sales ({total.currency}): {money(total.grossMinor, total.currency)}</span>) : <span>No sales yet</span>}</div><SellerOrders orders={data.orders.slice(0, 5)} reload={reload} /></>}
@@ -295,6 +296,7 @@ function SellerDashboard({ data, tab, setTab, reload }: { data: SellerData | nul
     {tab === 'orders' && <SellerOrders orders={data.orders} sellerMode reload={reload} />}
     {tab === 'shipping' && <SellerShipping />}
     {tab === 'dropshipping' && <SellerDropshipping />}
+    {tab === 'ads' && <SellerAds />}
     {tab === 'currency' && <SellerStoreCurrency />}
     {tab === 'commission' && <SellerCommissionStatement />}
     {tab === 'messages' && <><Messages conversations={data.conversations} reload={reload} /><SupportDesk mode="seller" /></>}

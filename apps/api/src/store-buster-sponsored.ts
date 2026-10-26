@@ -3,7 +3,7 @@ import { decimalToMinorExact } from './currency-domain.js';
 import { prisma } from './security.js';
 import { env } from './config.js';
 import { stripe } from './payments.js';
-import { calculateSponsoredClickSpend } from './store-buster-sponsored-domain.js';
+import { calculateSponsoredClickSpend, calculateSponsoredViewSpend } from './store-buster-sponsored-domain.js';
 import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
 
 type Provider = 'STRIPE' | 'PAYPAL';
@@ -288,24 +288,45 @@ export async function settleStoreBusterClick(input: { campaignId: string; impres
     if (!impression || !impression.productId) return { counted: false, destinationProductId: null };
     const campaign = impression.campaign;
     const settings = await tx.storeBusterSettings.findUnique({ where: { id: 'default' } });
-    if (!env.STORE_BUSTER_SPONSORED_AVAILABLE || campaign.status !== 'APPROVED' || !campaign.sponsored || !settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired || settings.pricePerClickMinor <= 0) return { counted: false, destinationProductId: impression.productId };
+    if (!env.STORE_BUSTER_SPONSORED_AVAILABLE || campaign.status !== 'APPROVED' || !campaign.sponsored || !settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired || (campaign.endsAt && campaign.endsAt <= now) || (campaign.startsAt && campaign.startsAt > now)) return { counted: false, destinationProductId: impression.productId };
+    const billingModel = campaign.billingModel ?? 'CPC';
+    const clickPriceMinor = campaign.pricePerClickSnapshot ?? settings.pricePerClickMinor;
+    if (billingModel === 'CPC' && clickPriceMinor <= 0) return { counted: false, destinationProductId: impression.productId };
     await tx.$queryRaw`SELECT "id" FROM "StoreBusterAdAccount" WHERE "storeId" = ${campaign.storeId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "StoreBusterCampaign" WHERE "id" = ${campaign.id} FOR UPDATE`;
     const account = await tx.storeBusterAdAccount.findUnique({ where: { storeId: campaign.storeId } });
-    if (!account || account.status !== 'ACTIVE' || account.currency !== env.CURRENCY) return { counted: false, destinationProductId: impression.productId };
+    if (!account || account.status !== 'ACTIVE' || account.currency !== env.CURRENCY || account.availableMinor < (billingModel === 'CPC' ? clickPriceMinor : 0)) return { counted: false, destinationProductId: impression.productId };
     const product = await tx.product.findFirst({ where: { id: impression.productId, status: 'APPROVED', sellerId: campaign.store.sellerId, seller: { status: 'APPROVED' }, inventory: { quantity: { gt: 0 } } }, select: { id: true, categoryId: true, category: { select: { status: true } } } });
     if (!product || product.category?.status !== 'ACTIVE' || (campaign.audienceCategoryIds.length > 0 && (!product.categoryId || !campaign.audienceCategoryIds.includes(product.categoryId)))) return { counted: false, destinationProductId: impression.productId };
-    const [campaignMonthSpend, storeMonthSpend, effectivePlan] = await Promise.all([
+    const [campaignMonthSpend, campaignDailySpend, campaignLifetimeSpend, storeMonthSpend, effectivePlan] = await Promise.all([
       tx.storeBusterDailyMetric.aggregate({ where: { campaignId: campaign.id, day: { gte: monthStart } }, _sum: { spendMinor: true } }),
+      tx.storeBusterDailyMetric.aggregate({ where: { campaignId: campaign.id, day }, _sum: { spendMinor: true } }),
+      tx.storeBusterDailyMetric.aggregate({ where: { campaignId: campaign.id }, _sum: { spendMinor: true } }),
       tx.storeBusterDailyMetric.aggregate({ where: { campaign: { storeId: campaign.storeId, sponsored: true }, day: { gte: monthStart } }, _sum: { spendMinor: true } }),
       effectiveStorePlan(tx, campaign.storeId)
     ]);
     const entitlements = await storeEntitlements(tx, campaign.storeId, effectivePlan.version);
     if (!entitlements.storeBusterEnabled) return { counted: false, destinationProductId: impression.productId };
     const storeBudgetCap = Math.min(settings.maxMonthlyBudgetMinor, entitlements.storeBusterMonthlyBudgetMinor);
+    const campaignSpentThisMonth = campaignMonthSpend._sum.spendMinor ?? 0;
+    const campaignSpentLifetime = campaignLifetimeSpend._sum.spendMinor ?? 0;
+    const campaignSpentToday = campaignDailySpend._sum.spendMinor ?? 0;
+    if (campaign.lifetimeBudgetMinor != null && campaignSpentLifetime >= campaign.lifetimeBudgetMinor) return { counted: false, destinationProductId: impression.productId };
+    if (campaign.dailyBudgetMinor != null && campaignSpentToday >= campaign.dailyBudgetMinor) return { counted: false, destinationProductId: impression.productId };
+    if (billingModel === 'CPV') {
+      const clickClaim = await tx.storeBusterImpression.updateMany({ where: { id: impression.id, shownAt: { not: null }, clickedAt: null, expiresAt: { gt: now } }, data: { clickedAt: now } });
+      if (clickClaim.count !== 1) return { counted: false, destinationProductId: impression.productId };
+      await tx.storeBusterDailyMetric.updateMany({ where: { campaignId: campaign.id, day: impression.day }, data: { clicks: { increment: 1 } } });
+      return { counted: true, destinationProductId: product.id };
+    }
     const spend = calculateSponsoredClickSpend({
       availableMinor: account.availableMinor,
-      clickPriceMinor: settings.pricePerClickMinor,
-      campaignSpentThisMonthMinor: campaignMonthSpend._sum.spendMinor ?? 0,
+      clickPriceMinor,
+      campaignSpentThisMonthMinor: campaignSpentThisMonth,
+      campaignSpentTodayMinor: campaignSpentToday,
+      campaignDailyBudgetMinor: campaign.dailyBudgetMinor ?? undefined,
+      campaignSpentLifetimeMinor: campaignSpentLifetime,
+      campaignLifetimeBudgetMinor: campaign.lifetimeBudgetMinor ?? undefined,
       storeSpentThisMonthMinor: storeMonthSpend._sum.spendMinor ?? 0,
       campaignBudgetMinor: campaign.monthlyBudgetMinor,
       platformBudgetCapMinor: storeBudgetCap
@@ -318,6 +339,68 @@ export async function settleStoreBusterClick(input: { campaignId: string; impres
     await tx.storeBusterAdLedgerEntry.create({ data: { accountId: account.id, campaignId: campaign.id, type: 'CLICK_SPEND', amountMinor: -spend.amountMinor, balanceAfterMinor: balanceAfter, currency: account.currency, idempotencyKey: `click:${impression.id}` } });
     await tx.storeBusterDailyMetric.upsert({ where: { campaignId_day: { campaignId: campaign.id, day: impression.day } }, create: { campaignId: campaign.id, day: impression.day, impressions: 1, clicks: 1, spendMinor: spend.amountMinor }, update: { clicks: { increment: 1 }, spendMinor: { increment: spend.amountMinor } } });
     return { counted: true, destinationProductId: product.id };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+}
+
+/** Counts a single user-bound, viewable impression and atomically charges CPV
+ * campaigns from the separate prepaid ad balance. CPC campaigns only meter it. */
+export async function settleStoreBusterImpression(input: { campaignId: string; impressionId: string; userId: string; now?: Date }) {
+  const now = input.now ?? new Date();
+  const day = utcDay(now);
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  return prisma.$transaction(async tx => {
+    const pending = await tx.storeBusterImpression.findFirst({ where: { id: input.impressionId, campaignId: input.campaignId, shownAt: null, clickedAt: null, expiresAt: { gt: now }, tokenHash: { not: '' } }, include: { campaign: true } });
+    if (!pending || !pending.tokenHash) return { counted: false, chargedMinor: 0 };
+    // The route verifies the user-bound token hash before calling this function.
+    void input.userId;
+    const campaign = pending.campaign;
+    const settings = await tx.storeBusterSettings.findUnique({ where: { id: 'default' } });
+    if (!env.STORE_BUSTER_SPONSORED_AVAILABLE || campaign.status !== 'APPROVED' || !campaign.sponsored || !settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired || (campaign.startsAt && campaign.startsAt > now) || (campaign.endsAt && campaign.endsAt <= now)) return { counted: false, chargedMinor: 0 };
+    await tx.$queryRaw`SELECT "id" FROM "StoreBusterAdAccount" WHERE "storeId" = ${campaign.storeId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "StoreBusterCampaign" WHERE "id" = ${campaign.id} FOR UPDATE`;
+    const [account, currentCampaign, impression] = await Promise.all([
+      tx.storeBusterAdAccount.findUnique({ where: { storeId: campaign.storeId } }),
+      tx.storeBusterCampaign.findUnique({ where: { id: campaign.id } }),
+      tx.storeBusterImpression.findUnique({ where: { id: pending.id } })
+    ]);
+    if (!account || account.status !== 'ACTIVE' || account.currency !== env.CURRENCY || account.availableMinor <= 0 || !currentCampaign || !impression || impression.shownAt || impression.expiresAt <= now) return { counted: false, chargedMinor: 0 };
+    const billingModel = currentCampaign.billingModel ?? 'CPC';
+    const rate = currentCampaign.pricePer100ViewsSnapshot ?? settings.pricePer100ViewsMinor;
+    if (billingModel === 'CPV' && rate <= 0) return { counted: false, chargedMinor: 0 };
+    const [monthSpend, todaySpend, lifetimeSpend, storeSpend, effectivePlan] = await Promise.all([
+      tx.storeBusterDailyMetric.aggregate({ where: { campaignId: currentCampaign.id, day: { gte: monthStart } }, _sum: { spendMinor: true } }),
+      tx.storeBusterDailyMetric.aggregate({ where: { campaignId: currentCampaign.id, day }, _sum: { spendMinor: true } }),
+      tx.storeBusterDailyMetric.aggregate({ where: { campaignId: currentCampaign.id }, _sum: { spendMinor: true } }),
+      tx.storeBusterDailyMetric.aggregate({ where: { campaign: { storeId: currentCampaign.storeId, sponsored: true }, day: { gte: monthStart } }, _sum: { spendMinor: true } }),
+      effectiveStorePlan(tx, currentCampaign.storeId)
+    ]);
+    const entitlements = await storeEntitlements(tx, currentCampaign.storeId, effectivePlan.version);
+    const platformMonthlyBudgetMinor = Math.min(settings.maxMonthlyBudgetMinor, entitlements.storeBusterMonthlyBudgetMinor);
+    let amountMinor = 0;
+    let remainderAfter = currentCampaign.viewBillingRemainder;
+    if (billingModel === 'CPV') {
+      if (currentCampaign.lifetimeBudgetMinor != null && (lifetimeSpend._sum.spendMinor ?? 0) >= currentCampaign.lifetimeBudgetMinor) return { counted: false, chargedMinor: 0 };
+      const charge = calculateSponsoredViewSpend({
+        availableMinor: account.availableMinor, pricePer100ViewsMinor: rate, billingRemainder: currentCampaign.viewBillingRemainder,
+        campaignSpendMinor: monthSpend._sum.spendMinor ?? 0, dailySpendMinor: todaySpend._sum.spendMinor ?? 0,
+        campaignLifetimeSpendMinor: lifetimeSpend._sum.spendMinor ?? 0, campaignLifetimeBudgetMinor: currentCampaign.lifetimeBudgetMinor ?? undefined,
+        storeMonthlySpendMinor: storeSpend._sum.spendMinor ?? 0, campaignBudgetMinor: currentCampaign.monthlyBudgetMinor,
+        dailyBudgetMinor: currentCampaign.dailyBudgetMinor ?? currentCampaign.monthlyBudgetMinor, platformMonthlyBudgetMinor
+      });
+      if (!charge) return { counted: false, chargedMinor: 0 };
+      amountMinor = charge.amountMinor;
+      remainderAfter = charge.remainderAfter;
+    }
+    const claimed = await tx.storeBusterImpression.updateMany({ where: { id: impression.id, shownAt: null, clickedAt: null, expiresAt: { gt: now } }, data: { shownAt: now } });
+    if (claimed.count !== 1) return { counted: false, chargedMinor: 0 };
+    await tx.storeBusterDailyMetric.upsert({ where: { campaignId_day: { campaignId: currentCampaign.id, day: impression.day } }, create: { campaignId: currentCampaign.id, day: impression.day, impressions: 1, clicks: 0, spendMinor: amountMinor }, update: { impressions: { increment: 1 }, ...(amountMinor ? { spendMinor: { increment: amountMinor } } : {}) } });
+    if (billingModel === 'CPV') await tx.storeBusterCampaign.update({ where: { id: currentCampaign.id }, data: { viewBillingRemainder: remainderAfter } });
+    if (amountMinor > 0) {
+      const balanceAfter = account.availableMinor - amountMinor;
+      await tx.storeBusterAdAccount.update({ where: { id: account.id }, data: { availableMinor: balanceAfter } });
+      await tx.storeBusterAdLedgerEntry.create({ data: { accountId: account.id, campaignId: currentCampaign.id, type: 'VIEW_SPEND', amountMinor: -amountMinor, balanceAfterMinor: balanceAfter, currency: account.currency, idempotencyKey: `view:${impression.id}` } });
+    }
+    return { counted: true, chargedMinor: amountMinor };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
 

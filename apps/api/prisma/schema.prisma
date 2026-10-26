@@ -298,6 +298,17 @@ enum StoreBusterCampaignGoal {
   STORE_VISITS
 }
 
+enum StoreBusterBillingModel {
+  CPC
+  CPV
+}
+
+enum StoreBusterAdAudience {
+  BUYERS
+  SELLERS
+  BOTH
+}
+
 enum StoreBusterAdAccountStatus {
   ACTIVE
   FROZEN
@@ -306,6 +317,7 @@ enum StoreBusterAdAccountStatus {
 enum StoreBusterAdLedgerEntryType {
   TOP_UP
   CLICK_SPEND
+  VIEW_SPEND
   ADMIN_ADJUSTMENT
   REFUND_REVERSAL
 }
@@ -2510,6 +2522,7 @@ model MediaAsset {
   storeBanners  Store[]         @relation("StoreBanner")
   productImages ProductImage[]
   productMedia     ProductMedia[]
+  storeBusterAdCreatives StoreBusterCampaignCreative[]
 
   @@index([scanStatus, kind, createdAt])
   @@index([storeId, uploadStatus, createdAt])
@@ -2540,6 +2553,9 @@ model StoreBusterSettings {
   maxMonthlyBudgetMinor  Int      @default(0)
   maxCampaignsPerStore   Int      @default(0)
   pricePerClickMinor     Int      @default(0)
+  pricePer100ViewsMinor Int      @default(0)
+  minimumCampaignUsdMinor Int    @default(1000)
+  maxCampaignDurationDays Int    @default(30)
   updatedById            String?
   updatedAt              DateTime @updatedAt
   updatedBy              User?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
@@ -2553,6 +2569,22 @@ model StoreBusterCampaign {
   status                StoreBusterCampaignStatus @default(DRAFT)
   sponsored             Boolean                   @default(false)
   monthlyBudgetMinor    Int                       @default(0)
+  headline               String?                   @db.VarChar(120)
+  adDescription          String?                   @db.VarChar(1000)
+  billingModel           StoreBusterBillingModel?
+  audience               StoreBusterAdAudience?
+  targetCountryCodes     String[]                  @default([])
+  durationDays           Int?
+  dailyBudgetMinor       Int?
+  lifetimeBudgetMinor    Int?
+  budgetCurrency         String?                   @db.VarChar(3)
+  budgetTotalMinor       Int?
+  budgetFxRate           String?                   @db.VarChar(32)
+  pricePerClickSnapshot  Int?
+  pricePer100ViewsSnapshot Int?
+  viewBillingRemainder   Int                       @default(0)
+  startsAt               DateTime?
+  endsAt                 DateTime?
   audienceCategoryIds   String[]                  @default([])
   moderationReason      String?
   reviewedById          String?
@@ -2562,12 +2594,27 @@ model StoreBusterCampaign {
   store                 Store                     @relation(fields: [storeId], references: [id], onDelete: Restrict)
   reviewer              User?                     @relation("StoreBusterCampaignReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   products              StoreBusterCampaignProduct[]
+  creatives             StoreBusterCampaignCreative[]
   metrics               StoreBusterDailyMetric[]
   impressions           StoreBusterImpression[]
   adLedgerEntries       StoreBusterAdLedgerEntry[]
 
   @@index([storeId, status, updatedAt])
   @@index([status, sponsored, updatedAt])
+}
+
+model StoreBusterCampaignCreative {
+  id           String              @id @default(cuid())
+  campaignId   String
+  mediaAssetId String
+  position     Int
+  campaign     StoreBusterCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  mediaAsset   MediaAsset          @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+  createdAt    DateTime            @default(now())
+
+  @@unique([campaignId, position])
+  @@unique([campaignId, mediaAssetId])
+  @@index([mediaAssetId])
 }
 
 model StoreBusterCampaignProduct {
@@ -2598,6 +2645,7 @@ model StoreBusterImpression {
   id         String   @id @default(cuid())
   campaignId String
   tokenHash  String   @unique
+  viewerDayKey String? @unique @db.VarChar(64)
   day        DateTime @db.Date
   expiresAt  DateTime
   clickedAt  DateTime?
