@@ -1,6 +1,7 @@
 import { AffiliateAdjustmentType, PaymentMethod, PaymentStatus, Prisma } from '@prisma/client';
 import { accrueSellerCommissionsForPaidOrder, createPartialRefundReview, reverseSellerCommissionForOrder } from './seller-commission.js';
 import { reverseAffiliateForOrderInTransaction, settleAffiliateForPaidOrderInTransaction } from './affiliate-ledger.js';
+import { reverseClubCoinsForOrder } from './club-coins-awards.js';
 
 type Tx = Prisma.TransactionClient;
 type Provider = 'STRIPE' | 'PAYPAL';
@@ -429,6 +430,7 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
     else await tx.processedWebhookEvent.create({ data: { ...commonEventData, reviewReason: null } });
     const result = await applyAdjustment(tx, event, order.id);
     if (result) await reverseAffiliateAdjustment(tx, order.id, result);
+    await reverseClubCoinsForOrder(tx, order.id, event.eventId, `Reversed after verified ${isDispute ? 'payment dispute' : 'payment refund'} event ${event.eventId}.`);
     await auditLegacyWebhook(tx, priorEvent, 'LEGACY_PAYMENT_WEBHOOK_RECONCILED', null, order.id);
     return { orderId: order.id, becamePaid: false, adjustments: result ? [result] : [], reviewReason: null };
   }

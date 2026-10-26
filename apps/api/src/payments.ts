@@ -9,6 +9,17 @@ export async function createStripeCheckout(order: { id: string; orderNumber: str
   return stripe.checkout.sessions.create({ mode: 'payment', customer_email: order.buyerEmail, line_items: [{ price_data: { currency: order.currency.toLowerCase(), product_data: { name: `Marketplace order ${order.orderNumber}` }, unit_amount: order.totalMinor }, quantity: 1 }], metadata: { orderId: order.id, orderNumber: order.orderNumber }, success_url: successUrl, cancel_url: cancelUrl }, { idempotencyKey: `order-${order.id}` });
 }
 
+export async function createStripeStoreBusterCheckout(input: { fundingIntentId: string; amountMinor: number; currency: string; buyerEmail: string }, successUrl: string, cancelUrl: string) {
+  if (!stripe) throw new Error('Stripe is not configured');
+  return stripe.checkout.sessions.create({
+    mode: 'payment', customer_email: input.buyerEmail,
+    line_items: [{ price_data: { currency: input.currency.toLowerCase(), product_data: { name: 'Store Buster prepaid advertising balance' }, unit_amount: input.amountMinor }, quantity: 1 }],
+    metadata: { purpose: 'STORE_BUSTER_AD_BALANCE', fundingIntentId: input.fundingIntentId },
+    payment_intent_data: { metadata: { purpose: 'STORE_BUSTER_AD_BALANCE', fundingIntentId: input.fundingIntentId } },
+    success_url: successUrl, cancel_url: cancelUrl
+  }, { idempotencyKey: `store-buster-funding-${input.fundingIntentId}` });
+}
+
 export async function paypalAccessToken() {
   if (!env.PAYPAL_CLIENT_ID || !env.PAYPAL_CLIENT_SECRET || env.PAYPAL_CLIENT_ID.includes('placeholder')) throw new Error('PayPal is not configured');
   const auth = Buffer.from(`${env.PAYPAL_CLIENT_ID}:${env.PAYPAL_CLIENT_SECRET}`).toString('base64');
@@ -37,9 +48,21 @@ export async function createPaypalOrder(order: { id: string; orderNumber: string
   return response.json() as Promise<{ id: string; status: string; links?: { rel: string; href: string }[] }>;
 }
 
-export async function capturePaypalOrder(providerOrderId: string) {
+export async function createPaypalStoreBusterOrder(input: { fundingIntentId: string; amountDecimal: string; currency: string; returnUrl: string; cancelUrl: string }) {
   const token = await paypalAccessToken();
-  const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders/${encodeURIComponent(providerOrderId)}/capture`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': crypto.randomUUID() } });
+  const reference = `store-buster-ad:${input.fundingIntentId}`;
+  const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': `store-buster-${input.fundingIntentId}` },
+    body: JSON.stringify({ intent: 'CAPTURE', purchase_units: [{ reference_id: reference, custom_id: reference, description: 'Store Buster prepaid advertising balance', amount: { currency_code: input.currency, value: input.amountDecimal } }], application_context: { user_action: 'PAY_NOW', return_url: input.returnUrl, cancel_url: input.cancelUrl } })
+  });
+  if (!response.ok) throw new Error(`PayPal ad balance order failed (${response.status})`);
+  return response.json() as Promise<{ id: string; status: string; links?: { rel: string; href: string }[] }>;
+}
+
+export async function capturePaypalOrder(providerOrderId: string, requestId: string = crypto.randomUUID()) {
+  const token = await paypalAccessToken();
+  const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders/${encodeURIComponent(providerOrderId)}/capture`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': requestId } });
   if (!response.ok) throw new Error(`PayPal capture failed (${response.status})`);
-  return response.json() as Promise<{ id: string; status: string; purchase_units?: { payments?: { captures?: { id: string; status: string; amount?: { currency_code: string; value: string } }[] } }[] }>;
+  return response.json() as Promise<{ id: string; status: string; purchase_units?: { custom_id?: string; reference_id?: string; payments?: { captures?: { id: string; status: string; amount?: { currency_code: string; value: string } }[] } }[] }>;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decryptPayoutDetails, encryptPayoutDetails, maskIdentifier, payoutStatusTransitionAllowed, reservedStoreSlug, storeSlugFromName, storeThemeSchema } from './platform-domain.js';
+import { decryptPayoutDetails, encryptPayoutDetails, maskIdentifier, payoutStatusTransitionAllowed, platformSettingsSchema, reservedStoreSlug, storeSlugFromName, storeThemeSchema } from './platform-domain.js';
 
 describe('platform administration domain rules', () => {
   it('accepts only the allowlisted store theme shape', () => {
@@ -28,5 +28,12 @@ describe('platform administration domain rules', () => {
     expect(storeSlugFromName('Tech & Appliances')).toBe('tech-appliances');
     expect(storeSlugFromName('  Café---Tools!  ')).toBe('cafe-tools');
     expect(storeSlugFromName('***')).toBe('');
+  });
+
+  it('validates an optional COD ceiling in integer minor units and supports clearing it', () => {
+    expect(platformSettingsSchema.parse({ codMaxMinor: 25_000 }).codMaxMinor).toBe(25_000);
+    expect(platformSettingsSchema.parse({ codMaxMinor: null }).codMaxMinor).toBeNull();
+    expect(() => platformSettingsSchema.parse({ codMaxMinor: -1 })).toThrow();
+    expect(() => platformSettingsSchema.parse({ codMaxMinor: 2_000_000_001 })).toThrow();
   });
 });

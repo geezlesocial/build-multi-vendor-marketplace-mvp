@@ -188,6 +188,14 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum ShipmentStatus {
+  SHIPPED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  EXCEPTION
+}
+
 enum LiveSessionStatus {
   DRAFT
   SCHEDULED
@@ -197,6 +205,13 @@ enum LiveSessionStatus {
   ENDED
   CANCELLED
   FAILED
+}
+
+enum LiveSessionReactionKind {
+  LIKE
+  LOVE
+  HAPPY
+  CONGRATS
 }
 
 enum LiveReportStatus {
@@ -283,6 +298,26 @@ enum StoreBusterCampaignGoal {
   STORE_VISITS
 }
 
+enum StoreBusterAdAccountStatus {
+  ACTIVE
+  FROZEN
+}
+
+enum StoreBusterAdLedgerEntryType {
+  TOP_UP
+  CLICK_SPEND
+  ADMIN_ADJUSTMENT
+  REFUND_REVERSAL
+}
+
+enum StoreBusterFundingStatus {
+  PENDING
+  PAID
+  REVIEW
+  FAILED
+  EXPIRED
+}
+
 enum StoreEmailSubscriberStatus {
   PENDING_CONFIRMATION
   SUBSCRIBED
@@ -295,7 +330,16 @@ enum StoreEmailCampaignStatus {
   DRAFT
   QUEUED
   SENT
+  FAILED
   CANCELLED
+}
+
+enum StoreEmailDeliveryStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  SKIPPED
 }
 
 enum AffiliateStatus {
@@ -305,20 +349,24 @@ enum AffiliateStatus {
   PAUSED
   TERMINATED
 }
+
 enum AffiliateAttributionRule {
   LAST_VALID_CLICK
   FIRST_VALID_CLICK
 }
+
 enum CommissionEntryType {
   EARNED
   REVERSAL
   ADJUSTMENT
 }
+
 enum AffiliateAdjustmentType {
   REFUND
   CHARGEBACK
   CANCELLATION
 }
+
 enum CommissionStatus {
   PENDING
   APPROVED
@@ -326,30 +374,36 @@ enum CommissionStatus {
   PAYABLE
   PAID
 }
+
 enum AffiliatePayoutStatus {
   REQUESTED
   APPROVED
   REJECTED
   PAID
 }
+
 enum WholesaleStatus {
   PENDING
   APPROVED
   REJECTED
   SUSPENDED
 }
+
 enum NotificationChannel {
   IN_APP
   EMAIL
   WEB_PUSH
   ANDROID_PUSH
 }
+
 enum NotificationDeliveryStatus {
   PENDING
+  SENDING
   SENT
   FAILED
   SUPPRESSED
 }
+
 enum CampaignStatus {
   DRAFT
   SCHEDULED
@@ -357,6 +411,7 @@ enum CampaignStatus {
   PAUSED
   ARCHIVED
 }
+
 enum ConversationStatus {
   OPEN
   CLOSED
@@ -367,6 +422,30 @@ enum TaxonomyStatus {
   ACTIVE
   INACTIVE
   ARCHIVED
+}
+
+enum CatalogSuggestionKind {
+  CATEGORY
+  CHILD_CATEGORY
+  FEATURE
+  BRAND
+}
+
+enum CatalogSuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ProductDiscountKind {
+  PERCENTAGE
+  FIXED
+}
+
+enum ProductDiscountScope {
+  ALL_PRODUCTS
+  SELECTED_PRODUCTS
+  SELECTED_CATEGORIES
 }
 
 enum ApprovalPolicy {
@@ -509,12 +588,24 @@ enum ClubCoinRedemptionStatus {
   EXPIRED
 }
 
+enum ProductReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REMOVED
+}
+
 model User {
   id           String       @id @default(cuid())
   email        String       @unique
   passwordHash String
   name         String
   role         Role         @default(BUYER)
+  accountStatus String      @default("ACTIVE") @db.VarChar(16)
+  emailVerifiedAt DateTime?
+  emailVerificationTokenHash String? @unique
+  emailVerificationExpiresAt DateTime?
+  emailVerificationSentAt DateTime?
   avatarMediaId String?     @unique
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
@@ -569,15 +660,34 @@ model User {
   storeInterestSignals StoreInterestSignal[]
   reviewedStoreBusterCampaigns StoreBusterCampaign[] @relation("StoreBusterCampaignReviewer")
   storeBusterSettingsUpdates StoreBusterSettings[]
+  storeBusterFundingIntents StoreBusterAdFundingIntent[]
   clubCoinRulesCreated ClubCoinRule[] @relation("ClubCoinRuleCreator")
   storePlanVersionsCreated StorePlanVersion[] @relation("StorePlanVersionCreator")
   storePlanAssignmentsMade StorePlanAssignment[] @relation("StorePlanAssignmentAdmin")
   storePlanSubscriptionsRequested StoreSubscription[] @relation("StoreSubscriptionRequester")
   providerConfigurationsCreated ProviderConfiguration[] @relation("ProviderConfigurationCreator")
   providerConfigurationsUpdated ProviderConfiguration[] @relation("ProviderConfigurationUpdater")
+  shippingCarriersCreated ShippingCarrierProvider[] @relation("ShippingCarrierCreator")
+  shippingCarriersUpdated ShippingCarrierProvider[] @relation("ShippingCarrierUpdater")
   manualExchangeRatesCreated ManualExchangeRateVersion[] @relation("ManualExchangeRateCreator")
   sellerCommissionPoliciesCreated SellerCommissionPolicyVersion[] @relation("SellerCommissionPolicyCreator")
   sellerCommissionReviewsCreated SellerCommissionReviewEvent[] @relation("SellerCommissionReviewCreator")
+  catalogSuggestionsSubmitted     CatalogSuggestion[]             @relation("CatalogSuggestionSubmitter")
+  catalogSuggestionsReviewed      CatalogSuggestion[]             @relation("CatalogSuggestionReviewer")
+  shipmentUpdatesCreated          ShipmentUpdate[]                @relation("ShipmentUpdateCreator")
+  buyerReceiptConfirmations       SellerOrder[]                   @relation("BuyerReceiptConfirmation")
+  orderResolutionCasesOpened     OrderResolutionCase[]             @relation("OrderResolutionBuyer")
+  orderResolutionCasesDecided     OrderResolutionCase[]             @relation("OrderResolutionDecider")
+  orderResolutionMessages         OrderResolutionMessage[]
+  supportTicketsOpened            SupportTicket[]                   @relation("SupportTicketBuyer")
+  supportTicketsAssigned           SupportTicket[]                   @relation("SupportTicketAssignee")
+  supportMessages                  SupportMessage[]
+  productReviews                   ProductReview[] @relation("ProductReviewAuthor")
+  moderatedProductReviews          ProductReview[] @relation("ProductReviewModerator")
+  liveAttendances                  LiveSessionAttendance[]
+  liveSessionReactions             LiveSessionReaction[]
+
+  @@index([role, accountStatus, createdAt])
 }
 
 model SavedAddress {
@@ -596,6 +706,7 @@ model SavedAddress {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId, isDefault, updatedAt])
 }
 
@@ -634,8 +745,10 @@ model CurrencyCatalogEntry {
   manualBaseRates      ManualExchangeRateVersion[] @relation("ManualFxBaseCurrency")
   manualQuoteRates     ManualExchangeRateVersion[] @relation("ManualFxQuoteCurrency")
   commissionReportingEntries SellerCommissionLedgerEntry[] @relation("CommissionReportingCurrency")
+  sellerCommissionPolicies SellerCommissionPolicyVersion[] @relation("SellerCommissionPolicyCurrency")
   orderItemCurrencies OrderItem[] @relation("OrderItemCurrencySnapshot")
   orderItemDisplayCurrencies OrderItem[] @relation("OrderItemDisplayCurrency")
+
   @@index([active, displayEnabled, region])
 }
 
@@ -649,6 +762,7 @@ model StoreCurrencyOffer {
   updatedAt      DateTime @updatedAt
   store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
   currencyEntry  CurrencyCatalogEntry @relation(fields: [currency], references: [code], onDelete: Restrict)
+
   @@unique([storeId, currency])
   @@index([currency, displayEnabled])
 }
@@ -663,6 +777,7 @@ model ExchangeRateSnapshot {
   fetchedAt      DateTime @default(now())
   baseEntry      CurrencyCatalogEntry @relation("FxBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict)
   quoteEntry     CurrencyCatalogEntry @relation("FxQuoteCurrency", fields: [quoteCurrency], references: [code], onDelete: Restrict)
+
   @@unique([baseCurrency, quoteCurrency, provider, sourceDate])
   @@index([baseCurrency, quoteCurrency, fetchedAt])
 }
@@ -683,6 +798,7 @@ model ManualExchangeRateVersion {
   baseEntry      CurrencyCatalogEntry @relation("ManualFxBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict)
   quoteEntry     CurrencyCatalogEntry @relation("ManualFxQuoteCurrency", fields: [quoteCurrency], references: [code], onDelete: Restrict)
   createdBy      User     @relation("ManualExchangeRateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
   @@unique([storeId, baseCurrency, quoteCurrency, version])
   @@index([storeId, baseCurrency, quoteCurrency, effectiveFrom, effectiveUntil])
 }
@@ -694,6 +810,7 @@ model Session {
   expiresAt DateTime
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId, expiresAt])
 }
 
@@ -719,12 +836,16 @@ model Seller {
   payoutLedgerEntries SellerPayoutLedgerEntry[]
   payouts SellerPayout[]
   shippingServices SellerShippingService[]
+  productDiscounts SellerProductDiscount[]
   sellerCommissionLedgerEntries SellerCommissionLedgerEntry[]
+  orderResolutionCases OrderResolutionCase[]
+  supportTickets SupportTicket[]
 }
 
 model Store {
   id          String @id @default(cuid())
   sellerId    String @unique
+  isPlatformStore Boolean @default(false)
   name        String
   description String?
   slug        String @unique @default(cuid())
@@ -747,12 +868,48 @@ model Store {
   contentPages    ContentPage[]
   mediaAssets     MediaAsset[]
   storeBusterCampaigns StoreBusterCampaign[]
+  storeBusterAdAccount StoreBusterAdAccount?
   emailSubscribers StoreEmailSubscriber[]
   emailCampaigns StoreEmailCampaign[]
   affiliateProgram StoreAffiliateProgram?
   currencyOffers StoreCurrencyOffer[]
   manualExchangeRates ManualExchangeRateVersion[]
   sellerCommissionPolicies SellerCommissionPolicyVersion[]
+  dropshippingConnections StoreDropshippingConnection[]
+  supplierProductImports SupplierProductImport[]
+}
+
+model StoreDropshippingConnection {
+  id                   String   @id @default(cuid())
+  storeId              String
+  provider             String
+  encryptedCredentials String   @db.Text
+  status               String   @default("CONNECTED")
+  connectedAt          DateTime @default(now())
+  lastCheckedAt        DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  store                Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, provider])
+  @@index([provider, status])
+}
+
+model SupplierProductImport {
+  id                   String   @id @default(cuid())
+  storeId              String
+  productId            String   @unique
+  provider             String
+  externalProductId    String
+  externalSku          String?
+  supplierCostUsdMinor Int?
+  sourceUrl            String?
+  importedAt           DateTime @default(now())
+  store                Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product              Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([storeId, provider, externalProductId])
+  @@index([storeId, importedAt])
 }
 
 model SellerStaff {
@@ -765,6 +922,7 @@ model SellerStaff {
   canManageShipping      Boolean @default(false)
   seller                 Seller  @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   user                   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
   @@unique([sellerId, userId])
 }
 
@@ -779,9 +937,14 @@ model Category {
   parentId String?
   parent Category? @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
   children Category[] @relation("CategoryTree")
+  catalogFeatures          CatalogFeature[]          @relation("FeatureCategory")
+  childCategorySuggestions CatalogSuggestion[]       @relation("SuggestedParentCategory")
+  featureSuggestions       CatalogSuggestion[]       @relation("SuggestedFeatureCategory")
   products Product[]
   affiliateCommissionRules AffiliateCommissionRule[]
   interestSignals StoreInterestSignal[]
+  productDiscountTargets SellerProductDiscountCategory[]
+
   @@index([parentId, status, displayOrder])
 }
 
@@ -796,7 +959,76 @@ model Brand {
   products    Product[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
   @@index([status, displayOrder])
+}
+
+model CatalogProductType {
+  id           String        @id @default(cuid())
+  name         String        @unique
+  slug         String        @unique
+  description  String?
+  requiresShipping Boolean   @default(true)
+  status       TaxonomyStatus @default(ACTIVE)
+  displayOrder Int           @default(0)
+  products     Product[]
+  features     CatalogFeature[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([status, displayOrder])
+}
+
+model CatalogFeature {
+  id           String                     @id @default(cuid())
+  name         String
+  slug         String                     @unique
+  categoryId   String?
+  productTypeId String?
+  status       TaxonomyStatus             @default(ACTIVE)
+  displayOrder Int                        @default(0)
+  category     Category?                  @relation("FeatureCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  productType  CatalogProductType?        @relation(fields: [productTypeId], references: [id], onDelete: SetNull)
+  products     ProductFeatureAssignment[]
+  createdAt    DateTime                   @default(now())
+  updatedAt    DateTime                   @updatedAt
+
+  @@index([categoryId, status, displayOrder])
+  @@index([productTypeId, status, displayOrder])
+}
+
+model CatalogSuggestion {
+  id               String                  @id @default(cuid())
+  kind             CatalogSuggestionKind
+  name             String
+  normalizedName   String
+  parentCategoryId String?
+  categoryId       String?
+  status           CatalogSuggestionStatus @default(PENDING)
+  submittedById    String
+  reviewedById     String?
+  reviewNote       String?
+  reviewedAt       DateTime?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  parentCategory   Category?               @relation("SuggestedParentCategory", fields: [parentCategoryId], references: [id], onDelete: SetNull)
+  featureCategory  Category?               @relation("SuggestedFeatureCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  submittedBy      User                    @relation("CatalogSuggestionSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  reviewedBy       User?                   @relation("CatalogSuggestionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([kind, normalizedName])
+}
+
+model ProductFeatureAssignment {
+  productId String
+  featureId String
+  createdAt DateTime       @default(now())
+  product   Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  feature   CatalogFeature @relation(fields: [featureId], references: [id], onDelete: Restrict)
+
+  @@id([productId, featureId])
+  @@index([featureId])
 }
 
 model Product {
@@ -804,10 +1036,13 @@ model Product {
   sellerId    String?
   categoryId  String?
   brandId     String?
+  productTypeId String
   name        String
   slug        String        @unique
   description String
+  color                    String?
   priceMinor  Int
+  salePriceMinor           Int?
   currency    String        @default("USD")
   status      ProductStatus @default(PENDING)
   barcode     String?
@@ -819,7 +1054,10 @@ model Product {
   seller      Seller?       @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   category    Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   brand       Brand?        @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  productType CatalogProductType @relation(fields: [productTypeId], references: [id], onDelete: Restrict)
+  featureAssignments       ProductFeatureAssignment[]
   images      ProductImage[]
+  mediaAttachments         ProductMedia[]
   inventory   Inventory?
   cartItems   CartItem[]
   orderItems OrderItem[]
@@ -832,12 +1070,18 @@ model Product {
   affiliateCommissionRules AffiliateCommissionRule[]
   interestSignals StoreInterestSignal[]
   storeBusterCampaigns StoreBusterCampaignProduct[]
+  storeBusterImpressions StoreBusterImpression[]
   campaignProducts MarketingCampaignProduct[]
   conversationProducts Conversation[]
   shippingDiscountProducts SellerShippingDiscountProduct[]
+  productDiscountTargets SellerProductDiscountProduct[] @relation("DiscountSelectedProducts")
+  supplierImport SupplierProductImport?
+  reviews     ProductReview[]
+
   @@index([status, categoryId])
   @@index([sellerId, status])
   @@index([brandId, status])
+  @@index([productTypeId, status])
   @@index([barcode])
 }
 
@@ -849,6 +1093,22 @@ model ProductImage {
   alt           String
   product       Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   mediaAsset    MediaAsset? @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+
+  @@index([mediaAssetId])
+}
+
+model ProductMedia {
+  id           String     @id @default(cuid())
+  productId    String
+  mediaAssetId String
+  position     Int        @default(0)
+  label        String?
+  createdAt    DateTime   @default(now())
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  mediaAsset   MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, mediaAssetId])
+  @@index([productId, position])
   @@index([mediaAssetId])
 }
 
@@ -875,6 +1135,7 @@ model ProductVariant {
   cartItems   CartItem[]
   orderItems  OrderItem[]
   wholesaleTiers WholesaleTierPrice[]
+
   @@index([productId, status])
 }
 
@@ -895,6 +1156,7 @@ model CartItem {
   cart      Cart @relation(fields: [cartId], references: [id], onDelete: Cascade)
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
   @@unique([cartId, productId])
   @@index([variantId])
 }
@@ -919,6 +1181,9 @@ model ParentOrder {
   affiliateAdjustments AffiliateAdjustment[]
   commissionReviewEvents SellerCommissionReviewEvent[]
   processedWebhookEvents ProcessedWebhookEvent[]
+  orderResolutionCases OrderResolutionCase[]
+  supportTickets SupportTicket[]
+
   @@index([buyerId, createdAt])
 }
 
@@ -928,16 +1193,96 @@ model SellerOrder {
   sellerId   String?
   status     OrderStatus @default(PENDING)
   totalMinor Int
+  discountCode String?
+  discountMinor Int @default(0)
   shippingSnapshotJson Json?
+  shipmentStatus ShipmentStatus?
+  shippingCarrier String? @db.VarChar(120)
+  trackingNumber String? @db.VarChar(160)
+  trackingUrl String? @db.VarChar(2000)
+  shippedAt DateTime?
+  deliveredAt DateTime?
+  receivedAt DateTime?
+  receiptConfirmedById String?
   commissionSnapshotJson Json?
   commissionPolicyVersionId String?
   parent     ParentOrder @relation(fields: [parentId], references: [id], onDelete: Restrict)
   seller     Seller? @relation(fields: [sellerId], references: [id], onDelete: SetNull)
   commissionPolicyVersion SellerCommissionPolicyVersion? @relation(fields: [commissionPolicyVersionId], references: [id], onDelete: Restrict)
   items      OrderItem[]
+  shipmentUpdates ShipmentUpdate[]
+  receiptConfirmedBy User? @relation("BuyerReceiptConfirmation", fields: [receiptConfirmedById], references: [id], onDelete: SetNull)
   payoutLedgerEntries SellerPayoutLedgerEntry[]
   sellerCommissionEntries SellerCommissionLedgerEntry[]
+  resolutionCase OrderResolutionCase?
+  supportTickets SupportTicket[]
+  productReviews ProductReview[]
+
   @@index([sellerId, status])
+  @@index([shipmentStatus, shippedAt])
+  @@index([receivedAt])
+}
+
+model ShipmentUpdate {
+  id String @id @default(cuid())
+  sellerOrderId String
+  status ShipmentStatus
+  carrier String? @db.VarChar(120)
+  trackingNumber String? @db.VarChar(160)
+  trackingUrl String? @db.VarChar(2000)
+  note String? @db.VarChar(500)
+  createdById String
+  createdAt DateTime @default(now())
+  sellerOrder SellerOrder @relation(fields: [sellerOrderId], references: [id], onDelete: Restrict)
+  createdBy User @relation("ShipmentUpdateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([sellerOrderId, createdAt])
+}
+
+model OrderResolutionCase {
+  id                         String   @id
+  parentOrderId              String
+  sellerOrderId              String   @unique
+  buyerId                    String
+  sellerId                   String?
+  type                       String   @db.VarChar(32)
+  status                     String   @default("OPEN") @db.VarChar(32)
+  reason                     String   @db.VarChar(80)
+  description                String   @db.VarChar(3000)
+  requestedAmountMinor       Int?
+  approvedAmountMinor        Int?
+  resolutionNote             String?  @db.VarChar(1500)
+  providerWebhookEventRowId  String?
+  manualRefundReference      String?  @db.VarChar(200)
+  decidedById                String?
+  settledAt                  DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  parentOrder                ParentOrder @relation(fields: [parentOrderId], references: [id], onDelete: Restrict)
+  sellerOrder                SellerOrder @relation(fields: [sellerOrderId], references: [id], onDelete: Restrict)
+  buyer                      User @relation("OrderResolutionBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  seller                     Seller? @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  decidedBy                  User? @relation("OrderResolutionDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  providerWebhookEvent       ProcessedWebhookEvent? @relation(fields: [providerWebhookEventRowId], references: [id], onDelete: Restrict)
+  messages                   OrderResolutionMessage[]
+
+  @@index([status, updatedAt])
+  @@index([buyerId, createdAt])
+  @@index([sellerId, createdAt])
+  @@index([parentOrderId, status])
+}
+
+model OrderResolutionMessage {
+  id        String   @id
+  caseId    String
+  authorId  String
+  authorRole String  @db.VarChar(24)
+  body      String   @db.VarChar(3000)
+  createdAt DateTime @default(now())
+  resolutionCase OrderResolutionCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([caseId, createdAt])
 }
 
 model OrderItem {
@@ -947,6 +1292,7 @@ model OrderItem {
   productName   String
   unitPriceMinor Int
   quantity      Int
+  discountMinor Int @default(0)
   currencySnapshot String? @db.VarChar(3)
   displayAmountMinor Int?
   displayCurrency String? @db.VarChar(3)
@@ -962,6 +1308,7 @@ model OrderItem {
   sellerCommissionEntries SellerCommissionLedgerEntry[]
   currencySnapshotEntry CurrencyCatalogEntry? @relation("OrderItemCurrencySnapshot", fields: [currencySnapshot], references: [code], onDelete: Restrict)
   displayCurrencyEntry CurrencyCatalogEntry? @relation("OrderItemDisplayCurrency", fields: [displayCurrency], references: [code], onDelete: Restrict)
+
   @@index([variantId])
 }
 
@@ -974,6 +1321,7 @@ model Payment {
   paidAt      DateTime?
   parent      ParentOrder @relation(fields: [parentId], references: [id], onDelete: Restrict)
   attempts    PaymentAttempt[]
+
   @@index([method, status])
 }
 
@@ -987,6 +1335,7 @@ model PaymentAttempt {
   metadata    Json?
   createdAt   DateTime @default(now())
   payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
   @@unique([provider, providerRef])
   @@index([idempotencyKey])
 }
@@ -1009,6 +1358,8 @@ model ProcessedWebhookEvent {
   providerTotalMinor Int?
   identityVerified Boolean @default(true)
   parentOrder ParentOrder? @relation(fields: [parentOrderId], references: [id], onDelete: Restrict)
+  orderResolutionCases OrderResolutionCase[]
+
   @@unique([provider, eventId])
   @@index([provider, reviewReason])
   @@index([parentOrderId, provider, receivedAt])
@@ -1017,6 +1368,7 @@ model ProcessedWebhookEvent {
 
 model MarketplaceSettings {
   id               String  @id @default("default")
+  enabledLanguages String[] @default(["en", "fil"])
   multiVendorEnabled Boolean @default(true)
   sellerShippingEnabled Boolean @default(true)
   liveShoppingEnabled Boolean @default(false)
@@ -1054,11 +1406,26 @@ model MarketplaceSettings {
   updatedAt         DateTime @updatedAt
 }
 
+model LiveKitConfiguration {
+  id                    String   @id @default("default")
+  serverUrl             String
+  apiKeyCiphertext      String?
+  apiSecretCiphertext   String?
+  deploymentGateEnabled Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  updatedById           String?
+
+  @@index([deploymentGateEnabled])
+}
+
 model SellerShippingService {
   id                String   @id @default(cuid())
   sellerId          String
+  carrierProviderId String?
   name              String   @db.VarChar(120)
   enabled           Boolean  @default(true)
+  supportsCod       Boolean  @default(false)
   feeMinor          Int
   currency          String   @default("USD") @db.VarChar(3)
   estimatedMinDays  Int?
@@ -1066,10 +1433,30 @@ model SellerShippingService {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   seller            Seller   @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  carrierProvider   ShippingCarrierProvider? @relation(fields: [carrierProviderId], references: [id], onDelete: SetNull)
   zones             SellerShippingZone[]
   discounts         SellerShippingDiscount[]
 
   @@index([sellerId, enabled])
+  @@index([carrierProviderId])
+}
+
+model ShippingCarrierProvider {
+  id                  String   @id @default(cuid())
+  code                String   @unique @db.VarChar(64)
+  name                String   @db.VarChar(120)
+  countries           String[] @default([])
+  trackingUrlTemplate String?  @db.VarChar(500)
+  enabled             Boolean  @default(true)
+  createdById         String?
+  updatedById         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  createdBy           User?    @relation("ShippingCarrierCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy           User?    @relation("ShippingCarrierUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  services            SellerShippingService[]
+
+  @@index([enabled, name])
 }
 
 model SellerShippingZone {
@@ -1117,6 +1504,52 @@ model SellerShippingDiscountProduct {
   @@index([productId])
 }
 
+model SellerProductDiscount {
+  id                  String               @id @default(cuid())
+  sellerId            String
+  name                String               @db.VarChar(120)
+  code                String               @db.VarChar(64)
+  normalizedCode      String               @unique @db.VarChar(64)
+  kind                ProductDiscountKind
+  scope               ProductDiscountScope
+  percentBasisPoints  Int?
+  amountMinor         Int?
+  currency            String               @db.VarChar(3)
+  minimumSubtotalMinor Int?
+  usageLimit           Int?
+  usesCount            Int                  @default(0)
+  startsAt             DateTime?
+  endsAt               DateTime?
+  enabled              Boolean              @default(true)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  seller               Seller               @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  products             SellerProductDiscountProduct[]
+  categories           SellerProductDiscountCategory[]
+
+  @@index([sellerId, enabled, startsAt, endsAt])
+}
+
+model SellerProductDiscountProduct {
+  discountId String
+  productId  String
+  discount   SellerProductDiscount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  product    Product               @relation("DiscountSelectedProducts", fields: [productId], references: [id], onDelete: Restrict)
+
+  @@id([discountId, productId])
+  @@index([productId])
+}
+
+model SellerProductDiscountCategory {
+  discountId String
+  categoryId String
+  discount   SellerProductDiscount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  category   Category              @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@id([discountId, categoryId])
+  @@index([categoryId])
+}
+
 model LiveSession {
   id                 String            @id @default(cuid())
   sellerId           String
@@ -1139,8 +1572,82 @@ model LiveSession {
   products           LiveSessionProduct[]
   reports            LiveSessionReport[]
   providerEvents     LiveProviderEvent[]
+  attendances        LiveSessionAttendance[]
+  reactions          LiveSessionReaction[]
+  views              LiveSessionView[]
+
   @@index([status, scheduledAt])
   @@index([sellerId, status])
+}
+
+model LiveSessionAttendance {
+  id                    String     @id @default(cuid())
+  sessionId             String
+  userId                String
+  startedAt             DateTime   @default(now())
+  lastHeartbeatAt       DateTime   @default(now())
+  eligibleDurationSeconds Int      @default(0)
+  rewardedAt            DateTime?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+  session               LiveSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  user                  User       @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, userId])
+  @@index([sessionId, eligibleDurationSeconds])
+  @@index([userId, createdAt])
+}
+
+model LiveSessionReaction {
+  sessionId String
+  userId    String
+  reaction  LiveSessionReactionKind
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+  session   LiveSession             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user      User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, userId])
+  @@index([sessionId, reaction])
+  @@index([userId, updatedAt])
+}
+
+model LiveSessionView {
+  id            String      @id @default(cuid())
+  sessionId     String
+  viewerKeyHash String      @db.VarChar(64)
+  createdAt     DateTime    @default(now())
+  lastViewedAt  DateTime    @default(now())
+  session       LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, viewerKeyHash])
+  @@index([sessionId, lastViewedAt])
+}
+
+model ProductReview {
+  id                 String             @id @default(cuid())
+  productId          String
+  userId             String
+  sellerOrderId      String
+  rating             Int
+  title              String             @db.VarChar(120)
+  body               String             @db.VarChar(3000)
+  status             ProductReviewStatus @default(PENDING)
+  verifiedPurchase   Boolean            @default(true)
+  moderationNote     String?            @db.VarChar(1000)
+  moderatedById      String?
+  reviewedAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  product            Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  user               User               @relation("ProductReviewAuthor", fields: [userId], references: [id], onDelete: Restrict)
+  sellerOrder        SellerOrder        @relation(fields: [sellerOrderId], references: [id], onDelete: Restrict)
+  moderatedBy        User?              @relation("ProductReviewModerator", fields: [moderatedById], references: [id], onDelete: SetNull)
+
+  @@unique([productId, userId])
+  @@index([status, createdAt])
+  @@index([productId, status, createdAt])
+  @@index([sellerOrderId, status])
 }
 
 model LiveSessionProduct {
@@ -1151,6 +1658,7 @@ model LiveSessionProduct {
   featured  Boolean     @default(false)
   session   LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   product   Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+
   @@unique([sessionId, productId])
   @@unique([sessionId, sortOrder])
   @@index([productId])
@@ -1168,6 +1676,7 @@ model LiveSessionReport {
   session    LiveSession      @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   reporter   User?            @relation(fields: [reporterId], references: [id], onDelete: SetNull)
   reviewedBy User?            @relation("ReviewedLiveReports", fields: [reviewedById], references: [id], onDelete: SetNull)
+
   @@index([sessionId, status, createdAt])
 }
 
@@ -1180,6 +1689,7 @@ model LiveProviderEvent {
   payloadJson Json?
   receivedAt DateTime    @default(now())
   session    LiveSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
   @@unique([provider, eventId])
   @@index([sessionId, receivedAt])
 }
@@ -1207,6 +1717,7 @@ model ProviderConfiguration {
   createdBy      User                     @relation("ProviderConfigurationCreator", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy      User                     @relation("ProviderConfigurationUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
   credentials    ProviderCredentialReference[]
+
   @@index([provider, context, environment, archivedAt])
   @@index([context, environment, enabled, archivedAt])
 }
@@ -1219,6 +1730,7 @@ model ProviderCredentialReference {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   configuration     ProviderConfiguration @relation(fields: [configurationId], references: [id], onDelete: Restrict)
+
   @@unique([configurationId, credentialKey])
   @@index([configurationId])
 }
@@ -1243,6 +1755,7 @@ model AuditLog {
   metadata  Json?
   createdAt DateTime @default(now())
   actor     User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
   @@index([entity, entityId, createdAt])
 }
 
@@ -1270,6 +1783,7 @@ model PlatformBrandingRevision {
   createdAt   DateTime @default(now())
   branding    PlatformBranding @relation(fields: [brandingId], references: [id], onDelete: Cascade)
   editor      User @relation(fields: [editorId], references: [id], onDelete: Restrict)
+
   @@unique([brandingId, version])
   @@index([brandingId, createdAt])
 }
@@ -1284,6 +1798,7 @@ model StoreThemeRevision {
   createdAt   DateTime @default(now())
   store       Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
   editor      User @relation(fields: [editorId], references: [id], onDelete: Restrict)
+
   @@unique([storeId, version])
   @@index([storeId, createdAt])
 }
@@ -1325,6 +1840,9 @@ model StorePlanVersion {
   allowedThemes         StoreThemePreset[]         @default([CLASSIC, EDITORIAL, BOUTIQUE])
   customDomainEligible  Boolean                   @default(false)
   paymentConnectors     StorePaymentConnector[]   @default([])
+  sellerManagedPaymentsEnabled Boolean             @default(false)
+  sellerManagedCarrierAccountsEnabled Boolean      @default(false)
+  dropshippingEnabled   Boolean                   @default(false)
   mobileTemplates       MobileStorefrontTemplate[] @default([RESPONSIVE_STANDARD])
   blogPostLimit         Int                       @default(2147483647)
   contentPageLimit      Int                       @default(2147483647)
@@ -1346,6 +1864,7 @@ model StorePlanVersion {
   assignments           StorePlanAssignment[]
   subscriptions         StoreSubscription[]
   sellerCommissionPolicies SellerCommissionPolicyVersion[]
+
   @@unique([planId, version])
   @@index([planId, status, version])
 }
@@ -1364,6 +1883,7 @@ model StorePlanAssignment {
   store          Store                        @relation(fields: [storeId], references: [id], onDelete: Restrict)
   planVersion    StorePlanVersion             @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
   assignedBy     User?                        @relation("StorePlanAssignmentAdmin", fields: [assignedById], references: [id], onDelete: SetNull)
+
   @@index([storeId, status, effectiveFrom])
   @@index([planVersionId, status])
 }
@@ -1404,11 +1924,12 @@ model StoreSubscription {
   requestedBy           User?                        @relation("StoreSubscriptionRequester", fields: [requestedById], references: [id], onDelete: SetNull)
   invoices              StoreSubscriptionInvoice[]
   events                StoreSubscriptionEvent[]
-  @@index([storeId, status, createdAt])
-  @@index([planVersionId, status])
+
   @@unique([provider, providerSubscriptionId])
   @@unique([provider, providerCheckoutSessionId])
   @@unique([storeId, requestKeyHash])
+  @@index([storeId, status, createdAt])
+  @@index([planVersionId, status])
 }
 
 model StoreSubscriptionInvoice {
@@ -1427,6 +1948,7 @@ model StoreSubscriptionInvoice {
   paidAt            DateTime?
   createdAt         DateTime                         @default(now())
   subscription      StoreSubscription                @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
   @@unique([provider, providerInvoiceId])
   @@index([subscriptionId, createdAt])
 }
@@ -1444,6 +1966,7 @@ model StoreSubscriptionEvent {
   receivedAt          DateTime                     @default(now())
   processedAt         DateTime?
   subscription        StoreSubscription?           @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
   @@unique([provider, providerEventId])
   @@index([subscriptionId, receivedAt])
   @@index([status, receivedAt])
@@ -1457,6 +1980,7 @@ model SellerAdminNote {
   createdAt DateTime @default(now())
   seller    Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   author    User @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
   @@index([sellerId, createdAt])
 }
 
@@ -1470,6 +1994,7 @@ model SellerModerationEvent {
   createdAt  DateTime @default(now())
   seller     Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   actor      User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
   @@index([sellerId, createdAt])
 }
 
@@ -1494,6 +2019,7 @@ model SellerPayoutMethod {
   createdBy         User @relation("PayoutMethodCreator", fields: [createdById], references: [id], onDelete: Restrict)
   payouts           SellerPayout[]
   walletWithdrawalRequests WalletWithdrawalRequest[]
+
   @@unique([sellerId, type])
   @@index([status, type])
 }
@@ -1516,6 +2042,7 @@ model SellerPayoutLedgerEntry {
   orderItem      OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
   createdBy      User? @relation("PayoutLedgerCreator", fields: [createdById], references: [id], onDelete: SetNull)
   payoutItems    SellerPayoutItem[]
+
   @@index([sellerId, createdAt])
   @@index([sellerOrderId])
   @@index([orderItemId])
@@ -1548,6 +2075,7 @@ model SellerPayout {
   reviewedBy      User? @relation("PayoutReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   items           SellerPayoutItem[]
   providerEvents  SellerPayoutProviderEvent[]
+
   @@index([sellerId, status, createdAt])
 }
 
@@ -1557,6 +2085,7 @@ model SellerPayoutItem {
   amountMinor Int
   payout    SellerPayout @relation(fields: [payoutId], references: [id], onDelete: Restrict)
   ledger    SellerPayoutLedgerEntry @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+
   @@id([payoutId, ledgerId])
 }
 
@@ -1569,6 +2098,7 @@ model SellerPayoutProviderEvent {
   payloadJson Json?
   receivedAt  DateTime @default(now())
   payout      SellerPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
   @@unique([provider, eventId])
   @@index([payoutId, receivedAt])
 }
@@ -1588,6 +2118,7 @@ model WalletAccount {
   outgoingTransfers     WalletTransfer[]     @relation("WalletTransferSource")
   incomingTransfers     WalletTransfer[]     @relation("WalletTransferDestination")
   withdrawalRequests    WalletWithdrawalRequest[]
+
   @@index([type, status])
 }
 
@@ -1601,6 +2132,7 @@ model WalletBalance {
   frozenMinor    Int           @default(0)
   updatedAt      DateTime      @updatedAt
   account        WalletAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
   @@unique([accountId, currency])
   @@index([currency, updatedAt])
 }
@@ -1617,6 +2149,7 @@ model WalletLedgerTransaction {
   createdAt      DateTime               @default(now())
   postings       WalletLedgerPosting[]
   allocations    WalletBalanceAllocation[]
+
   @@index([referenceType, referenceId, createdAt])
   @@index([currency, createdAt])
 }
@@ -1631,6 +2164,7 @@ model WalletLedgerPosting {
   createdAt     DateTime               @default(now())
   transaction   WalletLedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
   account       WalletAccount           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
   @@index([accountId, currency, createdAt])
   @@index([transactionId, direction])
 }
@@ -1651,6 +2185,7 @@ model WalletBalanceAllocation {
   createdAt          DateTime            @default(now())
   account            WalletAccount       @relation(fields: [accountId], references: [id], onDelete: Restrict)
   transaction        WalletLedgerTransaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
   @@index([accountId, currency, state, createdAt])
   @@index([transactionId])
   @@index([referenceType, referenceId])
@@ -1679,6 +2214,7 @@ model WalletFundingIntent {
   resolvedAt      DateTime?
   user            User                @relation(fields: [userId], references: [id], onDelete: Restrict)
   account         WalletAccount       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
   @@index([userId, status, createdAt])
 }
 
@@ -1700,6 +2236,7 @@ model WalletTransfer {
   recipient         User                 @relation("WalletTransferRecipient", fields: [recipientId], references: [id], onDelete: Restrict)
   sourceAccount     WalletAccount        @relation("WalletTransferSource", fields: [sourceAccountId], references: [id], onDelete: Restrict)
   destinationAccount WalletAccount       @relation("WalletTransferDestination", fields: [destinationAccountId], references: [id], onDelete: Restrict)
+
   @@index([senderId, status, createdAt])
   @@index([recipientId, status, createdAt])
 }
@@ -1721,6 +2258,7 @@ model WalletWithdrawalRequest {
   user            User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
   account         WalletAccount          @relation(fields: [accountId], references: [id], onDelete: Restrict)
   payoutMethod    SellerPayoutMethod?   @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
+
   @@index([userId, status, createdAt])
 }
 
@@ -1734,6 +2272,7 @@ model ClubCoinAccount {
   user      User                @relation(fields: [userId], references: [id], onDelete: Restrict)
   entries   ClubCoinEntry[]
   redemptions ClubCoinRedemption[]
+
   @@index([status, updatedAt])
 }
 
@@ -1753,6 +2292,7 @@ model ClubCoinEntry {
   createdAt       DateTime         @default(now())
   account         ClubCoinAccount  @relation(fields: [accountId], references: [id], onDelete: Restrict)
   user            User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+
   @@index([accountId, createdAt])
   @@index([userId, referenceType, referenceId])
   @@index([expiresAt])
@@ -1775,6 +2315,7 @@ model ClubCoinRule {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   createdBy        User?            @relation("ClubCoinRuleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
   @@index([eventType, enabled, effectiveFrom])
 }
 
@@ -1791,6 +2332,7 @@ model ClubCoinRedemption {
   createdAt      DateTime                @default(now())
   user           User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
   account        ClubCoinAccount         @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
   @@index([userId, status, createdAt])
 }
 
@@ -1841,6 +2383,7 @@ model BlogPost {
   tags           BlogPostTag[]
   revisions      BlogPostRevision[]
   previewTokens  ContentPreviewToken[]
+
   @@index([status, publishedAt])
   @@index([categoryId, status])
   @@index([storeId, status, updatedAt])
@@ -1851,6 +2394,7 @@ model BlogPostTag {
   tagId  String
   post   BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
   tag    BlogTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
   @@id([postId, tagId])
 }
 
@@ -1868,6 +2412,7 @@ model BlogPostRevision {
   createdAt      DateTime @default(now())
   post           BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
   editor         User     @relation(fields: [editorId], references: [id], onDelete: Restrict)
+
   @@unique([postId, revisionNumber])
   @@index([postId, createdAt])
 }
@@ -1903,6 +2448,7 @@ model ContentPage {
   ogImage        MediaAsset?      @relation("PageOgImage", fields: [ogImageId], references: [id], onDelete: SetNull)
   revisions      ContentPageRevision[]
   previewTokens  ContentPreviewToken[]
+
   @@index([status, publishedAt])
   @@index([parentId, navPlacement, navOrder])
   @@index([storeId, status, updatedAt])
@@ -1921,6 +2467,7 @@ model ContentPageRevision {
   createdAt      DateTime    @default(now())
   page           ContentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
   editor         User        @relation(fields: [editorId], references: [id], onDelete: Restrict)
+
   @@unique([pageId, revisionNumber])
   @@index([pageId, createdAt])
 }
@@ -1962,8 +2509,11 @@ model MediaAsset {
   storeLogos    Store[]         @relation("StoreLogo")
   storeBanners  Store[]         @relation("StoreBanner")
   productImages ProductImage[]
+  productMedia     ProductMedia[]
+
   @@index([scanStatus, kind, createdAt])
   @@index([storeId, uploadStatus, createdAt])
+  @@index([scanStatus, uploadStatus, scanStartedAt], map: "MediaAsset_scan_retry_idx")
 }
 
 model StoreInterestSignal {
@@ -1976,6 +2526,7 @@ model StoreInterestSignal {
   user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   product    Product?                @relation(fields: [productId], references: [id], onDelete: SetNull)
   category   Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
   @@index([userId, createdAt])
   @@index([userId, categoryId, createdAt])
   @@index([userId, productId, createdAt])
@@ -2013,6 +2564,8 @@ model StoreBusterCampaign {
   products              StoreBusterCampaignProduct[]
   metrics               StoreBusterDailyMetric[]
   impressions           StoreBusterImpression[]
+  adLedgerEntries       StoreBusterAdLedgerEntry[]
+
   @@index([storeId, status, updatedAt])
   @@index([status, sponsored, updatedAt])
 }
@@ -2022,6 +2575,7 @@ model StoreBusterCampaignProduct {
   productId  String
   campaign   StoreBusterCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   product    Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+
   @@id([campaignId, productId])
   @@index([productId])
 }
@@ -2032,8 +2586,10 @@ model StoreBusterDailyMetric {
   day         DateTime @db.Date
   impressions Int      @default(0)
   clicks      Int      @default(0)
+  spendMinor  Int      @default(0)
   createdAt   DateTime @default(now())
   campaign    StoreBusterCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+
   @@unique([campaignId, day])
   @@index([day])
 }
@@ -2045,10 +2601,89 @@ model StoreBusterImpression {
   day        DateTime @db.Date
   expiresAt  DateTime
   clickedAt  DateTime?
+  shownAt    DateTime?
+  productId  String?
   createdAt  DateTime @default(now())
   campaign   StoreBusterCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  product    Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
+
   @@index([campaignId, day])
   @@index([expiresAt])
+}
+
+model StoreBusterAdAccount {
+  id             String                     @id @default(cuid())
+  storeId        String                     @unique
+  currency       String                     @db.VarChar(3)
+  availableMinor Int                        @default(0)
+  status         StoreBusterAdAccountStatus @default(ACTIVE)
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+  store          Store                      @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  ledgerEntries  StoreBusterAdLedgerEntry[]
+  fundingIntents StoreBusterAdFundingIntent[]
+
+  @@index([status, updatedAt])
+}
+
+model StoreBusterAdFundingIntent {
+  id                  String                   @id @default(cuid())
+  accountId           String
+  createdById         String
+  amountMinor         Int
+  currency            String                   @db.VarChar(3)
+  provider            String                   @db.VarChar(16)
+  status              StoreBusterFundingStatus @default(PENDING)
+  providerOrderRef    String?                  @unique
+  providerPaymentRef  String?                  @unique
+  providerCheckoutRef String?                  @unique
+  expiresAt           DateTime
+  paidAt              DateTime?
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  account             StoreBusterAdAccount     @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  createdBy           User                     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  ledgerEntry         StoreBusterAdLedgerEntry?
+  events              StoreBusterFundingEvent[]
+
+  @@index([accountId, status, createdAt])
+  @@index([status, expiresAt])
+}
+
+model StoreBusterFundingEvent {
+  id              String                     @id @default(cuid())
+  provider        String                     @db.VarChar(16)
+  eventId         String                     @db.VarChar(255)
+  eventType       String                     @db.VarChar(100)
+  fundingIntentId String?
+  amountMinor     Int?
+  currency        String?                    @db.VarChar(3)
+  reviewReason    String?                    @db.VarChar(500)
+  createdAt       DateTime                   @default(now())
+  fundingIntent   StoreBusterAdFundingIntent? @relation(fields: [fundingIntentId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, eventId])
+  @@index([fundingIntentId, createdAt])
+  @@index([reviewReason, createdAt])
+}
+
+model StoreBusterAdLedgerEntry {
+  id                String                        @id @default(cuid())
+  accountId         String
+  fundingIntentId   String?                       @unique
+  campaignId        String?
+  type              StoreBusterAdLedgerEntryType
+  amountMinor       Int
+  balanceAfterMinor Int
+  currency          String                        @db.VarChar(3)
+  idempotencyKey    String                        @unique @db.VarChar(255)
+  createdAt         DateTime                      @default(now())
+  account           StoreBusterAdAccount          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  fundingIntent     StoreBusterAdFundingIntent?   @relation(fields: [fundingIntentId], references: [id], onDelete: Restrict)
+  campaign          StoreBusterCampaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, createdAt])
+  @@index([campaignId, createdAt])
 }
 
 model StoreAffiliateProgram {
@@ -2068,6 +2703,7 @@ model StoreEmailSubscriber {
   consentRecordedAt        DateTime?
   consentSource            String?
   confirmationTokenHash    String?                    @unique
+  confirmationExpiresAt    DateTime?
   unsubscribeTokenHash     String                     @unique
   suppressedAt             DateTime?
   suppressionReason        String?
@@ -2075,6 +2711,8 @@ model StoreEmailSubscriber {
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt
   store                    Store                      @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  deliveries               StoreEmailDelivery[]
+
   @@unique([storeId, email])
   @@index([storeId, status, createdAt])
 }
@@ -2086,10 +2724,37 @@ model StoreEmailCampaign {
   subject     String
   contentJson Json
   status      StoreEmailCampaignStatus @default(DRAFT)
+  recipientCount Int @default(0)
+  sentCount   Int @default(0)
+  failedCount Int @default(0)
+  queuedAt    DateTime?
+  sentAt      DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   store       Store    @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  deliveries  StoreEmailDelivery[]
+
   @@index([storeId, status, updatedAt])
+}
+
+model StoreEmailDelivery {
+  id             String                   @id @default(cuid())
+  campaignId     String
+  subscriberId   String
+  status         StoreEmailDeliveryStatus @default(PENDING)
+  attempts       Int                      @default(0)
+  nextAttemptAt  DateTime                 @default(now())
+  claimedAt      DateTime?
+  sentAt         DateTime?
+  lastErrorCode  String?                  @db.VarChar(80)
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  campaign       StoreEmailCampaign       @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  subscriber     StoreEmailSubscriber     @relation(fields: [subscriberId], references: [id], onDelete: Restrict)
+
+  @@unique([campaignId, subscriberId])
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([subscriberId, status])
 }
 
 model SlugRedirect {
@@ -2100,6 +2765,7 @@ model SlugRedirect {
   createdById    String
   createdAt      DateTime @default(now())
   createdBy      User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
   @@index([destinationPath])
 }
 
@@ -2115,6 +2781,7 @@ model ContentPreviewToken {
   post       BlogPost?   @relation(fields: [postId], references: [id], onDelete: Cascade)
   page       ContentPage? @relation(fields: [pageId], references: [id], onDelete: Cascade)
   createdBy  User        @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
   @@index([expiresAt])
 }
 
@@ -2125,6 +2792,7 @@ model Favorite {
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
   @@unique([userId, productId])
   @@index([productId, createdAt])
 }
@@ -2139,6 +2807,7 @@ model WholesaleApplication {
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
   user      User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+
   @@index([status, createdAt])
 }
 
@@ -2152,6 +2821,7 @@ model WholesaleTierPrice {
   createdAt   DateTime @default(now())
   product     Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
   @@unique([productId, variantId, minQuantity])
   @@index([productId, minQuantity])
 }
@@ -2176,9 +2846,11 @@ model SellerCommissionPolicyVersion {
   activatedAt    DateTime?
   store          Store?                     @relation(fields: [storeId], references: [id], onDelete: Restrict)
   planVersion    StorePlanVersion?          @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
+  currencyEntry  CurrencyCatalogEntry       @relation("SellerCommissionPolicyCurrency", fields: [currency], references: [code], onDelete: Restrict)
   creator        User                       @relation("SellerCommissionPolicyCreator", fields: [createdById], references: [id], onDelete: Restrict)
   sellerOrders   SellerOrder[]
   entries        SellerCommissionLedgerEntry[]
+
   @@unique([storeId, version])
   @@unique([planVersionId, version])
   @@index([storeId, status, effectiveFrom])
@@ -2195,7 +2867,7 @@ model SellerCommissionLedgerEntry {
   amountMinor        Int
   eligibleBaseMinor  Int
   currency           String                    @db.VarChar(3)
-  idempotencyKey     String                    @unique
+  idempotencyKey     String                    @unique @db.VarChar(255)
   sourceEventId      String?
   reversalOfId       String?
   reason             String?
@@ -2210,6 +2882,7 @@ model SellerCommissionLedgerEntry {
   reportingCurrencyEntry CurrencyCatalogEntry? @relation("CommissionReportingCurrency", fields: [reportingCurrency], references: [code], onDelete: Restrict)
   reversalOf         SellerCommissionLedgerEntry? @relation("SellerCommissionReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
   reversals          SellerCommissionLedgerEntry[] @relation("SellerCommissionReversal")
+
   @@index([sellerId, currency, createdAt])
   @@index([sellerOrderId, createdAt])
   @@index([orderItemId])
@@ -2225,7 +2898,7 @@ model SellerCommissionReviewEvent {
   status            SellerCommissionReviewStatus @default(NEEDS_ALLOCATION)
   amountMinor       Int
   currency          String                       @db.VarChar(3)
-  idempotencyKey    String                       @unique
+  idempotencyKey    String                       @unique @db.VarChar(255)
   reason            String                       @db.VarChar(500)
   allocationJson    Json?
   reviewedById      String?
@@ -2234,6 +2907,7 @@ model SellerCommissionReviewEvent {
   createdAt         DateTime                     @default(now())
   parentOrder       ParentOrder                  @relation(fields: [parentOrderId], references: [id], onDelete: Restrict)
   reviewedBy        User?                        @relation("SellerCommissionReviewCreator", fields: [reviewedById], references: [id], onDelete: Restrict)
+
   @@unique([provider, providerEventId])
   @@index([status, createdAt])
   @@index([parentOrderId, createdAt])
@@ -2256,6 +2930,7 @@ model AffiliateProfile {
   clicks              AffiliateClick[]
   commissions         CommissionLedger[]
   payouts             AffiliatePayout[]
+
   @@index([status, createdAt])
 }
 
@@ -2271,6 +2946,7 @@ model AffiliateLink {
   product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   seller      Seller?  @relation(fields: [sellerId], references: [id], onDelete: SetNull)
   clicks      AffiliateClick[]
+
   @@index([affiliateId, createdAt])
 }
 
@@ -2290,6 +2966,7 @@ model AffiliateClick {
   link          AffiliateLink @relation(fields: [linkId], references: [id], onDelete: Restrict)
   product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   order         ParentOrder? @relation("AffiliateConversion")
+
   @@index([affiliateId, clickedAt])
   @@index([expiresAt, convertedAt])
   @@index([affiliateId, visitorKeyHash, clickedAt])
@@ -2309,6 +2986,7 @@ model AffiliateCommissionRule {
   product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   commissions CommissionLedger[]
+
   @@index([effectiveFrom, effectiveTo])
 }
 
@@ -2337,6 +3015,7 @@ model CommissionLedger {
   reversalOf    CommissionLedger? @relation("CommissionReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
   reversals     CommissionLedger[] @relation("CommissionReversal")
   payoutItems   AffiliatePayoutItem[]
+
   @@index([affiliateId, status, createdAt])
   @@index([orderItemId])
   @@index([sourceEventId])
@@ -2358,6 +3037,7 @@ model AffiliatePayout {
   createdAt   DateTime             @default(now())
   affiliate   AffiliateProfile    @relation(fields: [affiliateId], references: [id], onDelete: Restrict)
   items       AffiliatePayoutItem[]
+
   @@index([affiliateId, status, createdAt])
 }
 
@@ -2367,6 +3047,7 @@ model AffiliatePayoutItem {
   amountMinor  Int
   payout       AffiliatePayout @relation(fields: [payoutId], references: [id], onDelete: Restrict)
   commission   CommissionLedger @relation(fields: [commissionId], references: [id], onDelete: Restrict)
+
   @@id([payoutId, commissionId])
 }
 
@@ -2385,6 +3066,7 @@ model AffiliateAdjustment {
   createdAt       DateTime                @default(now())
   order           ParentOrder             @relation(fields: [orderId], references: [id], onDelete: Restrict)
   orderItem       OrderItem?              @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+
   @@index([orderId, createdAt])
   @@index([providerEventId])
 }
@@ -2403,6 +3085,7 @@ model MarketingCampaign {
   updatedAt   DateTime       @updatedAt
   createdBy   User           @relation(fields: [createdById], references: [id], onDelete: Restrict)
   products    MarketingCampaignProduct[]
+
   @@index([status, startsAt, endsAt])
 }
 
@@ -2411,6 +3094,7 @@ model MarketingCampaignProduct {
   productId  String
   campaign   MarketingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   product    Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
   @@id([campaignId, productId])
 }
 
@@ -2427,6 +3111,7 @@ model Notification {
   readAt         DateTime?
   createdAt      DateTime                  @default(now())
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId, readAt, createdAt])
 }
 
@@ -2437,6 +3122,7 @@ model NotificationPreference {
   category String
   enabled  Boolean             @default(true)
   user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@unique([userId, channel, category])
 }
 
@@ -2451,6 +3137,7 @@ model PushSubscription {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId, expiresAt])
 }
 
@@ -2464,12 +3151,44 @@ model EmailOutbox {
   status          NotificationDeliveryStatus @default(PENDING)
   attempts        Int                       @default(0)
   nextAttemptAt   DateTime                  @default(now())
+  claimedAt       DateTime?
   providerMessageId String?
   lastError       String?
   createdById     String?
   createdAt       DateTime                  @default(now())
   recipientUser   User?                     @relation(fields: [recipientUserId], references: [id], onDelete: SetNull)
+
   @@index([status, nextAttemptAt])
+  @@index([status, claimedAt])
+}
+
+model EmailProviderConfiguration {
+  provider             String   @id @db.VarChar(32)
+  host                 String   @db.VarChar(255)
+  port                 Int
+  secure               Boolean  @default(false)
+  requireTls           Boolean  @default(true)
+  username             String?  @db.VarChar(255)
+  passwordCiphertext   String?  @db.Text
+  senderName           String   @db.VarChar(120)
+  senderEmail          String   @db.VarChar(320)
+  replyTo              String?  @db.VarChar(320)
+  verifiedAt           DateTime?
+  lastTestAt           DateTime?
+  lastTestCode         String?  @db.VarChar(40)
+  updatedById          String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  activeSelection      PlatformEmailProviderSelection?
+}
+
+model PlatformEmailProviderSelection {
+  id          String                    @id
+  provider    String?                   @unique @db.VarChar(32)
+  updatedById String?
+  updatedAt   DateTime                  @updatedAt
+  configuration EmailProviderConfiguration? @relation(fields: [provider], references: [provider], onDelete: SetNull)
 }
 
 model Conversation {
@@ -2486,6 +3205,7 @@ model Conversation {
   product   Product?           @relation(fields: [productId], references: [id], onDelete: SetNull)
   order     ParentOrder?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
   messages  Message[]
+
   @@index([buyerId, updatedAt])
   @@index([sellerId, updatedAt])
 }
@@ -2500,7 +3220,49 @@ model Message {
   readAt         DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
   sender         User     @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
   @@index([conversationId, sentAt])
+}
+
+model SupportTicket {
+  id              String   @id @default(cuid())
+  ticketNumber    String   @unique @db.VarChar(40)
+  buyerId         String
+  sellerId        String?
+  parentOrderId   String?
+  sellerOrderId   String?
+  subject         String   @db.VarChar(140)
+  category        String   @default("OTHER") @db.VarChar(24)
+  status          String   @default("OPEN") @db.VarChar(24)
+  priority        String   @default("NORMAL") @db.VarChar(16)
+  assignedAdminId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  resolvedAt      DateTime?
+  buyer           User     @relation("SupportTicketBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  seller          Seller?  @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  parentOrder     ParentOrder? @relation(fields: [parentOrderId], references: [id], onDelete: SetNull)
+  sellerOrder     SellerOrder? @relation(fields: [sellerOrderId], references: [id], onDelete: SetNull)
+  assignedAdmin   User?    @relation("SupportTicketAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  messages        SupportMessage[]
+
+  @@index([buyerId, updatedAt])
+  @@index([sellerId, status, updatedAt])
+  @@index([status, priority, updatedAt])
+  @@index([parentOrderId])
+}
+
+model SupportMessage {
+  id         String   @id @default(cuid())
+  ticketId   String
+  authorId   String
+  authorRole String   @db.VarChar(20)
+  body       String   @db.VarChar(4000)
+  createdAt  DateTime @default(now())
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, createdAt])
 }
 
 model AiUsageLog {
@@ -2513,5 +3275,6 @@ model AiUsageLog {
   costMinor   Int?
   createdAt   DateTime @default(now())
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   @@index([feature, createdAt])
 }

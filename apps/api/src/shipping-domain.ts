@@ -10,7 +10,8 @@ export type ShippingDiscount = {
 };
 export type ShippingService = {
   id: string; sellerId: string; name: string; feeMinor: number; currency: string; estimatedMinDays: number | null;
-  estimatedMaxDays: number | null; enabled: boolean; zones: ShippingZone[]; discounts: ShippingDiscount[];
+  estimatedMaxDays: number | null; enabled: boolean; supportsCod: boolean; zones: ShippingZone[]; discounts: ShippingDiscount[];
+  carrierProvider?: { id: string; name: string; trackingUrlTemplate: string | null } | null;
 };
 
 export function normalizeShippingLocation(value: string) {
@@ -64,9 +65,10 @@ export function quoteShippingService(service: ShippingService, items: ShippingCa
   const discount = calculateShippingDiscount(service, items, now);
   const discountMinor = discount?.amountMinor ?? 0;
   return {
-    serviceId: service.id, serviceName: service.name, zoneId: zone.id,
+    serviceId: service.id, serviceName: service.carrierProvider ? `${service.carrierProvider.name} · ${service.name}` : service.name, zoneId: zone.id,
+    ...(service.carrierProvider ? { carrierProviderId: service.carrierProvider.id, carrierName: service.carrierProvider.name, trackingUrlTemplate: service.carrierProvider.trackingUrlTemplate } : {}),
     feeMinor: service.feeMinor, discountMinor, shippingMinor: service.feeMinor - discountMinor, currency,
-    estimatedMinDays: service.estimatedMinDays, estimatedMaxDays: service.estimatedMaxDays,
+    estimatedMinDays: service.estimatedMinDays, estimatedMaxDays: service.estimatedMaxDays, supportsCod: service.supportsCod,
     discount: discount ? { id: discount.id, name: discount.name, type: discount.type, amountMinor: discount.amountMinor } : null
   };
 }

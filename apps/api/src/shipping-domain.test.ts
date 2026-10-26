@@ -13,7 +13,7 @@ const zones: ShippingZone[] = [
 ];
 const service = (discounts: ShippingDiscount[] = [], shippingZones = zones): ShippingService => ({
   id: 'svc-1', sellerId: 'seller-1', name: 'Local courier', feeMinor: 1000, currency: 'USD',
-  estimatedMinDays: 2, estimatedMaxDays: 5, enabled: true, zones: shippingZones, discounts
+  estimatedMinDays: 2, estimatedMaxDays: 5, enabled: true, supportsCod: false, zones: shippingZones, discounts
 });
 const item = (productId = 'product-1', quantity = 2, unitPriceMinor = 2500) => ({ productId, sellerId: 'seller-1', quantity, unitPriceMinor });
 function discount(input: Partial<ShippingDiscount> & Pick<ShippingDiscount, 'id' | 'type'>): ShippingDiscount {
@@ -25,6 +25,12 @@ function discount(input: Partial<ShippingDiscount> & Pick<ShippingDiscount, 'id'
 }
 
 describe('seller shipping rules', () => {
+  it('carries the service COD acceptance setting into buyer-facing quotes', () => {
+    const deliveryService = { ...service(), supportsCod: true };
+    const quote = quoteShippingService(deliveryService, [item()], { country: 'US', region: 'California', city: 'Oakland', line1: '1 Main', postalCode: '1' }, 'USD', now);
+    expect(quote?.supportsCod).toBe(true);
+  });
+
   it('normalizes countries and locations and selects the most specific matching zone', () => {
     expect(normalizeCountryCode(' us ')).toBe('US');
     expect(normalizeShippingLocation('  San   Francisco ')).toBe('san francisco');

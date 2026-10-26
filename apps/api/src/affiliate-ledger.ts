@@ -2,7 +2,7 @@ import { AffiliateStatus, CommissionEntryType, CommissionStatus, AffiliateAdjust
 import { env } from './config.js';
 import { commissionMinor, proportionalCommission } from './growth-domain.js';
 import { prisma } from './security.js';
-import { asStorePlanEntitlements, effectiveStorePlan } from './store-plan-domain.js';
+import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
 
 type AdjustmentInput = {
   type: AffiliateAdjustmentType;
@@ -17,6 +17,7 @@ type AdjustmentInput = {
   createdById?: string;
 };
 type Tx = Prisma.TransactionClient;
+const netItemBase = (item: { unitPriceMinor: number; quantity: number; discountMinor?: number }) => Math.max(0, item.unitPriceMinor * item.quantity - (item.discountMinor ?? 0));
 
 function allocateRefundBase(totalMinor: number, weights: number[]) {
   if (!Number.isSafeInteger(totalMinor) || totalMinor < 0 || weights.some(weight => !Number.isSafeInteger(weight) || weight < 0)) throw new Error('Invalid affiliate refund allocation');
@@ -65,7 +66,7 @@ export async function settleAffiliateForPaidOrderInTransaction(tx: Tx, orderId: 
         const participation = await tx.storeAffiliateProgram.findUnique({ where: { storeId: store.id } });
         if (participation) {
           const plan = await effectiveStorePlan(tx, store.id, now);
-          storeAffiliateEligible = participation.enabled && asStorePlanEntitlements(plan.version).affiliateToolsEnabled;
+          storeAffiliateEligible = participation.enabled && (await storeEntitlements(tx, store.id, plan.version)).affiliateToolsEnabled;
         }
       }
     }
@@ -75,7 +76,7 @@ export async function settleAffiliateForPaidOrderInTransaction(tx: Tx, orderId: 
       if (!eligible) continue;
       const rules = await tx.affiliateCommissionRule.findMany({ where: { currency: order.currency, effectiveFrom: { lte: now }, OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }], AND: [{ OR: [{ productId: item.productId }, ...(item.product.categoryId ? [{ categoryId: item.product.categoryId }] : []), { productId: null, categoryId: null }] }] } });
       const rule = chooseRule(rules, item.productId, item.product.categoryId);
-      const eligibleBaseMinor = item.unitPriceMinor * item.quantity;
+      const eligibleBaseMinor = netItemBase(item);
       const amountMinor = commissionMinor(eligibleBaseMinor, rule?.basisPoints ?? env.AFFILIATE_DEFAULT_BASIS_POINTS, rule?.fixedMinor);
       if (amountMinor < 1) continue;
       const key = `${order.id}:${item.id}`;
@@ -154,7 +155,10 @@ export async function reverseAffiliateForOrderInTransaction(tx: Tx, orderId: str
     const alreadyReversed = entry.reversals.reduce((sum, reversal) => sum + Math.abs(reversal.amountMinor), 0);
     const remainingCommission = Math.max(0, entry.amountMinor - alreadyReversed);
     if (!remainingCommission) continue;
-    const requestedBase = input.quantity && entry.orderItem ? entry.orderItem.unitPriceMinor * Math.min(input.quantity, entry.orderItem.quantity) : entry.eligibleBaseMinor;
+    const requestedQuantity = input.quantity && entry.orderItem ? Math.min(input.quantity, entry.orderItem.quantity) : null;
+    const requestedBase = requestedQuantity !== null && entry.orderItem
+      ? Math.max(0, entry.orderItem.unitPriceMinor * requestedQuantity - Math.round((entry.orderItem.discountMinor ?? 0) * requestedQuantity / entry.orderItem.quantity))
+      : entry.eligibleBaseMinor;
     const proportional = proportionalCommission(entry.amountMinor, entry.eligibleBaseMinor, requestedBase);
     const amount = Math.min(remainingCommission, proportional, remainingAdjustment);
     if (amount <= 0) continue;

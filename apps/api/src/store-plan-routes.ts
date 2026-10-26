@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, Role, SellerStatus, StorePlanAssignmentStatus, StorePlanStatus, StorePlanVersionStatus } from '@prisma/client';
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
-import { asStorePlanEntitlements, effectiveStorePlan, isAtLimit, storePlanEntitlementsSchema } from './store-plan-domain.js';
+import { asStorePlanEntitlements, dropshippingPlanBlock, effectiveStorePlan, isAtLimit, sellerOwnedConnectionsPlanBlock, storeEntitlements, storePlanEntitlementsSchema } from './store-plan-domain.js';
 import { formatMinorAmount, isFreePlan, planPricingInputSchema, resolvePlanPricing } from './store-plan-pricing.js';
 import { env } from './config.js';
 import { stripeStoreBillingProvider, storePlanBillingSandboxEnabled, stripeStoreBillingTermsSupported } from './stripe-store-billing.js';
@@ -45,6 +45,10 @@ function versionData(name: string, entitlements: z.infer<typeof storePlanEntitle
   let resolvedPricing: ReturnType<typeof resolvePlanPricing>;
   try { resolvedPricing = resolvePlanPricing(pricing); }
   catch (error) { throw fail(400, error instanceof Error ? error.message : 'Invalid pricing terms.'); }
+  const providerPolicyBlock = sellerOwnedConnectionsPlanBlock(resolvedPricing, entitlements);
+  if (providerPolicyBlock) throw fail(400, providerPolicyBlock);
+  const dropshippingBlock = dropshippingPlanBlock(resolvedPricing, entitlements);
+  if (dropshippingBlock) throw fail(400, dropshippingBlock);
   return {
     name,
     ...entitlements,
@@ -257,10 +261,12 @@ export function registerStorePlanRoutes(app: Express) {
       prisma.contentPage.count({ where: { storeId: seller.store.id, status: { not: 'ARCHIVED' } } }),
       prisma.mediaAsset.aggregate({ where: { storeId: seller.store.id, uploadStatus: { not: 'FAILED' } }, _sum: { sizeBytes: true } })
     ]);
-    const entitlements = asStorePlanEntitlements(effective.version);
+    const adminOverride = user.role === Role.ADMIN && seller.store.isPlatformStore;
+    const entitlements = await storeEntitlements(prisma, seller.store.id, effective.version);
     res.json({
+      adminOverride,
       store: { id: seller.store.id, name: seller.store.name, slug: seller.store.slug },
-      plan: effective.plan ? { id: effective.plan.id, key: effective.plan.key, name: effective.version?.name ?? effective.plan.name, status: effective.plan.status, version: effective.version?.version ?? 1, versionStatus: effective.version?.status ?? 'ACTIVE' } : { key: 'legacy-compatible', name: 'Legacy compatible', status: 'ACTIVE', version: 1, versionStatus: 'ACTIVE' },
+      plan: adminOverride ? { key: 'platform-admin', name: 'Platform administrator access', status: 'ACTIVE', version: 1, versionStatus: 'ACTIVE' } : effective.plan ? { id: effective.plan.id, key: effective.plan.key, name: effective.version?.name ?? effective.plan.name, status: effective.plan.status, version: effective.version?.version ?? 1, versionStatus: effective.version?.status ?? 'ACTIVE' } : { key: 'legacy-compatible', name: 'Legacy compatible', status: 'ACTIVE', version: 1, versionStatus: 'ACTIVE' },
       assignment: effective.assignment ? { id: effective.assignment.id, status: effective.assignment.status, source: effective.assignment.source, effectiveFrom: effective.assignment.effectiveFrom, effectiveUntil: effective.assignment.effectiveUntil } : { id: null, status: 'ACTIVE', source: 'LEGACY_FALLBACK', effectiveFrom: null, effectiveUntil: null },
       pricing: effective.version ? {
         description: effective.version.description,
@@ -285,7 +291,11 @@ export function registerStorePlanRoutes(app: Express) {
       },
       entitlements,
       usage: { products: productCount, stores: storeCount, vendors: 1, staffSeats: seller._count.staff, blogPosts: blogPostCount, contentPages: contentPageCount, mediaStorageBytes: mediaBytes._sum.sizeBytes ?? 0 },
-      notes: {
+      notes: adminOverride ? {
+        connectors: 'Platform admin entitlements bypass Store plan gates. External payment-provider onboarding, credentials, and operational activation remain separately controlled.',
+        customDomain: 'Custom-domain features are included; DNS, domain ownership verification, and TLS provisioning remain required.',
+        mobileTemplates: 'All supported responsive web storefront templates are included; these are not native applications.'
+      } : {
         connectors: 'Plan connectors describe eligibility only. Seller payment processing and seller payout integrations are not enabled by this plan.',
         customDomain: 'Eligibility does not provision DNS or TLS.',
         mobileTemplates: 'These are responsive web storefront templates, not native applications.'
@@ -296,8 +306,9 @@ export function registerStorePlanRoutes(app: Express) {
   app.get('/api/seller/plan-options', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
     const user = actor(res);
     if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
-    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } } } });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true, isPlatformStore: true } } } });
     if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
+    if (user.role === Role.ADMIN && seller.store.isPlatformStore) return res.json({ adminOverride: true, checkoutAvailable: false, checkoutUnavailableReason: 'The official platform Store is exempt from plan billing.', offers: [] });
     const now = new Date();
     const versions = await prisma.storePlanVersion.findMany({
       where: {
@@ -329,8 +340,9 @@ export function registerStorePlanRoutes(app: Express) {
   app.get('/api/seller/billing', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => {
     const user = actor(res);
     if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
-    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } }, user: { select: { email: true } } } });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true, isPlatformStore: true } }, user: { select: { email: true } } } });
     if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
+    if (user.role === Role.ADMIN && seller.store.isPlatformStore) return res.json({ adminOverride: true, checkoutAvailable: false, cancellationAvailable: false, checkoutUnavailableReason: 'The official platform Store has no subscription billing or cancellation.', current: null, subscriptions: [], historyAvailable: false });
     if (!seller.user.email) return res.status(409).json({ code: 'SELLER_EMAIL_REQUIRED', error: 'An email address is required for subscription checkout.' });
     const subscriptions = await prisma.storeSubscription.findMany({
       where: { storeId: seller.store.id },
@@ -362,8 +374,9 @@ export function registerStorePlanRoutes(app: Express) {
   app.post('/api/seller/billing/subscribe', requireAuth, requireRole(...sellerRoles), run(async (req, res) => {
     const user = actor(res);
     if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required.' });
-    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true } }, user: { select: { email: true } } } });
+    const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, select: { store: { select: { id: true, isPlatformStore: true } }, user: { select: { email: true } } } });
     if (!seller?.store) return res.status(404).json({ error: 'The approved seller Store is unavailable.' });
+    if (user.role === Role.ADMIN && seller.store.isPlatformStore) return res.status(409).json({ code: 'PLATFORM_STORE_BILLING_EXEMPT', error: 'The official platform Store has full administrator entitlements and cannot be subscribed or billed.' });
     if (!storePlanBillingSandboxEnabled) return res.status(503).json({ code: 'PLAN_BILLING_DISABLED', error: 'Stripe Store billing sandbox is disabled. No subscription or entitlement change was created.' });
     const provider = stripeStoreBillingProvider();
     if (!provider) return res.status(503).json({ code: 'PLAN_BILLING_DISABLED', error: 'Stripe Store billing sandbox is not configured. No subscription or entitlement change was created.' });

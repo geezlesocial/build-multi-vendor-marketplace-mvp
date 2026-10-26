@@ -26,6 +26,9 @@ const envSchema = z.object({
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_BASE_URL: z.string().url().default('https://api-m.sandbox.paypal.com'),
   PAYPAL_WEBHOOK_ID: z.string().optional(),
+  LIVEKIT_URL: z.string().trim().url().optional(),
+  LIVEKIT_API_KEY: z.string().trim().min(1).optional(),
+  LIVEKIT_API_SECRET: z.string().min(1).optional(),
   LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE: liveProviderConfigurationsAvailableSchema,
   UPLOAD_DIR: z.string().default('uploads'),
   LIVE_SHOPPING_AVAILABLE: z.string().optional().default('false').transform(value => ['true', '1', 'yes', 'on'].includes(value.toLowerCase())),
@@ -41,6 +44,15 @@ const envSchema = z.object({
   CONTENT_SCANNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(15000),
   STORE_BUSTER_SPONSORED_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   STORE_EMAIL_DELIVERY_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  STORE_EMAIL_SMTP_HOST: z.string().trim().min(1).optional(),
+  STORE_EMAIL_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  STORE_EMAIL_SMTP_SECURE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  STORE_EMAIL_SMTP_REQUIRE_TLS: z.enum(['true', 'false']).default('true').transform(value => value === 'true'),
+  STORE_EMAIL_SMTP_USER: z.string().trim().min(1).optional(),
+  STORE_EMAIL_SMTP_PASSWORD: z.string().min(1).optional(),
+  STORE_EMAIL_FROM: z.string().trim().email().optional(),
+  STORE_EMAIL_REPLY_TO: z.string().trim().email().optional(),
+  STORE_EMAIL_TOKEN_SECRET: z.string().min(32).optional(),
   CONTENT_SCAN_REQUIRED: z.string().optional().default('true').transform(value => !['false', '0', 'no', 'off'].includes(value.toLowerCase())),
   CONTENT_MAX_IMAGE_BYTES: z.coerce.number().int().positive().default(5_000_000),
   CONTENT_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(50_000_000),
@@ -48,6 +60,7 @@ const envSchema = z.object({
   AFFILIATE_DEFAULT_BASIS_POINTS: z.coerce.number().int().min(0).max(10000).default(500),
   AFFILIATE_SIGNING_SECRET: z.string().min(32).optional(),
   PAYOUT_ENCRYPTION_KEY: z.string().min(32).optional(),
+  DROPSHIPPING_ENCRYPTION_KEY: z.string().min(32).optional(),
   MONEY_MOVEMENT_HARD_DISABLED: z.string().optional().default('true').transform(value => !['false', '0', 'no', 'off'].includes(value.toLowerCase())),
   WALLET_FUNDING_PROVIDER_READY: z.string().optional().default('false').transform(value => ['true', '1', 'yes', 'on'].includes(value.toLowerCase())),
   WALLET_FUNDING_SANDBOX_MODE: z.string().optional().default('false').transform(value => ['true', '1', 'yes', 'on'].includes(value.toLowerCase())),
@@ -72,6 +85,16 @@ const envSchema = z.object({
   }
   if (value.CONTENT_SCANNER_AVAILABLE && !value.CONTENT_SCANNER_HOST) {
     context.addIssue({ code: 'custom', path: ['CONTENT_SCANNER_HOST'], message: 'A private ClamAV daemon host is required when the media scanner is enabled.' });
+  }
+  // SMTP settings and marketing secrets may be supplied via the admin dashboard
+  // and deployment environment respectively. Keep the API bootable while the
+  // gate is enabled; delivery status fails closed until every requirement exists.
+  if (Boolean(value.STORE_EMAIL_SMTP_USER) !== Boolean(value.STORE_EMAIL_SMTP_PASSWORD)) {
+    context.addIssue({ code: 'custom', path: ['STORE_EMAIL_SMTP_PASSWORD'], message: 'SMTP username and password must be configured together.' });
+  }
+  const liveKitFields = [value.LIVEKIT_URL, value.LIVEKIT_API_KEY, value.LIVEKIT_API_SECRET];
+  if (liveKitFields.some(Boolean) && !liveKitFields.every(Boolean)) {
+    context.addIssue({ code: 'custom', path: ['LIVEKIT_API_SECRET'], message: 'LiveKit URL, API key, and API secret must be configured together.' });
   }
 });
 

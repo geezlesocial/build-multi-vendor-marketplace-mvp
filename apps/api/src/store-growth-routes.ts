@@ -1,12 +1,19 @@
 import crypto from 'node:crypto';
 import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
-import { Prisma, ProductStatus, Role, SellerStatus, StoreBusterCampaignGoal, StoreBusterCampaignStatus, StoreInterestSignalType, StoreEmailSubscriberStatus } from '@prisma/client';
+import { PaymentMethod, Prisma, ProductStatus, Role, SellerStatus, StoreBusterAdAccountStatus, StoreBusterCampaignGoal, StoreBusterCampaignStatus, StoreEmailCampaignStatus, StoreEmailDeliveryStatus, StoreInterestSignalType, StoreEmailSubscriberStatus } from '@prisma/client';
 import { z } from 'zod';
 import { env } from './config.js';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
-import { effectiveStorePlan, asStorePlanEntitlements } from './store-plan-domain.js';
+import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
 import { scoreInterestCategories } from './store-buster-domain.js';
+import { createUnsubscribeToken, normalizeSubscriberEmail, verifyUnsubscribeToken } from './store-email-domain.js';
+import { accountVerificationEmailStatus, sendStoreEmailConfirmation, storeEmailProviderStatus, verifyStoreEmailSmtp, StoreEmailTransportError } from './store-email-delivery.js';
+import { capturePaypalOrder, createPaypalStoreBusterOrder, createStripeStoreBusterCheckout, stripe } from './payments.js';
+import { decimalToMinorExact } from './currency-domain.js';
+import { handleSponsoredPaypalEvent, settleStoreBusterClick, settleStoreBusterFunding } from './store-buster-sponsored.js';
+import { calculateSponsoredClickSpend, minorToDecimal } from './store-buster-sponsored-domain.js';
+import { livePaymentActivationBlock } from './provider-activation.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -23,10 +30,12 @@ const campaignSchema = z.object({
   name: z.string().trim().min(2).max(100),
   goal: z.nativeEnum(StoreBusterCampaignGoal),
   productIds: z.array(z.string().min(1).max(80)).min(1).max(20),
-  audienceCategoryIds: z.array(z.string().min(1).max(80)).max(20).default([])
-}).strict().refine(value => new Set(value.productIds).size === value.productIds.length, 'Products must not be repeated');
+  audienceCategoryIds: z.array(z.string().min(1).max(80)).max(20).default([]),
+  sponsored: z.boolean().default(false),
+  monthlyBudgetMinor: z.number().int().min(0).max(2_000_000_000).default(0)
+}).strict().refine(value => new Set(value.productIds).size === value.productIds.length, 'Products must not be repeated').refine(value => value.sponsored ? value.monthlyBudgetMinor > 0 : value.monthlyBudgetMinor === 0, 'Sponsored campaigns require a positive monthly budget; organic campaigns cannot spend.');
 const settingsSchema = z.object({ enabled: z.boolean(), sponsoredEnabled: z.boolean(), moderationRequired: z.boolean(), maxMonthlyBudgetMinor: z.number().int().min(0).max(2_000_000_000), maxCampaignsPerStore: z.number().int().min(0).max(100_000), pricePerClickMinor: z.number().int().min(0).max(2_000_000_000), reason: z.string().trim().min(3).max(500) }).strict().refine(value => !value.sponsoredEnabled || value.enabled, 'Sponsored placements require Store Buster to be enabled.');
-const emailCampaignSchema = z.object({ name: z.string().trim().min(2).max(100), subject: z.string().trim().min(2).max(160), content: z.array(z.object({ type: z.literal('paragraph'), text: z.string().trim().min(1).max(2000).refine(value => !/[<>]/.test(value), 'HTML is not allowed') }).strict()).min(1).max(30) }).strict();
+const emailCampaignSchema = z.object({ name: z.string().trim().min(2).max(100), subject: z.string().trim().min(2).max(160).refine(value => !/[\r\n]/.test(value), 'Subject must be a single line.'), content: z.array(z.object({ type: z.literal('paragraph'), text: z.string().trim().min(1).max(2000).refine(value => !/[<>]/.test(value), 'HTML is not allowed') }).strict()).min(1).max(30) }).strict();
 function maskSubscriberEmail(email: string) {
   const at = email.lastIndexOf('@');
   return at <= 0 ? '•••' : `${email.slice(0, 1)}•••${email.slice(at)}`;
@@ -38,7 +47,62 @@ async function sellerStore(sellerId: string) {
   return seller.store;
 }
 
+async function sponsoredBillingStatus() {
+  const [methods, currency] = await Promise.all([
+    prisma.paymentMethodSettings.findMany({ where: { enabled: true, method: { in: [PaymentMethod.STRIPE, PaymentMethod.PAYPAL] } }, select: { method: true } }),
+    prisma.currencyCatalogEntry.findFirst({ where: { code: env.CURRENCY, active: true, checkoutEnabled: true }, select: { code: true } })
+  ]);
+  const enabled = new Set(methods.map(item => item.method));
+  const providers = [
+    { method: 'STRIPE', available: enabled.has(PaymentMethod.STRIPE) && Boolean(stripe && env.STRIPE_WEBHOOK_SECRET) },
+    { method: 'PAYPAL', available: enabled.has(PaymentMethod.PAYPAL) && Boolean(env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET && !env.PAYPAL_CLIENT_ID.includes('placeholder') && env.PAYPAL_WEBHOOK_ID) }
+  ].filter(item => item.available);
+  return { providers, available: env.STORE_BUSTER_SPONSORED_AVAILABLE && Boolean(currency) && providers.length > 0 };
+}
+
+async function currencyExponent(currency: string) {
+  const entry = await prisma.currencyCatalogEntry.findUnique({ where: { code: currency }, select: { minorUnitExponent: true, active: true, checkoutEnabled: true } });
+  if (!entry?.active || !entry.checkoutEnabled) throw fail(409, `Platform currency ${currency} is not enabled for checkout in the currency catalog.`);
+  return entry.minorUnitExponent;
+}
+function utcDay(value: Date) { const day = new Date(value); day.setUTCHours(0, 0, 0, 0); return day; }
+
 export function registerStoreGrowthRoutes(app: Express) {
+  app.get('/api/admin/store-email/status', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
+    const [outboxStatuses, outboxTotal] = await Promise.all([
+      prisma.emailOutbox.groupBy({ by: ['status'], _count: { _all: true } }),
+      prisma.emailOutbox.count()
+    ]);
+    const transactionalQueue = Object.fromEntries(outboxStatuses.map(item => [item.status, item._count._all]));
+    const [providerStatus, verificationStatus] = await Promise.all([storeEmailProviderStatus(), accountVerificationEmailStatus()]);
+    res.json({ ...providerStatus, accountVerification: verificationStatus, transactionalQueue: { total: outboxTotal, ...transactionalQueue } });
+  }));
+  app.post('/api/admin/store-email/verify', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
+    const user = actor(res);
+    try {
+      const result = await verifyStoreEmailSmtp();
+      await audit(user.id, 'STORE_EMAIL_SMTP_VERIFIED', 'StoreEmailProvider', 'deployment', { verifiedAt: new Date().toISOString() });
+      res.json({ ...result, message: 'SMTP connection verified. No email was sent.' });
+    } catch (error) {
+      const safe = error instanceof StoreEmailTransportError ? error : new StoreEmailTransportError('EMAIL_CONNECTION_FAILED');
+      await audit(user.id, 'STORE_EMAIL_SMTP_VERIFICATION_FAILED', 'StoreEmailProvider', 'deployment', { code: safe.code });
+      throw fail(safe.code === 'EMAIL_PROVIDER_NOT_CONFIGURED' ? 409 : 502, safe.message, { code: safe.code });
+    }
+  }));
+
+  app.post('/api/admin/store-email/outbox/retry-failed', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const user = actor(res);
+    const input = z.object({ reason: z.string().trim().min(8).max(500) }).strict().parse(req.body);
+    const retried = await prisma.$transaction(async tx => {
+      const failed = await tx.emailOutbox.findMany({ where: { status: 'FAILED' }, select: { id: true }, orderBy: { createdAt: 'asc' }, take: 500 });
+      if (!failed.length) return 0;
+      const count = await tx.$executeRaw`UPDATE "EmailOutbox" SET "status" = 'PENDING'::"NotificationDeliveryStatus", "attempts" = 0, "nextAttemptAt" = CURRENT_TIMESTAMP, "claimedAt" = NULL, "providerMessageId" = NULL, "lastError" = NULL WHERE "id" = ANY(${failed.map(item => item.id)}::text[]) AND "status" = 'FAILED'::"NotificationDeliveryStatus"`;
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'TRANSACTIONAL_EMAIL_OUTBOX_RETRY_REQUESTED', entity: 'EmailOutbox', entityId: 'failed-batch', metadata: { retriedCount: count, reason: input.reason, maximumBatchSize: 500 } } });
+      return count;
+    });
+    res.json({ retried, message: `${retried} failed transactional email${retried === 1 ? '' : 's'} queued for retry.` });
+  }));
+
   app.get('/api/account/personalization', requireAuth, run(async (_req, res) => {
     const user = actor(res);
     const preference = await prisma.userPreference.findUnique({ where: { userId: user.id }, select: { personalizationEnabled: true, personalizationConsentAt: true } });
@@ -95,21 +159,21 @@ export function registerStoreGrowthRoutes(app: Express) {
     if (categoryIds.length === 0) return res.json({ personalized: true, items: [], message: 'Browse or save products to build recommendations. We never share your individual history with stores.' });
     const campaigns = await prisma.storeBusterCampaign.findMany({
       where: { status: StoreBusterCampaignStatus.APPROVED, sponsored: false, OR: [{ audienceCategoryIds: { hasSome: categoryIds } }, { audienceCategoryIds: { isEmpty: true } }] },
-      include: { store: { select: { id: true, name: true, slug: true, sellerId: true, seller: { select: { status: true } } } }, products: { include: { product: { select: { id: true, slug: true, name: true, description: true, priceMinor: true, currency: true, sellerId: true, status: true, category: { select: { id: true, name: true, status: true } }, inventory: { select: { quantity: true } }, images: { take: 1, select: { url: true, alt: true } } } } } } },
+      include: { store: { select: { id: true, name: true, slug: true, sellerId: true, seller: { select: { status: true } } } }, products: { include: { product: { select: { id: true, slug: true, name: true, description: true, priceMinor: true, salePriceMinor: true, currency: true, sellerId: true, status: true, category: { select: { id: true, name: true, status: true } }, inventory: { select: { quantity: true } }, images: { take: 1, select: { url: true, alt: true } } } } } } },
       take: 100
     });
     const eligible = [];
     for (const campaign of campaigns) {
       if (campaign.store.seller.status !== SellerStatus.APPROVED) continue;
       const effective = await effectiveStorePlan(prisma, campaign.store.id);
-      if (!asStorePlanEntitlements(effective.version).storeBusterEnabled) continue;
+      if (!(await storeEntitlements(prisma, campaign.store.id, effective.version)).storeBusterEnabled) continue;
       const matchingProducts = campaign.products.filter(item => item.product.status === ProductStatus.APPROVED && item.product.sellerId === campaign.store.sellerId && item.product.inventory && item.product.inventory.quantity > 0 && item.product.category?.status === 'ACTIVE' && categoryIds.includes(item.product.category.id));
       if (matchingProducts.length) eligible.push({ campaign, products: matchingProducts });
     }
     const rankedItems = eligible.flatMap(({ campaign, products: campaignProducts }) => campaignProducts.map(({ product }) => ({
       campaignId: campaign.id,
       categoryId: product.category!.id,
-      product: { id: product.id, slug: product.slug, name: product.name, description: product.description, priceMinor: product.priceMinor, currency: product.currency, category: product.category?.name ?? null, image: product.images[0] ?? null },
+      product: { id: product.id, slug: product.slug, name: product.name, description: product.description, priceMinor: product.priceMinor, salePriceMinor: product.salePriceMinor, currency: product.currency, category: product.category?.name ?? null, image: product.images[0] ?? null },
       store: { id: campaign.store.id, name: campaign.store.name, slug: campaign.store.slug }, placement: 'ORGANIC', reason: `Based on interest in ${product.category?.name ?? 'this category'}`
     }))).sort((left, right) => (scoreByCategory.get(right.categoryId) ?? 0) - (scoreByCategory.get(left.categoryId) ?? 0) || left.campaignId.localeCompare(right.campaignId) || left.product.id.localeCompare(right.product.id));
     const visibleItems = rankedItems.slice(0, 12);
@@ -126,16 +190,179 @@ export function registerStoreGrowthRoutes(app: Express) {
     res.json({ personalized: true, items, message: 'Recommendations use explainable first-party category and product-interest signals. No individual history is visible to stores.' });
   }));
 
+  app.get('/api/store-buster/sponsored', requireAuth, requireRole(Role.BUYER, Role.SELLER), run(async (_req, res) => {
+    const user = actor(res);
+    const [settings, billing] = await Promise.all([prisma.storeBusterSettings.findUnique({ where: { id: 'default' } }), sponsoredBillingStatus()]);
+    if (!env.STORE_BUSTER_SPONSORED_AVAILABLE || !billing.available || !settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired || settings.pricePerClickMinor <= 0 || settings.maxMonthlyBudgetMinor <= 0) return res.json({ items: [] });
+    const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+    const campaigns = await prisma.storeBusterCampaign.findMany({
+      where: { sponsored: true, status: StoreBusterCampaignStatus.APPROVED, monthlyBudgetMinor: { gt: 0 }, store: { seller: { status: SellerStatus.APPROVED }, ...(user.sellerId ? { sellerId: { not: user.sellerId } } : {}) } },
+      include: {
+        store: { include: { seller: { select: { status: true } } } },
+        metrics: { where: { day: { gte: monthStart } }, select: { spendMinor: true } },
+        products: { include: { product: { select: {
+          id: true, slug: true, name: true, description: true, priceMinor: true, salePriceMinor: true,
+          currency: true, sellerId: true, status: true, categoryId: true,
+          category: { select: { id: true, name: true, status: true } },
+          inventory: { select: { quantity: true } }, images: { take: 1, select: { url: true, alt: true } }
+        } } } }
+      },
+      orderBy: { updatedAt: 'asc' }, take: 200
+    });
+    const storeSpendRows = await prisma.$queryRaw<{ storeId: string; spendMinor: bigint }[]>`
+      SELECT c."storeId", COALESCE(SUM(m."spendMinor"), 0) AS "spendMinor"
+      FROM "StoreBusterDailyMetric" m
+      JOIN "StoreBusterCampaign" c ON c."id" = m."campaignId"
+      WHERE c."sponsored" = TRUE AND m."day" >= ${monthStart}
+      GROUP BY c."storeId"
+    `;
+    const monthlySpendByStore = new Map(storeSpendRows.map(row => [row.storeId, Number.isSafeInteger(Number(row.spendMinor)) ? Number(row.spendMinor) : Number.MAX_SAFE_INTEGER]));
+    const eligible: { campaignId: string; product: NonNullable<(typeof campaigns)[number]['products'][number]['product']>; store: (typeof campaigns)[number]['store'] }[] = [];
+    const selectedStoreIds = new Set<string>();
+    for (const campaign of campaigns) {
+      if (selectedStoreIds.has(campaign.store.id)) continue;
+      const effective = await effectiveStorePlan(prisma, campaign.store.id);
+      const entitlements = await storeEntitlements(prisma, campaign.store.id, effective.version);
+      if (!entitlements.storeBusterEnabled || entitlements.storeBusterMonthlyBudgetMinor <= 0) continue;
+      const account = await prisma.storeBusterAdAccount.findUnique({ where: { storeId: campaign.store.id }, select: { availableMinor: true, status: true, currency: true } });
+      if (!account || account.status !== 'ACTIVE' || account.currency !== env.CURRENCY || account.availableMinor < settings.pricePerClickMinor) continue;
+      const spent = campaign.metrics.reduce((sum, metric) => sum + metric.spendMinor, 0);
+      const spend = calculateSponsoredClickSpend({
+        availableMinor: account.availableMinor,
+        clickPriceMinor: settings.pricePerClickMinor,
+        campaignSpentThisMonthMinor: spent,
+        storeSpentThisMonthMinor: monthlySpendByStore.get(campaign.store.id) ?? 0,
+        campaignBudgetMinor: campaign.monthlyBudgetMinor,
+        platformBudgetCapMinor: Math.min(settings.maxMonthlyBudgetMinor, entitlements.storeBusterMonthlyBudgetMinor)
+      });
+      if (!spend) continue;
+      const product = campaign.products.map(item => item.product).find(item => item.status === ProductStatus.APPROVED && item.sellerId === campaign.store.sellerId && item.inventory && item.inventory.quantity > 0 && item.category?.status === 'ACTIVE' && (!campaign.audienceCategoryIds.length || (item.categoryId && campaign.audienceCategoryIds.includes(item.categoryId))));
+      if (product) { eligible.push({ campaignId: campaign.id, product, store: campaign.store }); selectedStoreIds.add(campaign.store.id); }
+    }
+    const visible = eligible.slice(0, 8);
+    const tokens = visible.map(() => crypto.randomBytes(32).toString('base64url'));
+    const now = new Date(); const day = utcDay(now); const expiresAt = new Date(now.getTime() + 60 * 60 * 1000);
+    if (visible.length) await prisma.storeBusterImpression.createMany({ data: visible.map((item, index) => ({ campaignId: item.campaignId, productId: item.product.id, tokenHash: crypto.createHash('sha256').update(`${user.id}:${tokens[index]}`).digest('hex'), day, expiresAt })) });
+    res.json({ items: visible.map((item, index) => ({ campaignId: item.campaignId, impressionToken: tokens[index], pricePerClickMinor: settings.pricePerClickMinor, product: { id: item.product.id, slug: item.product.slug, name: item.product.name, description: item.product.description, priceMinor: item.product.priceMinor, salePriceMinor: item.product.salePriceMinor, currency: item.product.currency, category: item.product.category?.name ?? null, image: item.product.images[0] ?? null }, store: { id: item.store.id, name: item.store.name, slug: item.store.slug } })) });
+  }));
+
+  app.post('/api/store-buster/sponsored/:id/impression', requireAuth, requireRole(Role.BUYER, Role.SELLER), run(async (req, res) => {
+    const user = actor(res); const campaignId = param(req.params.id);
+    const input = z.object({ impressionToken: z.string().min(32).max(128) }).strict().parse(req.body);
+    const [settings, billing] = await Promise.all([prisma.storeBusterSettings.findUnique({ where: { id: 'default' } }), sponsoredBillingStatus()]);
+    if (!env.STORE_BUSTER_SPONSORED_AVAILABLE || !billing.available || !settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired) return res.status(409).json({ error: 'Sponsored placements are currently unavailable.' });
+    const tokenHash = crypto.createHash('sha256').update(`${user.id}:${input.impressionToken}`).digest('hex'); const now = new Date();
+    const impression = await prisma.storeBusterImpression.findFirst({ where: { campaignId, tokenHash, shownAt: null, expiresAt: { gt: now }, campaign: { status: 'APPROVED', sponsored: true, store: { ...(user.sellerId ? { sellerId: { not: user.sellerId } } : {}) } } }, select: { id: true, day: true } });
+    if (!impression) return res.status(409).json({ error: 'This sponsored impression is invalid, expired, or already counted.' });
+    const result = await prisma.$transaction(async tx => {
+      const claimed = await tx.storeBusterImpression.updateMany({ where: { id: impression.id, shownAt: null, expiresAt: { gt: now } }, data: { shownAt: now } });
+      if (claimed.count !== 1) return false;
+      await tx.storeBusterDailyMetric.upsert({ where: { campaignId_day: { campaignId, day: impression.day } }, create: { campaignId, day: impression.day, impressions: 1, clicks: 0 }, update: { impressions: { increment: 1 } } });
+      return true;
+    });
+    if (!result) return res.status(409).json({ error: 'This sponsored impression was already counted.' });
+    res.status(204).send();
+  }));
+
+  app.post('/api/store-buster/sponsored/:id/click', requireAuth, requireRole(Role.BUYER, Role.SELLER), run(async (req, res) => {
+    const user = actor(res); const campaignId = param(req.params.id);
+    const input = z.object({ impressionToken: z.string().min(32).max(128), productId: z.string().min(1).max(80) }).strict().parse(req.body);
+    const [settings, billing] = await Promise.all([prisma.storeBusterSettings.findUnique({ where: { id: 'default' } }), sponsoredBillingStatus()]);
+    if (!env.STORE_BUSTER_SPONSORED_AVAILABLE || !billing.available || !settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired) return res.status(409).json({ error: 'Sponsored placements are currently unavailable.' });
+    const tokenHash = crypto.createHash('sha256').update(`${user.id}:${input.impressionToken}`).digest('hex');
+    const impression = await prisma.storeBusterImpression.findFirst({ where: { campaignId, productId: input.productId, tokenHash, clickedAt: null, expiresAt: { gt: new Date() }, campaign: { status: 'APPROVED', sponsored: true, store: { ...(user.sellerId ? { sellerId: { not: user.sellerId } } : {}) } } }, select: { id: true, day: true, shownAt: true } });
+    if (!impression) return res.status(409).json({ error: 'This sponsored click is invalid, expired, or already counted.' });
+    if (!impression.shownAt) {
+      await prisma.$transaction(async tx => {
+        const now = new Date();
+        const shown = await tx.storeBusterImpression.updateMany({ where: { id: impression.id, shownAt: null, clickedAt: null, expiresAt: { gt: now } }, data: { shownAt: now } });
+        if (shown.count) await tx.storeBusterDailyMetric.upsert({ where: { campaignId_day: { campaignId, day: impression.day } }, create: { campaignId, day: impression.day, impressions: 1, clicks: 0 }, update: { impressions: { increment: 1 } } });
+      });
+    }
+    const result = await settleStoreBusterClick({ campaignId, impressionId: impression.id, userId: user.id });
+    res.json({ counted: result.counted, destination: `/products/${encodeURIComponent(result.destinationProductId ?? input.productId)}` });
+  }));
+
   app.get('/api/seller/store-buster', requireAuth, requireRole(Role.SELLER), run(async (_req, res) => {
     const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.');
     const store = await sellerStore(user.sellerId);
-    const [effective, settings, campaigns, count] = await Promise.all([
+    const [effective, settings, campaigns, count, billing] = await Promise.all([
       effectiveStorePlan(prisma, store.id), prisma.storeBusterSettings.findUnique({ where: { id: 'default' } }),
       prisma.storeBusterCampaign.findMany({ where: { storeId: store.id }, include: { products: { include: { product: { select: { id: true, name: true, status: true } } } }, metrics: { orderBy: { day: 'desc' }, take: 90 } }, orderBy: { createdAt: 'desc' }, take: 100 }),
-      prisma.storeBusterCampaign.count({ where: { storeId: store.id, status: { in: ['DRAFT', 'PENDING_REVIEW', 'APPROVED', 'PAUSED'] } } })
+      prisma.storeBusterCampaign.count({ where: { storeId: store.id, status: { in: ['DRAFT', 'PENDING_REVIEW', 'APPROVED', 'PAUSED'] } } }), sponsoredBillingStatus()
     ]);
-    const entitlements = asStorePlanEntitlements(effective.version);
-    res.json({ store, enabledForPlan: entitlements.storeBusterEnabled, available: entitlements.storeBusterEnabled && Boolean(settings?.enabled), sponsoredAvailable: env.STORE_BUSTER_SPONSORED_AVAILABLE && Boolean(settings?.sponsoredEnabled), campaignLimit: Math.min(entitlements.storeBusterCampaignLimit, settings?.maxCampaignsPerStore ?? 0), campaignCount: count, monthlyBudgetCapMinor: Math.min(entitlements.storeBusterMonthlyBudgetMinor, settings?.maxMonthlyBudgetMinor ?? 0), campaigns, message: env.STORE_BUSTER_SPONSORED_AVAILABLE ? 'Sponsored placements require separate review and explicit campaign funding.' : 'Sponsored placements are disabled by deployment policy; organic recommendations are separate.' });
+    const entitlements = await storeEntitlements(prisma, store.id, effective.version);
+    const account = await prisma.storeBusterAdAccount.upsert({ where: { storeId: store.id }, create: { storeId: store.id, currency: env.CURRENCY }, update: {} });
+    const [ledger, fundings, exponent] = await Promise.all([
+      prisma.storeBusterAdLedgerEntry.findMany({ where: { accountId: account.id }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, type: true, amountMinor: true, balanceAfterMinor: true, currency: true, createdAt: true, campaign: { select: { name: true } } } }),
+      prisma.storeBusterAdFundingIntent.findMany({ where: { accountId: account.id }, orderBy: { createdAt: 'desc' }, take: 10, select: { id: true, amountMinor: true, currency: true, provider: true, status: true, createdAt: true, paidAt: true } }),
+      currencyExponent(env.CURRENCY).catch(() => null)
+    ]);
+    const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+    const monthlySpend = await prisma.storeBusterDailyMetric.aggregate({ where: { campaign: { storeId: store.id, sponsored: true }, day: { gte: monthStart } }, _sum: { spendMinor: true } });
+    const sponsoredAvailable = entitlements.storeBusterEnabled && entitlements.storeBusterMonthlyBudgetMinor > 0 && entitlements.storeBusterCampaignLimit > 0 && billing.available && Boolean(settings?.enabled && settings.sponsoredEnabled && settings.moderationRequired && settings.pricePerClickMinor > 0 && settings.maxMonthlyBudgetMinor > 0);
+    const scale = exponent == null ? 100 : 10 ** exponent;
+    res.json({ store, enabledForPlan: entitlements.storeBusterEnabled, available: entitlements.storeBusterEnabled && Boolean(settings?.enabled), sponsoredAvailable, campaignLimit: Math.min(entitlements.storeBusterCampaignLimit, settings?.maxCampaignsPerStore ?? 0), campaignCount: count, monthlyBudgetCapMinor: Math.min(entitlements.storeBusterMonthlyBudgetMinor, settings?.maxMonthlyBudgetMinor ?? 0), monthlySpendMinor: monthlySpend._sum.spendMinor ?? 0, pricePerClickMinor: settings?.pricePerClickMinor ?? 0, sponsoredProviders: billing.providers.map(item => item.method), currency: env.CURRENCY, minorUnitExponent: exponent, adBalance: { availableMinor: account.availableMinor, status: account.status, ledger, fundingIntents: fundings }, minFundingMinor: 5 * scale, maxFundingMinor: 5000 * scale, campaigns, message: sponsoredAvailable ? 'Paid placements are available after prepayment and approval. Ad credit is separate from seller proceeds and is charged per verified click.' : 'Sponsored placements require the deployment and admin gates, an enabled Stripe or PayPal webhook, moderation, and non-zero pricing and budget limits. Organic recommendations remain separate.' });
+  }));
+
+  app.post('/api/seller/store-buster/ad-funding', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
+    const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.');
+    const input = z.object({ provider: z.enum(['STRIPE', 'PAYPAL']), amountMinor: z.number().int().positive().max(50_000_000) }).strict().parse(req.body);
+    const store = await sellerStore(user.sellerId);
+    const [effective, settings, billing, exponent, paymentMethod, account, checkoutUser] = await Promise.all([
+      effectiveStorePlan(prisma, store.id), prisma.storeBusterSettings.findUnique({ where: { id: 'default' } }), sponsoredBillingStatus(), currencyExponent(env.CURRENCY),
+      prisma.paymentMethodSettings.findUnique({ where: { method: input.provider as PaymentMethod } }),
+      prisma.storeBusterAdAccount.upsert({ where: { storeId: store.id }, create: { storeId: store.id, currency: env.CURRENCY }, update: {} }),
+      prisma.user.findUnique({ where: { id: user.id }, select: { email: true, emailVerifiedAt: true } })
+    ]);
+    const entitlement = await storeEntitlements(prisma, store.id, effective.version);
+    const minMinor = 5 * (10 ** exponent); const maxMinor = 5000 * (10 ** exponent);
+    if (!entitlement.storeBusterEnabled) throw fail(409, 'Sponsored advertising balance is available only to Stores with the Store Buster plan entitlement.', { code: 'PLAN_FEATURE_NOT_ENABLED', entitlement: 'storeBusterEnabled', planUrl: '/seller/plan' });
+    if (!settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired || settings.pricePerClickMinor <= 0 || settings.maxMonthlyBudgetMinor <= 0 || entitlement.storeBusterMonthlyBudgetMinor <= 0 || !env.STORE_BUSTER_SPONSORED_AVAILABLE) throw fail(409, 'Sponsored placements are disabled by the platform, plan, pricing, or deployment gate.');
+    if (!billing.providers.some(item => item.method === input.provider) || !paymentMethod?.enabled) throw fail(409, `${input.provider} is not configured and enabled for marketplace payments.`);
+    const activationBlock = await livePaymentActivationBlock(input.provider === 'STRIPE' ? PaymentMethod.STRIPE : PaymentMethod.PAYPAL);
+    if (activationBlock) throw fail(503, activationBlock.error, { code: activationBlock.code });
+    if (input.amountMinor < minMinor || input.amountMinor > maxMinor) throw fail(400, `Top-ups must be between ${minMinor} and ${maxMinor} minor currency units.`);
+    if (account.currency !== env.CURRENCY || account.status !== StoreBusterAdAccountStatus.ACTIVE) throw fail(409, 'This advertising balance is unavailable or frozen. Contact marketplace support.');
+    if (!checkoutUser?.email || !checkoutUser.emailVerifiedAt) throw fail(409, 'Verify your account email before funding an advertising balance.');
+    const intent = await prisma.storeBusterAdFundingIntent.create({ data: { accountId: account.id, createdById: user.id, amountMinor: input.amountMinor, currency: env.CURRENCY, provider: input.provider, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+    try {
+      if (input.provider === 'STRIPE') {
+        if (!stripe || !env.STRIPE_WEBHOOK_SECRET) throw fail(503, 'Stripe checkout and webhook reconciliation are not configured.');
+        const session = await createStripeStoreBusterCheckout({ fundingIntentId: intent.id, amountMinor: intent.amountMinor, currency: intent.currency, buyerEmail: checkoutUser.email }, `${env.WEB_ORIGIN}/seller/growth?adFunding=success&intentId=${encodeURIComponent(intent.id)}&session_id={CHECKOUT_SESSION_ID}`, `${env.WEB_ORIGIN}/seller/growth?adFunding=cancelled&intentId=${encodeURIComponent(intent.id)}`);
+        await prisma.storeBusterAdFundingIntent.update({ where: { id: intent.id }, data: { providerCheckoutRef: session.id } });
+        return res.status(201).json({ fundingIntentId: intent.id, provider: input.provider, checkoutUrl: session.url, status: 'PENDING' });
+      }
+      const paypalOrder = await createPaypalStoreBusterOrder({ fundingIntentId: intent.id, amountDecimal: minorToDecimal(intent.amountMinor, exponent), currency: intent.currency, returnUrl: `${env.WEB_ORIGIN}/seller/growth?adFunding=paypal&intentId=${encodeURIComponent(intent.id)}`, cancelUrl: `${env.WEB_ORIGIN}/seller/growth?adFunding=cancelled&intentId=${encodeURIComponent(intent.id)}` });
+      const approvalUrl = paypalOrder.links?.find(link => link.rel === 'approve')?.href;
+      if (!paypalOrder.id || !approvalUrl) throw new Error('PayPal did not return an approval URL.');
+      await prisma.storeBusterAdFundingIntent.update({ where: { id: intent.id }, data: { providerOrderRef: paypalOrder.id } });
+      return res.status(201).json({ fundingIntentId: intent.id, provider: input.provider, approvalUrl, status: 'PENDING' });
+    } catch (error) {
+      await prisma.storeBusterAdFundingIntent.updateMany({ where: { id: intent.id, status: 'PENDING' }, data: { status: 'FAILED' } });
+      if ((error as { statusCode?: number }).statusCode) throw error;
+      throw fail(502, error instanceof Error ? error.message : 'Advertising-balance checkout could not be started.');
+    }
+  }));
+
+  app.post('/api/seller/store-buster/ad-funding/:id/paypal-capture', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
+    const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.');
+    const store = await sellerStore(user.sellerId); const id = param(req.params.id);
+    const input = z.object({ providerOrderId: z.string().min(4).max(120) }).strict().parse(req.body);
+    const intent = await prisma.storeBusterAdFundingIntent.findFirst({ where: { id, provider: 'PAYPAL', account: { storeId: store.id } } });
+    if (!intent || !intent.providerOrderRef || intent.providerOrderRef !== input.providerOrderId) throw fail(404, 'PayPal funding session not found.');
+    if (intent.status === 'PAID') return res.json({ ok: true, status: 'PAID', alreadyPaid: true });
+    if (intent.status !== 'PENDING') throw fail(409, 'This PayPal funding session is no longer pending.');
+    const captured = await capturePaypalOrder(intent.providerOrderRef, `store-buster-capture-${intent.id}`);
+    const unit = captured.purchase_units?.length === 1 ? captured.purchase_units[0] : null;
+    const capture = unit?.payments?.captures?.length === 1 ? unit.payments.captures[0] : null;
+    const amount = capture?.amount;
+    const exponent = await currencyExponent(intent.currency);
+    const amountMinor = amount?.value ? (() => { try { return decimalToMinorExact(amount.value, exponent); } catch { return null; } })() : null;
+    const customIdMatches = unit?.custom_id === `store-buster-ad:${intent.id}` && unit?.reference_id === `store-buster-ad:${intent.id}`;
+    const settlement = await settleStoreBusterFunding({ provider: 'PAYPAL', eventId: `api-capture:${capture?.id ?? intent.providerOrderRef}`, eventType: 'PAYMENT.CAPTURE.COMPLETED', fundingIntentId: intent.id, providerOrderRef: intent.providerOrderRef, providerPaymentRef: capture?.id, amountMinor, currency: amount?.currency_code ?? null, captureConfirmed: captured.status === 'COMPLETED' && capture?.status === 'COMPLETED' && customIdMatches });
+    if (settlement.reconciliation === 'REVIEW_REQUIRED') return res.status(202).json({ ok: false, status: 'REVIEW', message: 'Payment was received but needs marketplace reconciliation before ad credit is available.' });
+    res.json({ ok: true, status: 'PAID', alreadyPaid: settlement.reconciliation === 'DUPLICATE' });
   }));
 
   app.post('/api/seller/store-buster/campaigns', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
@@ -144,17 +371,25 @@ export function registerStoreGrowthRoutes(app: Express) {
     const campaign = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
       const [effective, settings] = await Promise.all([effectiveStorePlan(tx, store.id), tx.storeBusterSettings.findUnique({ where: { id: 'default' } })]);
-      const entitlements = asStorePlanEntitlements(effective.version);
+      const entitlements = await storeEntitlements(tx, store.id, effective.version);
       if (!entitlements.storeBusterEnabled) throw fail(409, 'Store Buster is not enabled for this plan.', { code: 'PLAN_FEATURE_NOT_ENABLED', entitlement: 'storeBusterEnabled', planUrl: '/seller/plan' });
       if (!settings?.enabled) throw fail(503, 'Store Buster is currently unavailable by platform policy.');
       const limit = Math.min(entitlements.storeBusterCampaignLimit, settings.maxCampaignsPerStore);
       const count = await tx.storeBusterCampaign.count({ where: { storeId: store.id, status: { in: ['DRAFT', 'PENDING_REVIEW', 'APPROVED', 'PAUSED'] } } });
       if (count >= limit) throw fail(409, 'Your Store has reached its Store Buster campaign limit.', { code: 'PLAN_LIMIT_REACHED', entitlement: 'storeBusterCampaignLimit', usage: count, limit, upgradeRequired: true, planUrl: '/seller/plan' });
-      const products = await tx.product.findMany({ where: { id: { in: input.productIds }, sellerId: user.sellerId, status: ProductStatus.APPROVED, inventory: { quantity: { gt: 0 } } }, select: { id: true } });
+      const products = await tx.product.findMany({ where: { id: { in: input.productIds }, sellerId: user.sellerId, status: ProductStatus.APPROVED, inventory: { quantity: { gt: 0 } } }, select: { id: true, categoryId: true } });
       if (products.length !== input.productIds.length) throw fail(400, 'Every campaign product must be approved, in stock, and owned by your Store.');
       if (input.audienceCategoryIds.length && await tx.category.count({ where: { id: { in: input.audienceCategoryIds }, status: 'ACTIVE' } }) !== new Set(input.audienceCategoryIds).size) throw fail(400, 'Choose only active audience interests.');
-      const created = await tx.storeBusterCampaign.create({ data: { storeId: store.id, name: input.name, goal: input.goal, sponsored: false, monthlyBudgetMinor: 0, audienceCategoryIds: input.audienceCategoryIds, products: { create: products.map(product => ({ productId: product.id })) } } });
-      await tx.auditLog.create({ data: { actorId: user.id, action: 'STORE_BUSTER_CAMPAIGN_CREATED', entity: 'StoreBusterCampaign', entityId: created.id, metadata: { storeId: store.id, goal: created.goal, sponsored: false, productCount: products.length } } });
+      if (input.sponsored && input.audienceCategoryIds.length && !products.some(product => product.categoryId && input.audienceCategoryIds.includes(product.categoryId))) throw fail(400, 'At least one selected product must match the chosen sponsored category audience.');
+      if (input.sponsored) {
+        const billing = await sponsoredBillingStatus();
+        if (!billing.available || !settings.sponsoredEnabled || !settings.moderationRequired || settings.pricePerClickMinor <= 0) throw fail(409, 'Sponsored campaigns are not available until payment and review safeguards are ready.');
+        if (input.monthlyBudgetMinor > Math.min(settings.maxMonthlyBudgetMinor, entitlements.storeBusterMonthlyBudgetMinor)) throw fail(400, 'Campaign budget exceeds your plan or platform monthly cap.');
+        const adAccount = await tx.storeBusterAdAccount.findUnique({ where: { storeId: store.id } });
+        if (!adAccount || adAccount.currency !== env.CURRENCY || adAccount.status !== StoreBusterAdAccountStatus.ACTIVE || adAccount.availableMinor < settings.pricePerClickMinor) throw fail(409, 'Fund your active prepaid ad balance before submitting a sponsored campaign.');
+      } else if (input.monthlyBudgetMinor !== 0) throw fail(400, 'Organic campaigns do not use advertising credit.');
+      const created = await tx.storeBusterCampaign.create({ data: { storeId: store.id, name: input.name, goal: input.goal, sponsored: input.sponsored, monthlyBudgetMinor: input.monthlyBudgetMinor, audienceCategoryIds: input.audienceCategoryIds, products: { create: products.map(product => ({ productId: product.id })) } } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'STORE_BUSTER_CAMPAIGN_CREATED', entity: 'StoreBusterCampaign', entityId: created.id, metadata: { storeId: store.id, goal: created.goal, sponsored: created.sponsored, monthlyBudgetMinor: created.monthlyBudgetMinor, productCount: products.length } } });
       return created;
     });
     res.status(201).json(campaign);
@@ -168,7 +403,13 @@ export function registerStoreGrowthRoutes(app: Express) {
       const [effective, settings, campaign] = await Promise.all([effectiveStorePlan(tx, store.id), tx.storeBusterSettings.findUnique({ where: { id: 'default' } }), tx.storeBusterCampaign.findFirst({ where: { id, storeId: store.id }, include: { products: { include: { product: true } } } })]);
       if (!campaign) throw fail(404, 'Campaign not found.');
       if (!['DRAFT', 'REJECTED'].includes(campaign.status)) throw fail(409, 'Only draft or rejected campaigns can be submitted for review.');
-      if (!asStorePlanEntitlements(effective.version).storeBusterEnabled || !settings?.enabled) throw fail(409, 'Store Buster is unavailable for this Store.');
+      const entitlements = await storeEntitlements(tx, store.id, effective.version);
+      if (!entitlements.storeBusterEnabled || !settings?.enabled) throw fail(409, 'Store Buster is unavailable for this Store.');
+      if (campaign.sponsored) {
+        const billing = await sponsoredBillingStatus();
+        const adAccount = await tx.storeBusterAdAccount.findUnique({ where: { storeId: store.id } });
+        if (!billing.available || !settings.sponsoredEnabled || !settings.moderationRequired || settings.pricePerClickMinor <= 0 || !adAccount || adAccount.status !== 'ACTIVE' || adAccount.availableMinor < settings.pricePerClickMinor || campaign.monthlyBudgetMinor <= 0 || campaign.monthlyBudgetMinor > Math.min(settings.maxMonthlyBudgetMinor, entitlements.storeBusterMonthlyBudgetMinor)) throw fail(409, 'Sponsored campaign cannot be submitted: payment, moderation, budget, or prepaid-balance checks failed.');
+      }
       if (!campaign.products.length || campaign.products.some(item => item.product.status !== ProductStatus.APPROVED || item.product.sellerId !== user.sellerId)) throw fail(409, 'Campaign products are no longer eligible.');
       const status = settings.moderationRequired ? StoreBusterCampaignStatus.PENDING_REVIEW : StoreBusterCampaignStatus.APPROVED;
       const updated = await tx.storeBusterCampaign.update({ where: { id }, data: { status } });
@@ -200,7 +441,8 @@ export function registerStoreGrowthRoutes(app: Express) {
   }));
 
   app.get('/api/admin/store-buster/settings', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
-    res.json({ ...(await prisma.storeBusterSettings.findUnique({ where: { id: 'default' } })), sponsoredDeploymentGate: env.STORE_BUSTER_SPONSORED_AVAILABLE });
+    const [settings, billing] = await Promise.all([prisma.storeBusterSettings.findUnique({ where: { id: 'default' } }), sponsoredBillingStatus()]);
+    res.json({ ...settings, sponsoredDeploymentGate: env.STORE_BUSTER_SPONSORED_AVAILABLE, sponsoredBillingAvailable: billing.available, sponsoredBillingProviders: billing.providers.map(item => item.method), currency: env.CURRENCY });
   }));
   app.patch('/api/admin/store-buster/settings', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const user = actor(res); const input = settingsSchema.parse(req.body);
@@ -213,7 +455,69 @@ export function registerStoreGrowthRoutes(app: Express) {
     });
     res.json({ ...result, sponsoredDeploymentGate: env.STORE_BUSTER_SPONSORED_AVAILABLE });
   }));
-  app.get('/api/admin/store-buster/campaigns', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => res.json(await prisma.storeBusterCampaign.findMany({ include: { store: { select: { id: true, name: true, slug: true } }, products: { include: { product: { select: { id: true, name: true, status: true } } } } }, orderBy: { updatedAt: 'desc' }, take: 200 }))));
+  app.get('/api/admin/store-buster/campaigns', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => res.json(await prisma.storeBusterCampaign.findMany({ include: { store: { select: { id: true, name: true, slug: true } }, products: { include: { product: { select: { id: true, name: true, status: true } } } }, metrics: { orderBy: { day: 'desc' }, take: 90 } }, orderBy: { updatedAt: 'desc' }, take: 200 }))));
+  app.get('/api/admin/store-buster/funding', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
+    const [fundingIntents, accounts] = await Promise.all([
+      prisma.storeBusterAdFundingIntent.findMany({ where: { status: { in: ['PENDING', 'REVIEW'] } }, include: { account: { include: { store: { select: { id: true, name: true, slug: true } } } }, createdBy: { select: { email: true } }, events: { orderBy: { createdAt: 'desc' }, take: 5 }, ledgerEntry: { select: { id: true } } }, orderBy: { createdAt: 'desc' }, take: 100 }),
+      prisma.storeBusterAdAccount.findMany({ where: { status: StoreBusterAdAccountStatus.FROZEN }, include: { store: { select: { id: true, name: true } }, fundingIntents: { where: { status: 'REVIEW' }, select: { id: true, ledgerEntry: { select: { id: true } } } } }, orderBy: { updatedAt: 'desc' }, take: 100 })
+    ]);
+    res.json({ fundingIntents, frozenAccounts: accounts });
+  }));
+  app.patch('/api/admin/store-buster/funding/:id/resolve', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const user = actor(res); const id = param(req.params.id);
+    const input = z.object({ decision: z.enum(['CREDIT', 'VOID']), providerReference: z.string().trim().min(4).max(255).optional(), reason: z.string().trim().min(8).max(500) }).strict().parse(req.body);
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "StoreBusterAdFundingIntent" WHERE "id" = ${id} FOR UPDATE`;
+      const intent = await tx.storeBusterAdFundingIntent.findUnique({ where: { id }, include: { account: true } });
+      if (!intent || intent.status !== 'REVIEW') throw fail(409, 'Only a funding intent in manual review can be resolved.');
+      await tx.$queryRaw`SELECT "id" FROM "StoreBusterAdAccount" WHERE "id" = ${intent.accountId} FOR UPDATE`;
+      const current = await tx.storeBusterAdAccount.findUniqueOrThrow({ where: { id: intent.accountId } });
+      const existingLedger = await tx.storeBusterAdLedgerEntry.findUnique({ where: { fundingIntentId: intent.id } });
+      if (existingLedger) throw fail(409, 'This payment was already credited before a refund, reversal, or dispute. It cannot be credited or voided again; keep the account frozen and use the audited risk-release action only after finance reconciliation.');
+      if (input.decision === 'CREDIT') {
+        if (!input.providerReference || ![intent.providerOrderRef, intent.providerPaymentRef, intent.providerCheckoutRef].includes(input.providerReference)) throw fail(400, 'Enter the exact provider reference recorded for this funding intent after verifying capture in the provider dashboard.');
+        const matchingEvent = await tx.storeBusterFundingEvent.findFirst({ where: { fundingIntentId: intent.id }, orderBy: { createdAt: 'desc' } });
+        if (matchingEvent && (matchingEvent.amountMinor !== intent.amountMinor || matchingEvent.currency !== intent.currency)) throw fail(409, 'Provider amount/currency evidence differs from the intent; credit requires exact amount and currency reconciliation.');
+        const balanceAfter = current.availableMinor + intent.amountMinor;
+        if (balanceAfter > 2_147_483_647) throw fail(409, 'Funding would exceed the supported ad-balance ledger range.');
+        await tx.storeBusterAdAccount.update({ where: { id: current.id }, data: { availableMinor: balanceAfter } });
+        await tx.storeBusterAdLedgerEntry.create({ data: { accountId: current.id, fundingIntentId: intent.id, type: 'TOP_UP', amountMinor: intent.amountMinor, balanceAfterMinor: balanceAfter, currency: intent.currency, idempotencyKey: `funding:${intent.id}` } });
+        await tx.storeBusterAdFundingIntent.update({ where: { id }, data: { status: 'PAID', paidAt: new Date() } });
+      } else await tx.storeBusterAdFundingIntent.update({ where: { id }, data: { status: 'FAILED' } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: `STORE_BUSTER_FUNDING_${input.decision}_AFTER_REVIEW`, entity: 'StoreBusterAdFundingIntent', entityId: id, metadata: { reason: input.reason, providerReference: input.providerReference ?? null, amountMinor: intent.amountMinor, currency: intent.currency } } });
+      return { id, status: input.decision === 'CREDIT' ? 'PAID' : 'FAILED', accountId: intent.accountId };
+    });
+    res.json(result);
+  }));
+  app.patch('/api/admin/store-buster/ad-accounts/:id/status', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const user = actor(res); const id = param(req.params.id);
+    const input = z.object({ status: z.nativeEnum(StoreBusterAdAccountStatus), riskAcknowledgement: z.boolean().default(false), reason: z.string().trim().min(8).max(500) }).strict().parse(req.body);
+    const account = await prisma.$transaction(async tx => {
+      const reviewIds = input.status === StoreBusterAdAccountStatus.ACTIVE
+        ? await tx.storeBusterAdFundingIntent.findMany({ where: { accountId: id, status: 'REVIEW' }, select: { id: true }, orderBy: { id: 'asc' } })
+        : [];
+      for (const review of reviewIds) await tx.$queryRaw`SELECT "id" FROM "StoreBusterAdFundingIntent" WHERE "id" = ${review.id} FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "StoreBusterAdAccount" WHERE "id" = ${id} FOR UPDATE`;
+      const current = await tx.storeBusterAdAccount.findUnique({ where: { id } }); if (!current) throw fail(404, 'Advertising account not found.');
+      const reviews = input.status === StoreBusterAdAccountStatus.ACTIVE ? await tx.storeBusterAdFundingIntent.findMany({ where: { accountId: id, status: 'REVIEW' }, include: { ledgerEntry: { select: { id: true } } }, orderBy: { id: 'asc' } }) : [];
+      if (reviews.some(intent => !intent.ledgerEntry)) throw fail(409, 'Resolve every uncredited funding review before restoring ad delivery.');
+      if (reviews.length && !input.riskAcknowledgement) throw fail(409, 'A refunded/disputed top-up was already credited. Explicit finance-risk acknowledgement is required to reverse remaining ad credit and accept any already-spent loss.');
+      let reversedMinor = 0;
+      if (reviews.length) {
+        if (current.availableMinor > 0) {
+          reversedMinor = current.availableMinor;
+          const reviewBatch = crypto.createHash('sha256').update(reviews.map(intent => intent.id).sort().join(':')).digest('hex').slice(0, 24);
+          await tx.storeBusterAdLedgerEntry.create({ data: { accountId: id, type: 'REFUND_REVERSAL', amountMinor: -reversedMinor, balanceAfterMinor: 0, currency: current.currency, idempotencyKey: `risk-release:${current.id}:${reviewBatch}` } });
+        }
+        await tx.storeBusterAdAccount.update({ where: { id }, data: { availableMinor: 0 } });
+        await tx.storeBusterAdFundingIntent.updateMany({ where: { id: { in: reviews.map(intent => intent.id) }, status: 'REVIEW' }, data: { status: 'FAILED' } });
+      }
+      const updated = await tx.storeBusterAdAccount.update({ where: { id }, data: { status: input.status } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: `STORE_BUSTER_AD_ACCOUNT_${input.status}`, entity: 'StoreBusterAdAccount', entityId: id, metadata: { reason: input.reason, previousStatus: current.status, balanceMinor: current.availableMinor, riskAcknowledgement: input.riskAcknowledgement, reversedAvailableCreditMinor: reversedMinor, riskReviewedFundingIntents: reviews.map(intent => intent.id) } } });
+      return updated;
+    });
+    res.json({ id: account.id, status: account.status });
+  }));
   app.patch('/api/admin/store-buster/campaigns/:id/review', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const user = actor(res); const input = z.object({ status: z.enum(['APPROVED', 'REJECTED', 'PAUSED']), reason: z.string().trim().min(3).max(500) }).strict().parse(req.body);
     const current = await prisma.storeBusterCampaign.findUnique({ where: { id: param(req.params.id) } }); if (!current) throw fail(404, 'Campaign not found.');
@@ -222,6 +526,14 @@ export function registerStoreGrowthRoutes(app: Express) {
     if (status === StoreBusterCampaignStatus.REJECTED && current.status !== StoreBusterCampaignStatus.PENDING_REVIEW) throw fail(409, 'Only a pending campaign can be rejected.');
     if (status === StoreBusterCampaignStatus.PAUSED && current.status !== StoreBusterCampaignStatus.APPROVED) throw fail(409, 'Only an approved campaign can be paused.');
     const result = await prisma.$transaction(async tx => {
+      if (status === StoreBusterCampaignStatus.APPROVED && current.sponsored) {
+        const [settings, account, billing, effective] = await Promise.all([tx.storeBusterSettings.findUnique({ where: { id: 'default' } }), tx.storeBusterAdAccount.findUnique({ where: { storeId: current.storeId } }), sponsoredBillingStatus(), effectiveStorePlan(tx, current.storeId)]);
+        const entitlements = await storeEntitlements(tx, current.storeId, effective.version);
+        if (!env.STORE_BUSTER_SPONSORED_AVAILABLE || !billing.available || !settings?.enabled || !settings.sponsoredEnabled || !settings.moderationRequired || settings.pricePerClickMinor <= 0 || !entitlements.storeBusterEnabled || current.monthlyBudgetMinor > entitlements.storeBusterMonthlyBudgetMinor || !account || account.status !== 'ACTIVE' || account.currency !== env.CURRENCY || account.availableMinor < settings.pricePerClickMinor || current.monthlyBudgetMinor <= 0 || current.monthlyBudgetMinor > settings.maxMonthlyBudgetMinor) throw fail(409, 'Sponsored campaign cannot be approved while a payment, plan, budget, moderation, or prepaid-balance gate is closed.');
+        const [campaignStore, campaignProducts] = await Promise.all([tx.store.findUnique({ where: { id: current.storeId }, select: { sellerId: true } }), tx.storeBusterCampaignProduct.findMany({ where: { campaignId: current.id }, select: { productId: true } })]);
+        const eligibleProducts = await tx.product.findMany({ where: { id: { in: campaignProducts.map(item => item.productId) }, sellerId: campaignStore?.sellerId ?? '__missing_store_owner__', status: ProductStatus.APPROVED, inventory: { quantity: { gt: 0 } } }, select: { categoryId: true } });
+        if (!eligibleProducts.length || (current.audienceCategoryIds.length && !eligibleProducts.some(product => product.categoryId && current.audienceCategoryIds.includes(product.categoryId)))) throw fail(409, 'Sponsored campaign has no approved, in-stock product matching its selected audience.');
+      }
       const updated = await tx.storeBusterCampaign.update({ where: { id: current.id }, data: { status, moderationReason: input.reason, reviewedById: user.id, reviewedAt: new Date() } });
       await tx.auditLog.create({ data: { actorId: user.id, action: `STORE_BUSTER_CAMPAIGN_${status}`, entity: 'StoreBusterCampaign', entityId: current.id, metadata: { reason: input.reason } } });
       return updated;
@@ -232,7 +544,7 @@ export function registerStoreGrowthRoutes(app: Express) {
   app.get('/api/seller/affiliate-program', requireAuth, requireRole(Role.SELLER), run(async (_req, res) => {
     const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.'); const store = await sellerStore(user.sellerId);
     const [effective, program, settings] = await Promise.all([effectiveStorePlan(prisma, store.id), prisma.storeAffiliateProgram.findUnique({ where: { storeId: store.id } }), prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { affiliateEnabled: true } })]);
-    const included = asStorePlanEntitlements(effective.version).affiliateToolsEnabled;
+    const included = (await storeEntitlements(prisma, store.id, effective.version)).affiliateToolsEnabled;
     res.json({ included, enabled: program?.enabled ?? false, marketplaceProgramAvailable: settings?.affiliateEnabled ?? false, payoutRequestsAvailable: false, message: 'This setting controls whether affiliates may promote this Store through the existing platform program. It does not create seller commissions or seller payouts; no payout capability is enabled by this Store plan.' });
   }));
   app.patch('/api/seller/affiliate-program', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
@@ -240,7 +552,7 @@ export function registerStoreGrowthRoutes(app: Express) {
     const input = z.object({ enabled: z.boolean() }).strict().parse(req.body);
     const result = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
-      const entitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      const entitlements = await storeEntitlements(tx, store.id);
       if (input.enabled && !entitlements.affiliateToolsEnabled) throw fail(409, 'Affiliate tools are not enabled for this plan.', { code: 'PLAN_FEATURE_NOT_ENABLED', entitlement: 'affiliateToolsEnabled', planUrl: '/seller/plan' });
       const settings = await tx.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { affiliateEnabled: true } });
       if (input.enabled && !settings?.affiliateEnabled) throw fail(409, 'The platform affiliate program is not currently accepting Store participation.');
@@ -259,21 +571,73 @@ export function registerStoreGrowthRoutes(app: Express) {
       prisma.storeEmailSubscriber.findMany({ where: { storeId: store.id }, select: { id: true, email: true, status: true, consentRecordedAt: true, createdAt: true, suppressedAt: true, bouncedAt: true }, orderBy: { createdAt: 'desc' }, take: 100 }),
       prisma.storeEmailCampaign.findMany({ where: { storeId: store.id }, orderBy: { updatedAt: 'desc' }, take: 50 })
     ]);
-    const entitlements = asStorePlanEntitlements(effective.version);
-    res.json({ enabledForPlan: entitlements.emailMarketingEnabled, deliveryAvailable: false, deploymentGate: env.STORE_EMAIL_DELIVERY_AVAILABLE, subscriberLimit: entitlements.emailSubscriberLimit, monthlySendLimit: entitlements.emailMonthlySendLimit, counts: Object.fromEntries(counts.map(item => [item.status, item._count._all])), subscribers: subscribers.map(item => ({ ...item, emailMasked: maskSubscriberEmail(item.email), email: undefined })), campaigns, message: 'No verified email provider adapter is implemented. The deployment gate is only a safety cap; list confirmation and all message delivery remain unavailable.' });
+    const entitlements = await storeEntitlements(prisma, store.id, effective.version);
+    const provider = await storeEmailProviderStatus();
+    res.json({ enabledForPlan: entitlements.emailMarketingEnabled, deliveryAvailable: provider.enabled, deploymentGate: provider.deploymentGate, provider, subscriberLimit: entitlements.emailSubscriberLimit, monthlySendLimit: entitlements.emailMonthlySendLimit, counts: Object.fromEntries(counts.map(item => [item.status, item._count._all])), subscribers: subscribers.map(item => ({ ...item, emailMasked: maskSubscriberEmail(item.email), email: undefined })), campaigns, message: !entitlements.emailMarketingEnabled ? 'Email marketing is not included in this Store plan.' : provider.message });
+  }));
+
+  app.get('/api/stores/:slug/newsletter/status', run(async (req, res) => {
+    const store = await prisma.store.findFirst({ where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: 'Store not found.' });
+    const effective = await effectiveStorePlan(prisma, store.id);
+    const entitlements = await storeEntitlements(prisma, store.id, effective.version);
+    const provider = await storeEmailProviderStatus();
+    res.json({ available: entitlements.emailMarketingEnabled && provider.enabled, enabledForPlan: entitlements.emailMarketingEnabled, deliveryAvailable: provider.enabled, message: !entitlements.emailMarketingEnabled ? 'Store updates are not available for this Store plan.' : provider.message });
   }));
 
   app.post('/api/seller/email-campaigns', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
     const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.'); const store = await sellerStore(user.sellerId); const input = emailCampaignSchema.parse(req.body);
     const campaign = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
-      const entitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      const entitlements = await storeEntitlements(tx, store.id);
       if (!entitlements.emailMarketingEnabled) throw fail(409, 'Email marketing is not enabled for this plan.', { code: 'PLAN_FEATURE_NOT_ENABLED', entitlement: 'emailMarketingEnabled', planUrl: '/seller/plan' });
       const created = await tx.storeEmailCampaign.create({ data: { storeId: store.id, name: input.name, subject: input.subject, contentJson: jsonInput(input.content), status: 'DRAFT' } });
       await tx.auditLog.create({ data: { actorId: user.id, action: 'STORE_EMAIL_CAMPAIGN_DRAFT_CREATED', entity: 'StoreEmailCampaign', entityId: created.id, metadata: { storeId: store.id } } });
       return created;
     });
-    res.status(201).json({ ...campaign, deliveryAvailable: false, message: 'Saved as a draft only. Sending remains disabled until an approved email provider, consent checks, suppression lists, and send limits are configured.' });
+    res.status(201).json({ ...campaign, deliveryAvailable: (await storeEmailProviderStatus()).enabled, message: 'Campaign saved as a draft. Review its audience and content before queueing.' });
+  }));
+  app.post('/api/seller/email-campaigns/:id/send', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
+    const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.');
+    const store = await sellerStore(user.sellerId);
+    const campaignId = param(req.params.id);
+    if (!(await storeEmailProviderStatus()).enabled) throw fail(409, 'Email delivery is not configured and enabled.', { code: 'STORE_EMAIL_DELIVERY_UNAVAILABLE' });
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
+      const effective = await effectiveStorePlan(tx, store.id);
+      const entitlements = await storeEntitlements(tx, store.id, effective.version);
+      if (!entitlements.emailMarketingEnabled) throw fail(409, 'Email marketing is not enabled for this plan.', { code: 'PLAN_FEATURE_NOT_ENABLED', entitlement: 'emailMarketingEnabled', planUrl: '/seller/plan' });
+      const campaign = await tx.storeEmailCampaign.findFirst({ where: { id: campaignId, storeId: store.id } });
+      if (!campaign) throw fail(404, 'Email campaign not found.');
+      if (campaign.status !== StoreEmailCampaignStatus.DRAFT) throw fail(409, 'Only a draft campaign can be queued.');
+      const content = emailCampaignSchema.shape.content.parse(campaign.contentJson);
+      const subject = emailCampaignSchema.shape.subject.parse(campaign.subject);
+      const eligible = await tx.storeEmailSubscriber.findMany({ where: { storeId: store.id, status: StoreEmailSubscriberStatus.SUBSCRIBED, consentRecordedAt: { not: null } }, select: { id: true }, orderBy: { createdAt: 'asc' }, take: entitlements.emailSubscriberLimit + 1 });
+      if (eligible.length > entitlements.emailSubscriberLimit) throw fail(409, 'Subscriber count exceeds this plan\u2019s send limit.', { code: 'EMAIL_SUBSCRIBER_LIMIT', limit: entitlements.emailSubscriberLimit });
+      if (!eligible.length) throw fail(409, 'There are no confirmed subscribers to receive this campaign.');
+      const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+      const monthlyReserved = await tx.storeEmailDelivery.count({ where: { campaign: { storeId: store.id }, createdAt: { gte: monthStart }, status: { in: [StoreEmailDeliveryStatus.PENDING, StoreEmailDeliveryStatus.SENDING, StoreEmailDeliveryStatus.SENT, StoreEmailDeliveryStatus.FAILED] } } });
+      if (monthlyReserved + eligible.length > entitlements.emailMonthlySendLimit) throw fail(409, 'Queueing this campaign would exceed the plan\u2019s monthly email-send limit.', { code: 'EMAIL_MONTHLY_SEND_LIMIT', usage: monthlyReserved, requested: eligible.length, limit: entitlements.emailMonthlySendLimit });
+      await tx.storeEmailDelivery.createMany({ data: eligible.map(subscriber => ({ campaignId, subscriberId: subscriber.id })) });
+      const queued = await tx.storeEmailCampaign.update({ where: { id: campaignId }, data: { status: StoreEmailCampaignStatus.QUEUED, recipientCount: eligible.length, queuedAt: new Date(), sentAt: null, sentCount: 0, failedCount: 0 } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'STORE_EMAIL_CAMPAIGN_QUEUED', entity: 'StoreEmailCampaign', entityId: campaignId, metadata: { storeId: store.id, recipientCount: eligible.length, subject, contentBlockCount: content.length } } });
+      return queued;
+    });
+    res.json({ campaign: result, message: 'Campaign queued. Delivery is processed in small batches; unsubscribe and consent are checked again for every recipient.' });
+  }));
+  app.post('/api/seller/email-campaigns/:id/cancel', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
+    const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.'); const store = await sellerStore(user.sellerId); const campaignId = param(req.params.id);
+    const campaign = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
+      const current = await tx.storeEmailCampaign.findFirst({ where: { id: campaignId, storeId: store.id } });
+      if (!current) throw fail(404, 'Email campaign not found.');
+      if (current.status !== StoreEmailCampaignStatus.DRAFT && current.status !== StoreEmailCampaignStatus.QUEUED) throw fail(409, 'This campaign can no longer be cancelled.');
+      await tx.storeEmailDelivery.updateMany({ where: { campaignId, status: StoreEmailDeliveryStatus.PENDING }, data: { status: StoreEmailDeliveryStatus.SKIPPED } });
+      const updated = await tx.storeEmailCampaign.update({ where: { id: campaignId }, data: { status: StoreEmailCampaignStatus.CANCELLED } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'STORE_EMAIL_CAMPAIGN_CANCELLED', entity: 'StoreEmailCampaign', entityId: campaignId, metadata: { storeId: store.id, priorStatus: current.status } } });
+      return updated;
+    });
+    res.json({ campaign, message: 'Campaign cancelled. Already accepted SMTP deliveries cannot be recalled.' });
   }));
   app.post('/api/seller/email-subscribers/:id/suppress', requireAuth, requireRole(Role.SELLER), run(async (req, res) => {
     const user = actor(res); if (!user.sellerId) throw fail(403, 'Seller scope required.'); const store = await sellerStore(user.sellerId);
@@ -288,18 +652,66 @@ export function registerStoreGrowthRoutes(app: Express) {
 
   app.post('/api/stores/:slug/newsletter', run(async (req, res) => {
     const input = z.object({ email: z.string().trim().email().max(254), consent: z.literal(true), consentSource: z.string().trim().min(2).max(80) }).strict().parse(req.body);
-    const store = await prisma.store.findFirst({ where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } }, select: { id: true } }); if (!store) return res.status(404).json({ error: 'Store not found.' });
-    const effective = await effectiveStorePlan(prisma, store.id); const entitlements = asStorePlanEntitlements(effective.version);
+    const store = await prisma.store.findFirst({ where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } }, select: { id: true, name: true } }); if (!store) return res.status(404).json({ error: 'Store not found.' });
+    const effective = await effectiveStorePlan(prisma, store.id); const entitlements = await storeEntitlements(prisma, store.id, effective.version);
     if (!entitlements.emailMarketingEnabled) return res.status(409).json({ code: 'PLAN_FEATURE_NOT_ENABLED', entitlement: 'emailMarketingEnabled', error: 'Email marketing is not enabled for this Store plan.' });
-    if (!env.STORE_EMAIL_DELIVERY_AVAILABLE) return res.status(503).json({ code: 'STORE_EMAIL_DELIVERY_UNAVAILABLE', error: 'Subscription confirmation is unavailable because the email delivery provider is not configured. No subscriber record was created.' });
-    // Delivery stays fail-closed until a verified provider implementation is added.
-    return res.status(503).json({ code: 'STORE_EMAIL_DELIVERY_UNAVAILABLE', error: 'No verified email provider adapter is implemented; no subscriber record was created.' });
+    if (!(await storeEmailProviderStatus()).enabled) return res.status(503).json({ code: 'STORE_EMAIL_DELIVERY_UNAVAILABLE', error: 'Subscription confirmation is temporarily unavailable. Please try again later.' });
+    const email = normalizeSubscriberEmail(input.email);
+    const token = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const now = new Date();
+    let subscriberId: string | null = null;
+    let shouldSend = false;
+    await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
+      const existing = await tx.storeEmailSubscriber.findUnique({ where: { storeId_email: { storeId: store.id, email } } });
+      if (existing?.status === StoreEmailSubscriberStatus.SUPPRESSED || existing?.status === StoreEmailSubscriberStatus.BOUNCED) return;
+      if (existing?.status === StoreEmailSubscriberStatus.SUBSCRIBED) return;
+      if (existing?.status === StoreEmailSubscriberStatus.PENDING_CONFIRMATION && existing.updatedAt.getTime() > now.getTime() - 60_000) return;
+      const activeCount = await tx.storeEmailSubscriber.count({ where: { storeId: store.id, status: { in: [StoreEmailSubscriberStatus.PENDING_CONFIRMATION, StoreEmailSubscriberStatus.SUBSCRIBED] } } });
+      const existingCountsTowardLimit = existing?.status === StoreEmailSubscriberStatus.PENDING_CONFIRMATION;
+      if (!existingCountsTowardLimit && activeCount >= entitlements.emailSubscriberLimit) return;
+      const subscriber = existing
+        ? await tx.storeEmailSubscriber.update({ where: { id: existing.id }, data: { status: StoreEmailSubscriberStatus.PENDING_CONFIRMATION, consentRecordedAt: null, consentSource: input.consentSource, confirmationTokenHash: tokenHash, confirmationExpiresAt: new Date(now.getTime() + 48 * 60 * 60_000), unsubscribeTokenHash: crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex'), suppressedAt: null, suppressionReason: null, bouncedAt: null } })
+        : await tx.storeEmailSubscriber.create({ data: { storeId: store.id, email, status: StoreEmailSubscriberStatus.PENDING_CONFIRMATION, consentSource: input.consentSource, confirmationTokenHash: tokenHash, confirmationExpiresAt: new Date(now.getTime() + 48 * 60 * 60_000), unsubscribeTokenHash: crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex') } });
+      subscriberId = subscriber.id;
+      shouldSend = true;
+    });
+    if (shouldSend && subscriberId) {
+      try { await sendStoreEmailConfirmation({ to: email, storeName: store.name, token }); }
+      catch (error) {
+        const safe = error instanceof StoreEmailTransportError ? error : new StoreEmailTransportError('EMAIL_CONNECTION_FAILED');
+        console.warn(`Store email confirmation delivery failed: ${safe.code}`);
+      }
+    }
+    // Same response for known, pending, suppressed, bounced, and already subscribed addresses.
+    res.status(202).json({ accepted: true, message: 'If eligible, a confirmation email will arrive shortly. Your subscription is not active until you confirm.' });
+  }));
+
+  app.post('/api/store-email/confirm/:token', run(async (req, res) => {
+    z.object({}).strict().parse(req.body ?? {});
+    const token = param(req.params.token);
+    if (!/^[A-Za-z0-9_-]{40,60}$/.test(token)) throw fail(400, 'Confirmation link is invalid or expired.');
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    const updated = await prisma.storeEmailSubscriber.updateMany({ where: { confirmationTokenHash: hash, status: StoreEmailSubscriberStatus.PENDING_CONFIRMATION, confirmationExpiresAt: { gt: new Date() } }, data: { status: StoreEmailSubscriberStatus.SUBSCRIBED, consentRecordedAt: new Date(), confirmationTokenHash: null, confirmationExpiresAt: null } });
+    if (!updated.count) throw fail(400, 'Confirmation link is invalid, expired, or already used.');
+    res.json({ confirmed: true, message: 'Your email subscription is confirmed.' });
   }));
 
   app.post('/api/store-email/unsubscribe/:token', run(async (req, res) => {
-    const hash = crypto.createHash('sha256').update(param(req.params.token)).digest('hex');
-    const updated = await prisma.storeEmailSubscriber.updateMany({ where: { unsubscribeTokenHash: hash, status: { notIn: ['UNSUBSCRIBED', 'SUPPRESSED', 'BOUNCED'] } }, data: { status: StoreEmailSubscriberStatus.UNSUBSCRIBED } });
-    if (!updated.count) return res.status(404).json({ error: 'Unsubscribe link is invalid or already used.' });
-    res.json({ unsubscribed: true });
+    z.object({}).strict().parse(req.body ?? {});
+    const token = param(req.params.token);
+    const subscriberId = env.STORE_EMAIL_TOKEN_SECRET ? verifyUnsubscribeToken(token, env.STORE_EMAIL_TOKEN_SECRET) : null;
+    if (subscriberId) {
+      const subscriber = await prisma.storeEmailSubscriber.findUnique({ where: { id: subscriberId }, select: { id: true, status: true } });
+      if (!subscriber) throw fail(404, 'Unsubscribe link is invalid.');
+      if (subscriber.status !== StoreEmailSubscriberStatus.UNSUBSCRIBED) await prisma.storeEmailSubscriber.update({ where: { id: subscriberId }, data: { status: StoreEmailSubscriberStatus.UNSUBSCRIBED } });
+      return res.json({ unsubscribed: true, message: 'You will no longer receive email updates from this Store.' });
+    }
+    // Compatibility for previously issued opaque tokens stored as a digest.
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    const updated = await prisma.storeEmailSubscriber.updateMany({ where: { unsubscribeTokenHash: hash, status: { notIn: [StoreEmailSubscriberStatus.UNSUBSCRIBED, StoreEmailSubscriberStatus.SUPPRESSED, StoreEmailSubscriberStatus.BOUNCED] } }, data: { status: StoreEmailSubscriberStatus.UNSUBSCRIBED } });
+    if (!updated.count) throw fail(404, 'Unsubscribe link is invalid or already used.');
+    res.json({ unsubscribed: true, message: 'You will no longer receive email updates from this Store.' });
   }));
 }

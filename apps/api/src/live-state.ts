@@ -2,7 +2,7 @@ export type LiveLifecycle = 'DRAFT' | 'SCHEDULED' | 'STARTING' | 'LIVE' | 'PAUSE
 
 export const liveTransitions: Record<LiveLifecycle, LiveLifecycle[]> = {
   DRAFT: ['SCHEDULED', 'CANCELLED'],
-  SCHEDULED: ['STARTING', 'CANCELLED'],
+  SCHEDULED: ['DRAFT', 'STARTING', 'CANCELLED'],
   STARTING: ['LIVE', 'FAILED', 'CANCELLED'],
   LIVE: ['PAUSED', 'ENDED', 'FAILED'],
   PAUSED: ['LIVE', 'ENDED', 'FAILED'],

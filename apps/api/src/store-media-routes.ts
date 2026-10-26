@@ -8,7 +8,7 @@ import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { env } from './config.js';
 import { prisma, requireAuth, requireRole } from './security.js';
-import { effectiveStorePlan, asStorePlanEntitlements } from './store-plan-domain.js';
+import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
 import { objectContentStorage } from './content-storage.js';
 import type { ManagedContentStorage } from './content-storage.js';
 import { authorizedBrandingStore } from './store-branding-access.js';
@@ -24,11 +24,20 @@ const supportedTypes: Record<string, { kind: MediaKind; extensions: string[] }> 
   'image/png': { kind: MediaKind.IMAGE, extensions: ['png'] },
   'image/jpeg': { kind: MediaKind.IMAGE, extensions: ['jpg', 'jpeg'] },
   'image/webp': { kind: MediaKind.IMAGE, extensions: ['webp'] },
+  'image/avif': { kind: MediaKind.IMAGE, extensions: ['avif'] },
+  'image/heic': { kind: MediaKind.IMAGE, extensions: ['heic'] },
+  'image/heif': { kind: MediaKind.IMAGE, extensions: ['heic', 'heif'] },
   'image/gif': { kind: MediaKind.IMAGE, extensions: ['gif'] },
-  'video/mp4': { kind: MediaKind.VIDEO, extensions: ['mp4'] },
+  'video/mp4': { kind: MediaKind.VIDEO, extensions: ['mp4', 'm4v'] },
+  'video/quicktime': { kind: MediaKind.VIDEO, extensions: ['mov'] },
+  'video/x-m4v': { kind: MediaKind.VIDEO, extensions: ['m4v'] },
+  'video/3gpp': { kind: MediaKind.VIDEO, extensions: ['3gp'] },
   'video/webm': { kind: MediaKind.VIDEO, extensions: ['webm'] },
+  'video/x-matroska': { kind: MediaKind.VIDEO, extensions: ['mkv'] },
+  'video/matroska': { kind: MediaKind.VIDEO, extensions: ['mkv'] },
   'video/ogg': { kind: MediaKind.VIDEO, extensions: ['ogv', 'ogg'] },
   'application/pdf': { kind: MediaKind.DOCUMENT, extensions: ['pdf'] },
+  'application/msword': { kind: MediaKind.DOCUMENT, extensions: ['doc'] },
   'text/csv': { kind: MediaKind.DOCUMENT, extensions: ['csv'] },
   'text/vtt': { kind: MediaKind.CAPTION, extensions: ['vtt'] },
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { kind: MediaKind.DOCUMENT, extensions: ['docx'] },
@@ -38,14 +47,22 @@ const supportedTypes: Record<string, { kind: MediaKind; extensions: string[] }> 
 
 export function detectStoreMedia(bytes: Buffer, extension: string, claimedMime: string): DetectedFile {
   let detected: DetectedFile | null = null;
+  const isIsoBmff = bytes.subarray(4, 8).toString('ascii') === 'ftyp';
+  const brands = isIsoBmff ? bytes.subarray(8, Math.min(bytes.length, 256)).toString('ascii').toLowerCase() : '';
+  const ebmlHeader = bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  const ebmlDocumentType = ebmlHeader ? bytes.subarray(0, Math.min(bytes.length, 1024)).toString('ascii').toLowerCase() : '';
   if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) detected = { kind: MediaKind.IMAGE, mime: 'image/png', extension: 'png' };
   else if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) detected = { kind: MediaKind.IMAGE, mime: 'image/jpeg', extension: 'jpg' };
   else if (['GIF87a', 'GIF89a'].includes(bytes.subarray(0, 6).toString('ascii'))) detected = { kind: MediaKind.IMAGE, mime: 'image/gif', extension: 'gif' };
   else if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') detected = { kind: MediaKind.IMAGE, mime: 'image/webp', extension: 'webp' };
-  else if (bytes.subarray(4, 8).toString('ascii') === 'ftyp') detected = { kind: MediaKind.VIDEO, mime: 'video/mp4', extension: 'mp4' };
-  else if (bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) detected = { kind: MediaKind.VIDEO, mime: 'video/webm', extension: 'webm' };
+  else if (isIsoBmff && /(avif|avis)/.test(brands)) detected = { kind: MediaKind.IMAGE, mime: 'image/avif', extension: 'avif' };
+  else if (isIsoBmff && /(heic|heix|hevc|hevx|mif1|msf1)/.test(brands)) detected = { kind: MediaKind.IMAGE, mime: claimedMime === 'image/heif' ? 'image/heif' : 'image/heic', extension };
+  else if (isIsoBmff && supportedTypes[claimedMime]?.kind === MediaKind.VIDEO) detected = { kind: MediaKind.VIDEO, mime: claimedMime, extension };
+  else if (ebmlHeader && extension === 'webm' && ebmlDocumentType.includes('webm')) detected = { kind: MediaKind.VIDEO, mime: 'video/webm', extension: 'webm' };
+  else if (ebmlHeader && extension === 'mkv' && ebmlDocumentType.includes('matroska') && supportedTypes[claimedMime]?.kind === MediaKind.VIDEO) detected = { kind: MediaKind.VIDEO, mime: claimedMime, extension: 'mkv' };
   else if (bytes.subarray(0, 4).toString('ascii') === 'OggS') detected = { kind: MediaKind.VIDEO, mime: 'video/ogg', extension: 'ogv' };
   else if (bytes.subarray(0, 5).toString('ascii') === '%PDF-') detected = { kind: MediaKind.DOCUMENT, mime: 'application/pdf', extension: 'pdf' };
+  else if (bytes.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) && extension === 'doc') detected = { kind: MediaKind.DOCUMENT, mime: 'application/msword', extension: 'doc' };
   else if (bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && ['docx', 'xlsx', 'pptx'].includes(extension)) detected = { kind: MediaKind.DOCUMENT, mime: ({ docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' } as const)[extension as 'docx' | 'xlsx' | 'pptx'], extension };
   else if (bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) throw fail(415, 'File extension does not match a supported Office document content type.');
   else if (bytes.subarray(0, 7).toString('utf8').toUpperCase().startsWith('WEBVTT')) detected = { kind: MediaKind.CAPTION, mime: 'text/vtt', extension: 'vtt' };
@@ -92,7 +109,7 @@ export function registerStoreMediaRoutes(app: Express, storage: ManagedContentSt
       const expiresBefore = new Date(Date.now() - uploadReservationTtlMs);
       const stale = await tx.mediaAsset.findMany({ where: { storeId: store.id, uploadStatus: { in: ['PENDING', 'VERIFYING'] }, createdAt: { lt: expiresBefore } }, select: { id: true, storageKey: true } });
       if (stale.length) await tx.mediaAsset.updateMany({ where: { id: { in: stale.map(item => item.id) }, storeId: store.id, uploadStatus: { in: ['PENDING', 'VERIFYING'] } }, data: { uploadStatus: 'FAILED' } });
-      const entitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      const entitlements = await storeEntitlements(tx, store.id);
       const reserved = await tx.mediaAsset.aggregate({ where: activeReservationWhere(store.id, expiresBefore), _sum: { sizeBytes: true } });
       const usage = reserved._sum?.sizeBytes ?? 0;
       if (usage + input.sizeBytes > entitlements.mediaStorageLimitBytes) throw fail(409, 'Your Store has reached its media storage limit.', { code: 'PLAN_LIMIT_REACHED', entitlement: 'mediaStorageLimitBytes', usage, requested: input.sizeBytes, limit: entitlements.mediaStorageLimitBytes, upgradeRequired: true, planUrl: '/seller/plan' });
@@ -128,7 +145,7 @@ export function registerStoreMediaRoutes(app: Express, storage: ManagedContentSt
       prisma.mediaAsset.aggregate({ where: activeReservationWhere(store.id, expiresBefore), _sum: { sizeBytes: true } }),
       prisma.mediaAsset.findMany({ where: { storeId: store.id, ...(userActor.role === Role.CASHIER ? { kind: MediaKind.IMAGE } : {}) }, select: { id: true, originalName: true, kind: true, detectedMime: true, sizeBytes: true, width: true, height: true, scanStatus: true, scanErrorCode: true, scanAttemptCount: true, scanCompletedAt: true, uploadStatus: true, storageProvider: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 100 })
     ]);
-    res.json({ usedBytes: usage._sum.sizeBytes ?? 0, limitBytes: asStorePlanEntitlements(effective.version).mediaStorageLimitBytes, assets });
+    res.json({ usedBytes: usage._sum.sizeBytes ?? 0, limitBytes: (await storeEntitlements(prisma, store.id, effective.version)).mediaStorageLimitBytes, assets });
   }));
 
   app.post('/api/seller/store-media/:id/finalize', requireAuth, requireRole(Role.SELLER, Role.CASHIER), run(async (req, res) => {
@@ -173,7 +190,7 @@ export function registerStoreMediaRoutes(app: Express, storage: ManagedContentSt
       if (detected.kind === MediaKind.IMAGE) {
         const image = sharp(bytes, { limitInputPixels: 40_000_000, animated: false, failOn: 'error' });
         const metadata = await image.metadata();
-        if (!metadata.width || !metadata.height || !['png', 'jpeg', 'webp', 'gif'].includes(metadata.format ?? '')) throw fail(415, 'Image data could not be safely decoded.');
+        if (!metadata.width || !metadata.height || !['png', 'jpeg', 'webp', 'gif', 'heif', 'avif'].includes(metadata.format ?? '')) throw fail(415, 'Image data could not be safely decoded.');
         width = metadata.width; height = metadata.height;
         bytes = await image.rotate().webp({ quality: 86 }).toBuffer();
         mime = 'image/webp'; ext = 'webp';
@@ -182,10 +199,10 @@ export function registerStoreMediaRoutes(app: Express, storage: ManagedContentSt
       await prisma.$transaction(async tx => {
         await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
         const [entitlements, reserved] = await Promise.all([
-          effectiveStorePlan(tx, store.id),
+          storeEntitlements(tx, store.id),
           tx.mediaAsset.aggregate({ where: activeReservationWhere(store.id, expiresBefore, asset.id), _sum: { sizeBytes: true } })
         ]);
-        const allowance = asStorePlanEntitlements(entitlements.version).mediaStorageLimitBytes;
+        const allowance = entitlements.mediaStorageLimitBytes;
         if ((reserved._sum.sizeBytes ?? 0) + bytes.length > allowance) throw fail(409, 'Your Store has reached its media storage limit.', { code: 'PLAN_LIMIT_REACHED', entitlement: 'mediaStorageLimitBytes', limit: allowance, upgradeRequired: true, planUrl: '/seller/plan' });
         const changed = await tx.mediaAsset.updateMany({ where: { id: asset.id, storeId: store.id, uploaderId: userActor.id, uploadStatus: 'VERIFYING' }, data: { sizeBytes: bytes.length } });
         if (changed.count !== 1) throw fail(409, 'Upload was already finalized or is no longer available.');

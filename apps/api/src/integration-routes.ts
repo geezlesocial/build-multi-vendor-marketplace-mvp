@@ -6,6 +6,9 @@ import { env } from './config.js';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { livePaymentActivationBlock } from './provider-activation.js';
 import { storePlanBillingSandboxEnabled } from './stripe-store-billing.js';
+import { stripe } from './payments.js';
+import { walletFundingSandboxEnabled } from './wallet-funding.js';
+import { isRetryablePaymentWebhookEvent, webhookEndpointConfiguration } from './integration-operations-domain.js';
 import { credentialKeysFor, evaluateProviderReadiness, redactProviderAuditReason, validateCredentialReferences, type CredentialReferences, type ProviderContext, type ProviderEnvironment, type ProviderName } from './provider-integrations-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -90,6 +93,81 @@ export function registerIntegrationRoutes(app: Express) {
         wallet: env.MONEY_MOVEMENT_HARD_DISABLED ? 'Wallet funding is still blocked by the independent money-movement hard-disable.' : 'Wallet movement remains subject to its existing provider and marketplace gates.',
         storeBilling: storePlanBillingSandboxEnabled ? 'Stripe test-mode Store billing sandbox is explicitly enabled; this is not live billing.' : 'Stripe test-mode Store billing is disabled by default and configured separately from buyer checkout.'
       }
+    });
+  }));
+
+  app.get('/api/admin/integrations/operations', requireAuth, requireRole(...adminOnly), run(async (req, res) => {
+    const providerFilter = z.enum(['ALL', 'STRIPE', 'PAYPAL']).default('ALL').parse(req.query.provider);
+    const stateFilter = z.enum(['ALL', 'REVIEW_REQUIRED', 'PROCESSED', 'UNVERIFIED']).default('ALL').parse(req.query.state);
+    const page = z.coerce.number().int().min(1).max(1000).catch(1).parse(req.query.page);
+    const pageSize = 25;
+    const now = new Date();
+    const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const filters: Prisma.ProcessedWebhookEventWhereInput[] = [];
+    if (providerFilter !== 'ALL') filters.push({ provider: providerFilter as PaymentMethod });
+    if (stateFilter === 'REVIEW_REQUIRED') filters.push({ identityVerified: true, reviewReason: { not: null } });
+    if (stateFilter === 'PROCESSED') filters.push({ identityVerified: true, reviewReason: null });
+    if (stateFilter === 'UNVERIFIED') filters.push({ identityVerified: false });
+    const where: Prisma.ProcessedWebhookEventWhereInput = filters.length ? { AND: filters } : {};
+
+    const databaseStartedAt = performance.now();
+    await prisma.$queryRaw`SELECT 1`;
+    const databaseLatencyMs = Math.round((performance.now() - databaseStartedAt) * 10) / 10;
+    const [configurations, events, total, events24h, reviewRequired, unverified] = await Promise.all([
+      prisma.providerConfiguration.findMany({ where: { archivedAt: null }, include: { credentials: true }, orderBy: [{ context: 'asc' }, { provider: 'asc' }, { environment: 'asc' }] }),
+      prisma.processedWebhookEvent.findMany({
+        where,
+        select: { id: true, provider: true, eventId: true, eventType: true, receivedAt: true, providerOccurredAt: true, reviewReason: true, parentOrder: { select: { orderNumber: true } }, identityVerified: true },
+        orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }], take: pageSize, skip: (page - 1) * pageSize
+      }),
+      prisma.processedWebhookEvent.count({ where }),
+      prisma.processedWebhookEvent.count({ where: { receivedAt: { gte: since } } }),
+      prisma.processedWebhookEvent.count({ where: { identityVerified: true, reviewReason: { not: null } } }),
+      prisma.processedWebhookEvent.count({ where: { identityVerified: false } })
+    ]);
+
+    const nonPlaceholder = (value: string | undefined) => Boolean(value?.trim() && !value.toLowerCase().includes('placeholder'));
+    const stripeCheckoutConfigured = Boolean(stripe && nonPlaceholder(env.STRIPE_WEBHOOK_SECRET));
+    const paypalCheckoutConfigured = Boolean(nonPlaceholder(env.PAYPAL_CLIENT_ID)
+      && nonPlaceholder(env.PAYPAL_CLIENT_SECRET)
+      && nonPlaceholder(env.PAYPAL_WEBHOOK_ID));
+    const storeBillingConfigured = Boolean(env.STRIPE_STORE_BILLING_SECRET_KEY?.startsWith('sk_test_') && nonPlaceholder(env.STRIPE_STORE_BILLING_WEBHOOK_SECRET));
+    const walletConfigured = Boolean(stripe && env.STRIPE_SECRET_KEY?.startsWith('sk_test_') && nonPlaceholder(env.STRIPE_WEBHOOK_SECRET));
+    const retryable = (provider: string, eventType: string | null, identityVerified: boolean) => identityVerified && isRetryablePaymentWebhookEvent(provider, eventType);
+
+    res.json({
+      checkedAt: now,
+      api: { status: 'UP', uptimeSeconds: Math.floor(process.uptime()) },
+      database: { status: 'UP', latencyMs: databaseLatencyMs },
+      providerConfigurations: configurations.map(config => {
+        const report = readiness(config);
+        return { id: config.id, provider: config.provider, context: config.context, environment: config.environment, name: config.name, enabled: config.enabled, ready: report.ready, readinessCode: report.code, message: report.message, lastCheckedAt: config.lastCheckedAt };
+      }),
+      webhooks: webhookEndpointConfiguration({
+        stripeCheckoutConfigured,
+        paypalCheckoutConfigured,
+        storeBillingConfigured,
+        storeBillingEnabled: storePlanBillingSandboxEnabled,
+        walletFundingConfigured: walletConfigured,
+        walletFundingEnabled: walletFundingSandboxEnabled()
+      }),
+      eventMetrics: { receivedLast24Hours: events24h, reviewRequired, unverified },
+      events: events.map(event => ({
+        id: event.id,
+        provider: event.provider,
+        eventId: event.eventId,
+        eventType: event.eventType,
+        receivedAt: event.receivedAt,
+        providerOccurredAt: event.providerOccurredAt,
+        orderNumber: event.parentOrder?.orderNumber ?? null,
+        identityVerified: event.identityVerified,
+        reviewReason: event.reviewReason,
+        state: !event.identityVerified ? 'UNVERIFIED' as const : event.reviewReason ? 'REVIEW_REQUIRED' as const : 'PROCESSED' as const,
+        retryAvailable: Boolean(event.reviewReason && retryable(event.provider, event.eventType, event.identityVerified))
+      })),
+      page,
+      pageSize,
+      total
     });
   }));
 

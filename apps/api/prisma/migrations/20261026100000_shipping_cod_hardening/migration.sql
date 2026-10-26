@@ -1,0 +1,2 @@
+ALTER TABLE "SellerShippingService"
+  ADD COLUMN "supportsCod" BOOLEAN NOT NULL DEFAULT FALSE;

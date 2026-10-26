@@ -64,6 +64,7 @@ export const payoutMethodSchema = z.object({
 
 export const platformSettingsSchema = z.object({
   sellerShippingEnabled: z.boolean().optional(),
+  codMaxMinor: z.number().int().min(0).max(2_000_000_000).nullable().optional(),
   sellerApprovalPolicy: z.enum(['MANUAL', 'AUTOMATIC']).optional(),
   productApprovalPolicy: z.enum(['MANUAL', 'AUTOMATIC']).optional(),
   sellerPayoutsEnabled: z.boolean().optional(),

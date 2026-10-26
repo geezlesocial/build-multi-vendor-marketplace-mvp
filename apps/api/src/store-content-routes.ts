@@ -5,7 +5,7 @@ import { ContentStatus, MediaKind, MediaScanStatus, MediaUploadStatus, Role, Sel
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { contentActionSchema, contentWriteSchema, pageWriteSchema } from './content-validation.js';
-import { effectiveStorePlan, asStorePlanEntitlements } from './store-plan-domain.js';
+import { storeEntitlements } from './store-plan-domain.js';
 import { env } from './config.js';
 import { renderBlocks, renderDocument } from './content-renderer.js';
 
@@ -48,8 +48,7 @@ function assertAdvancedFields(raw: unknown, enabled: boolean) {
 }
 
 async function storeQuota(storeId: string) {
-  const effective = await effectiveStorePlan(prisma, storeId);
-  return asStorePlanEntitlements(effective.version);
+  return storeEntitlements(prisma, storeId);
 }
 
 async function assertNoPageCycle(db: ContentDb, storeId: string, pageId: string | null, parentId: string | undefined) {
@@ -87,7 +86,7 @@ export function registerStoreContentRoutes(app: Express) {
       const store = await tx.store.findFirst({ where: { sellerId: user.sellerId, seller: { status: SellerStatus.APPROVED } } });
       if (!store) throw fail(403, 'An approved seller Store is required.');
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
-      const entitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      const entitlements = await storeEntitlements(tx, store.id);
       const usage = await tx.blogPost.count({ where: { storeId: store.id, status: { not: ContentStatus.ARCHIVED } } });
       if (usage >= entitlements.blogPostLimit) throw fail(409, 'Your Store has reached its blog post limit.', { code: 'PLAN_LIMIT_REACHED', entitlement: 'blogPostLimit', usage, limit: entitlements.blogPostLimit, upgradeRequired: true, planUrl: '/seller/plan' });
       if (await tx.blogPost.findUnique({ where: { slug: input.slug }, select: { id: true } })) throw fail(409, 'That content URL is already in use.');
@@ -115,7 +114,7 @@ export function registerStoreContentRoutes(app: Express) {
       const store = await tx.store.findFirst({ where: { sellerId: user.sellerId, seller: { status: SellerStatus.APPROVED } } });
       if (!store) throw fail(403, 'An approved seller Store is required.');
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
-      const entitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      const entitlements = await storeEntitlements(tx, store.id);
       const usage = await tx.contentPage.count({ where: { storeId: store.id, status: { not: ContentStatus.ARCHIVED } } });
       if (usage >= entitlements.contentPageLimit) throw fail(409, 'Your Store has reached its page limit.', { code: 'PLAN_LIMIT_REACHED', entitlement: 'contentPageLimit', usage, limit: entitlements.contentPageLimit, upgradeRequired: true, planUrl: '/seller/plan' });
       if (await tx.contentPage.findUnique({ where: { slug: input.slug }, select: { id: true } })) throw fail(409, 'That content URL is already in use.');
@@ -150,7 +149,7 @@ export function registerStoreContentRoutes(app: Express) {
       await assertStoreMedia(prisma, store.id, mediaIds(input.body, input.featuredImageId, input.ogImageId), false);
       const updated = await prisma.$transaction(async tx => {
         await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
-        const currentEntitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+        const currentEntitlements = await storeEntitlements(tx, store.id);
         assertAdvancedFields(req.body, currentEntitlements.advancedContentSeoEnabled);
         const prior = await tx.blogPost.findFirst({ where: { id: existing.id, storeId: store.id } });
         if (!prior) throw fail(404, 'Store content not found.');
@@ -171,7 +170,7 @@ export function registerStoreContentRoutes(app: Express) {
     if (input.parentId && !await prisma.contentPage.findFirst({ where: { id: input.parentId, storeId: store.id }, select: { id: true } })) throw fail(400, 'Parent page must belong to this Store.');
     const updated = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
-      const currentEntitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+        const currentEntitlements = await storeEntitlements(tx, store.id);
       assertAdvancedFields(req.body, currentEntitlements.advancedContentSeoEnabled);
       const prior = await tx.contentPage.findFirst({ where: { id: existing.id, storeId: store.id } });
       if (!prior) throw fail(404, 'Store content not found.');
@@ -213,7 +212,7 @@ export function registerStoreContentRoutes(app: Express) {
         ? await tx.blogPost.findFirst({ where: { id: param(req.params.id), storeId: store.id } })
         : await tx.contentPage.findFirst({ where: { id: param(req.params.id), storeId: store.id } });
       if (!record) throw fail(404, 'Store content not found.');
-      const lockedEntitlements = asStorePlanEntitlements((await effectiveStorePlan(tx, store.id)).version);
+      const lockedEntitlements = await storeEntitlements(tx, store.id);
       if (input.action === 'schedule' && !lockedEntitlements.scheduledPublishingEnabled) throw fail(409, 'Scheduled publishing is not enabled for this plan.', { code: 'PLAN_FEATURE_NOT_ENABLED', entitlement: 'scheduledPublishingEnabled', planUrl: '/seller/plan' });
       if (input.action === 'publish' || input.action === 'schedule') {
         await assertStoreMedia(tx, store.id, mediaIds(record.bodyJson, 'featuredImageId' in record ? record.featuredImageId ?? undefined : undefined, record.ogImageId ?? undefined), input.action === 'publish');

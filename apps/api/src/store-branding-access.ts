@@ -1,7 +1,7 @@
-import { MediaScanStatus, MediaUploadStatus, SellerStatus } from '@prisma/client';
+import { MediaScanStatus, MediaUploadStatus, Role, SellerStatus } from '@prisma/client';
 import { prisma } from './security.js';
 
-export type StoreBrandingActor = { id: string; sellerId?: string };
+export type StoreBrandingActor = { id: string; sellerId?: string; role?: Role };
 
 export async function authorizedBrandingStore(actor: StoreBrandingActor) {
   if (!actor.sellerId) return null;
@@ -10,6 +10,7 @@ export async function authorizedBrandingStore(actor: StoreBrandingActor) {
     select: { id: true, userId: true, store: true }
   });
   if (!seller?.store) return null;
+  if (actor.role === Role.ADMIN && seller.store.isPlatformStore) return seller.store;
   if (seller.userId === actor.id) return seller.store;
   const permission = await prisma.sellerStaff.findFirst({
     where: { sellerId: seller.id, userId: actor.id, canManageStoreBranding: true }

@@ -7,6 +7,8 @@ import { audit, prisma, requireAuth, requireRole } from './security.js';
 import { allocatePartialRefund } from './seller-commission.js';
 import { calculateCommissionMinor } from './currency-domain.js';
 import { reconcileVerifiedPaymentEvent } from './payment-webhook-reconciliation.js';
+import { isRetryablePaymentWebhookEvent } from './integration-operations-domain.js';
+import { redactProviderAuditReason } from './provider-integrations-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const actor = (res: Response) => res.locals.user as { id: string; role: Role };
@@ -139,7 +141,7 @@ export function registerCommissionRoutes(app: Express) {
       if (!event) throw Object.assign(new Error('Webhook event not found.'), { statusCode: 404 });
       if (event.reviewReason === null) throw Object.assign(new Error('Webhook event is already reconciled.'), { statusCode: 409, code: 'WEBHOOK_EVENT_ALREADY_RECONCILED' });
       if (!event.identityVerified || !event.eventType) throw Object.assign(new Error('A verified provider redelivery is required before this legacy event can be retried.'), { statusCode: 409, code: 'WEBHOOK_REDELIVERY_REQUIRED' });
-      if (event.provider !== PaymentMethod.STRIPE && event.provider !== PaymentMethod.PAYPAL) throw Object.assign(new Error('This event provider is not supported by marketplace payment reconciliation.'), { statusCode: 409 });
+      if (!isRetryablePaymentWebhookEvent(event.provider, event.eventType)) throw Object.assign(new Error('This event type is not eligible for payment reconciliation retry.'), { statusCode: 409, code: 'WEBHOOK_EVENT_NOT_RETRYABLE' });
       const result = await reconcileVerifiedPaymentEvent(tx, {
         provider: event.provider,
         eventId: event.eventId,
@@ -159,7 +161,7 @@ export function registerCommissionRoutes(app: Express) {
         action: 'PAYMENT_WEBHOOK_RECONCILIATION_RETRIED',
         entity: 'ProcessedWebhookEvent',
         entityId: event.id,
-        metadata: { provider: event.provider, eventId: event.eventId, previousReviewReason: event.reviewReason, reviewReason: updated.reviewReason, parentOrderId: updated.parentOrderId, reason }
+        metadata: { provider: event.provider, eventId: event.eventId, previousReviewReason: event.reviewReason, reviewReason: updated.reviewReason, parentOrderId: updated.parentOrderId, reason: redactProviderAuditReason(reason) }
       } });
       return { reviewReason: updated.reviewReason, parentOrderId: updated.parentOrderId, becamePaid: result.becamePaid };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
