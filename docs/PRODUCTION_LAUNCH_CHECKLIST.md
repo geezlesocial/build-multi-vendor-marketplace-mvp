@@ -6,6 +6,7 @@
 - [ ] Confirm Stripe/PayPal merchant eligibility and business details with the providers.
 - [ ] Configure and verify provider webhooks; test duplicate, delayed, failed, cancelled, and successful events.
 - [ ] Decide stock reservation release behavior and refund/cancellation workflows.
+- [ ] Exercise the buyer → seller → admin order-case flow in isolated staging, including verified provider refund webhooks, unresolved-case receipt/payout holds, and COD repayment evidence. Provider refunds are not issued by the app.
 - [ ] Confirm consumer terms, privacy policy, refund policy, taxes, shipping, address handling, and data retention with qualified advisers.
 - [ ] Define seller agreement, moderation policy, payout policy, and support escalation. Seller payouts are not in this MVP.
 - [ ] Run install, migration, seed, lint, typecheck, unit, integration, browser, secret scan, and restore tests from a clean environment.
