@@ -21,6 +21,30 @@ type SessionContextValue = {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
+async function readSessionResponse(response: Response): Promise<{ user: SessionUser | null }> {
+  const raw = await response.text();
+  let payload: unknown = null;
+  if (raw.trim()) {
+    try {
+      payload = JSON.parse(raw) as unknown;
+    } catch {
+      if (response.ok) throw new Error('The marketplace API returned an invalid session response. Check the API server output.');
+    }
+  }
+
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
+      ? payload.error
+      : `The marketplace API returned HTTP ${response.status} while checking your account. Check the API server output.`;
+    throw new Error(message);
+  }
+
+  if (!payload || typeof payload !== 'object' || !('user' in payload) || (payload.user !== null && typeof payload.user !== 'object')) {
+    throw new Error('The marketplace API returned an empty or invalid session response. Check the API server output.');
+  }
+  return payload as { user: SessionUser | null };
+}
+
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<SessionUser | null>(null);
   const [status, setStatus] = useState<SessionStatus>('loading');
@@ -32,15 +56,17 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (initialCheck) setStatus('loading');
     try {
       const response = await fetch('/api/auth/me', { credentials: 'include' });
-      const body = await response.json() as { user: SessionUser | null; error?: string };
-      if (!response.ok) throw new Error(body.error || 'Could not check your account.');
+      const body = await readSessionResponse(response);
       hasResolvedSession.current = true;
       setUserState(body.user);
       setStatus('ready');
       setError('');
       return body.user;
     } catch (reason) {
-      setError((reason as Error).message || 'Could not check your account.');
+      const message = reason instanceof TypeError
+        ? 'The marketplace API could not be reached. Start the API with npm run dev and check its terminal output.'
+        : (reason as Error).message || 'Could not check your account.';
+      setError(message);
       if (initialCheck) setStatus('error');
       return null;
     }

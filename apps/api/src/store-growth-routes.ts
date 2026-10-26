@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
 import { PaymentMethod, Prisma, ProductStatus, Role, SellerStatus, StoreBusterAdAccountStatus, StoreBusterCampaignGoal, StoreBusterCampaignStatus, StoreEmailCampaignStatus, StoreEmailDeliveryStatus, StoreInterestSignalType, StoreEmailSubscriberStatus } from '@prisma/client';
-import * as isoCountries from 'i18n-iso-countries';
+import isoCountries from 'i18n-iso-countries';
 import { z } from 'zod';
 import { env } from './config.js';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
