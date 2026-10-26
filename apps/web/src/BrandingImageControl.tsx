@@ -13,11 +13,18 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 function uploadToSignedPost(url: string, fields: Record<string, string>, file: File, progress: (value: number) => void) {
   return new Promise<void>((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open('POST', url);
+    const localUpload = fields['x-local-upload'] === '1';
+    request.open(localUpload ? 'PUT' : 'POST', url);
     request.withCredentials = false;
+    if (localUpload) {
+      request.setRequestHeader('Content-Type', file.type);
+      const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
+      if (csrf) request.setRequestHeader('x-csrf-token', csrf);
+    }
     request.upload.onprogress = event => { if (event.lengthComputable) progress(Math.round(event.loaded / event.total * 100)); };
     request.onload = () => request.status >= 200 && request.status < 300 ? resolve() : reject(new Error('Managed storage rejected the upload. The existing published image remains active.'));
     request.onerror = () => reject(new Error('Managed storage could not be reached. The existing published image remains active.'));
+    if (localUpload) { request.send(file); return; }
     const form = new FormData();
     Object.entries(fields).forEach(([key, value]) => form.append(key, value));
     form.append('file', file);
@@ -123,7 +130,7 @@ export function BrandingImageControl({ label, value, publishedValue, onChange, r
     {activeId ? <div className="brandingImagePreview"><span>Currently public</span><img src={previewUrl(activeId)} alt={`${label} currently published`} style={{ aspectRatio: `${ratio} / 1`, objectPosition: '50% 50%' }} /></div> : <p className="empty brandingImageEmpty">No image is currently published.</p>}
     <label>{label} from media library<select aria-label={`${label} from media library`} value={value ?? ''} onChange={event => { const id = event.target.value || null; onChange(id); setMessage(id ? 'Draft image selected. Save and publish only after it is approved.' : 'Image removed from the draft. Save and publish to remove it publicly; the stored asset is retained.'); setError(''); }}>
       <option value="">No image in draft</option>
-      {assets.filter(asset => asset.uploadStatus === 'COMPLETE' && asset.scanStatus !== 'REJECTED' && asset.storageProvider === 'OBJECT' && (asset.kind === undefined || asset.kind === 'IMAGE')).map(asset => <option key={asset.id} value={asset.id}>{asset.originalName} · {asset.scanStatus.toLowerCase()}</option>)}
+      {assets.filter(asset => asset.uploadStatus === 'COMPLETE' && asset.scanStatus !== 'REJECTED' && (asset.storageProvider === 'OBJECT' || asset.storageProvider === 'LOCAL') && (asset.kind === undefined || asset.kind === 'IMAGE')).map(asset => <option key={asset.id} value={asset.id}>{asset.originalName} · {asset.scanStatus.toLowerCase()}</option>)}
     </select></label>
     {value && value !== activeId && <div className="brandingImagePreview"><span>Draft preview · {assets.find(asset => asset.id === value)?.scanStatus.toLowerCase() ?? 'selected'}</span><img src={previewUrl(value)} alt={`${label} draft preview`} style={{ aspectRatio: `${ratio} / 1` }} /></div>}
     {quota && usedBytes !== null && limitBytes !== null && <p className="muted">Store media usage: {formatBytes(usedBytes)} of {formatBytes(limitBytes)} bytes.</p>}

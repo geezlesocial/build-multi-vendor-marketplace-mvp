@@ -4,10 +4,11 @@ import { OrderStatus, ProductStatus, Role, SellerStatus } from '@prisma/client';
 import { z } from 'zod';
 import { audit, hashPassword, prisma, requireAuth, requireRole, tokenHash, verifyPassword } from './security.js';
 import { env } from './config.js';
-import { accountPreferencesSchema, displayCurrencyAvailable } from './marketplace-domain.js';
+import { accountPreferencesSchema, displayCurrencyAvailable, enabledMarketplaceLanguages } from './marketplace-domain.js';
 import { liveShoppingState } from './live-domain.js';
 import { safePayoutMethod } from './platform-domain.js';
 import { availableGlobalDisplayCurrencies } from './currency-routes.js';
+import { selectCasesForSellerOrders } from './order-resolution-routes.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -96,7 +97,7 @@ export function registerDashboardRoutes(app: Express) {
     const user = actor(res);
     if (user.role === Role.ADMIN) return res.status(403).json({ error: 'Use the separate admin dashboard' });
     const [orders, cart, favorites, conversations, notifications, addresses, affiliate] = await Promise.all([
-      prisma.parentOrder.findMany({ where: { buyerId: user.id }, include: { payment: true, sellerOrders: { include: { items: true, seller: { include: { store: true } } } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
+      prisma.parentOrder.findMany({ where: { buyerId: user.id }, include: { payment: true, sellerOrders: { include: { items: true, seller: { include: { store: true } }, shipmentUpdates: { orderBy: { createdAt: 'desc' }, take: 20 }, receiptConfirmedBy: { select: { id: true, name: true } } } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
       prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { inventory: true, seller: { include: { store: true } } } } } } } }),
       prisma.favorite.findMany({ where: { userId: user.id }, include: { product: { include: { inventory: true, seller: { include: { store: true } } } } }, orderBy: { createdAt: 'desc' }, take: 100 }),
       prisma.conversation.findMany({ where: { buyerId: user.id }, include: { seller: { include: { store: true } }, product: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { updatedAt: 'desc' }, take: 50 }),
@@ -104,14 +105,19 @@ export function registerDashboardRoutes(app: Express) {
       prisma.savedAddress.findMany({ where: { userId: user.id }, orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }] }),
       prisma.affiliateProfile.findUnique({ where: { userId: user.id }, select: { id: true, status: true, referralCode: true } })
     ]);
-    res.json({ orders, cart: cart ?? { items: [] }, favorites, conversations, notifications, addresses, affiliate: affiliate?.status === 'APPROVED' ? affiliate : null });
+    const orderCases = await selectCasesForSellerOrders(orders.flatMap(order => order.sellerOrders.map(sellerOrder => sellerOrder.id)));
+    const casesBySellerOrder = new Map(orderCases.map(orderCase => [orderCase.sellerOrderId, orderCase]));
+    const ordersWithCases = orders.map(order => ({ ...order, sellerOrders: order.sellerOrders.map(sellerOrder => ({ ...sellerOrder, resolutionCase: casesBySellerOrder.get(sellerOrder.id) ?? null })) }));
+    res.json({ orders: ordersWithCases, cart: cart ?? { items: [] }, favorites, conversations, notifications, addresses, affiliate: affiliate?.status === 'APPROVED' ? affiliate : null });
   }));
 
   app.get('/api/dashboard/orders/:id', requireAuth, run(async (req, res) => {
     const user = actor(res);
-    const order = await prisma.parentOrder.findFirst({ where: { id: param(req.params.id), OR: [{ buyerId: user.id }, ...(user.sellerId ? [{ sellerOrders: { some: { sellerId: user.sellerId } } }] : [])] }, include: { payment: true, sellerOrders: { where: user.sellerId && user.role !== Role.ADMIN ? { sellerId: user.sellerId } : undefined, include: { items: true, seller: { include: { store: true } } } } } });
+    const order = await prisma.parentOrder.findFirst({ where: { id: param(req.params.id), OR: [{ buyerId: user.id }, ...(user.sellerId ? [{ sellerOrders: { some: { sellerId: user.sellerId } } }] : [])] }, include: { payment: true, sellerOrders: { where: user.sellerId && user.role !== Role.ADMIN ? { sellerId: user.sellerId } : undefined, include: { items: true, seller: { include: { store: true } }, shipmentUpdates: { orderBy: { createdAt: 'desc' }, take: 50 }, receiptConfirmedBy: { select: { id: true, name: true } } } } } });
     if (!order) return res.status(404).json({ error: 'Order not found' });
-    res.json({ ...order, displayEstimate: persistedDisplayEstimate(order) });
+    const orderCases = await selectCasesForSellerOrders(order.sellerOrders.map(sellerOrder => sellerOrder.id));
+    const casesBySellerOrder = new Map(orderCases.map(orderCase => [orderCase.sellerOrderId, orderCase]));
+    res.json({ ...order, sellerOrders: order.sellerOrders.map(sellerOrder => ({ ...sellerOrder, resolutionCase: casesBySellerOrder.get(sellerOrder.id) ?? null })), displayEstimate: persistedDisplayEstimate(order) });
   }));
 
   app.patch('/api/account/profile', requireAuth, run(async (req, res) => {
@@ -122,19 +128,32 @@ export function registerDashboardRoutes(app: Express) {
 
   app.get('/api/account/preferences', requireAuth, run(async (_req, res) => {
     const user = actor(res);
-    const [preference, availableDisplayCurrencies] = await Promise.all([
+    const [storedPreference, availableDisplayCurrencies, marketplace] = await Promise.all([
       prisma.userPreference.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id, displayCurrency: env.CURRENCY } }),
-      availableGlobalDisplayCurrencies()
+      availableGlobalDisplayCurrencies(),
+      prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { enabledLanguages: true } })
     ]);
-    res.json({ preference, availableLanguages: ['en', 'fil'], baseCurrency: env.CURRENCY, availableDisplayCurrencies, fxRatesConfigured: availableDisplayCurrencies.length > 1 });
+    const availableLanguages = enabledMarketplaceLanguages(marketplace?.enabledLanguages);
+    const preference = availableDisplayCurrencies.includes(storedPreference.displayCurrency)
+      ? storedPreference
+      : await prisma.userPreference.update({ where: { userId: user.id }, data: { displayCurrency: env.CURRENCY } });
+    res.json({ preference: { ...preference, language: availableLanguages.includes(preference.language as typeof availableLanguages[number]) ? preference.language : 'en' }, availableLanguages, baseCurrency: env.CURRENCY, availableDisplayCurrencies, fxRatesConfigured: availableDisplayCurrencies.length > 1 });
   }));
   app.patch('/api/account/preferences', requireAuth, run(async (req, res) => {
     const user = actor(res);
     const input = accountPreferencesSchema.parse(req.body);
-    const availableDisplayCurrencies = await availableGlobalDisplayCurrencies();
-    if (input.displayCurrency && !displayCurrencyAvailable(input.displayCurrency, env.CURRENCY, availableDisplayCurrencies)) return res.status(409).json({ error: 'That display currency is unavailable until a fresh verified reference rate or authorized manual rate is configured.' });
-    const preference = await prisma.userPreference.upsert({ where: { userId: user.id }, update: input, create: { userId: user.id, language: input.language ?? 'en', displayCurrency: input.displayCurrency ?? env.CURRENCY } });
-    res.json({ preference, availableLanguages: ['en', 'fil'], baseCurrency: env.CURRENCY, availableDisplayCurrencies, fxRatesConfigured: availableDisplayCurrencies.length > 1 });
+    const [availableDisplayCurrencies, marketplace, currentPreference] = await Promise.all([
+      availableGlobalDisplayCurrencies(),
+      prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { enabledLanguages: true } }),
+      prisma.userPreference.findUnique({ where: { userId: user.id }, select: { language: true, displayCurrency: true } })
+    ]);
+    const availableLanguages = enabledMarketplaceLanguages(marketplace?.enabledLanguages);
+    if (input.language && !availableLanguages.includes(input.language)) return res.status(409).json({ error: 'That language is currently disabled by the marketplace administrator.' });
+    if (input.displayCurrency && !displayCurrencyAvailable(input.displayCurrency, availableDisplayCurrencies)) return res.status(409).json({ error: 'That display currency is unavailable until a fresh verified reference rate or authorized manual rate is configured.' });
+    const language = input.language ?? (currentPreference && availableLanguages.includes(currentPreference.language as typeof availableLanguages[number]) ? currentPreference.language : 'en');
+    const displayCurrency = input.displayCurrency ?? (currentPreference && availableDisplayCurrencies.includes(currentPreference.displayCurrency) ? currentPreference.displayCurrency : env.CURRENCY);
+    const preference = await prisma.userPreference.upsert({ where: { userId: user.id }, update: { ...input, language, displayCurrency }, create: { userId: user.id, language, displayCurrency } });
+    res.json({ preference, availableLanguages, baseCurrency: env.CURRENCY, availableDisplayCurrencies, fxRatesConfigured: availableDisplayCurrencies.length > 1 });
   }));
   app.get('/api/account/notification-preferences', requireAuth, run(async (_req, res) => res.json(await prisma.notificationPreference.findMany({ where: { userId: actor(res).id }, orderBy: [{ category: 'asc' }, { channel: 'asc' }] }))));
   app.patch('/api/account/notification-preferences', requireAuth, run(async (req, res) => {
@@ -162,7 +181,7 @@ export function registerDashboardRoutes(app: Express) {
   app.patch('/api/account/addresses/:id', requireAuth, run(async (req, res) => { const user = actor(res); const input = addressInput.partial().parse(req.body); const existing = await prisma.savedAddress.findFirst({ where: { id: param(req.params.id), userId: user.id } }); if (!existing) return res.status(404).json({ error: 'Address not found' }); const address = await prisma.$transaction(async tx => { if (input.isDefault) await tx.savedAddress.updateMany({ where: { userId: user.id }, data: { isDefault: false } }); return tx.savedAddress.update({ where: { id: existing.id }, data: input }); }); res.json(address); }));
   app.delete('/api/account/addresses/:id', requireAuth, run(async (req, res) => { const result = await prisma.savedAddress.deleteMany({ where: { id: param(req.params.id), userId: actor(res).id } }); if (!result.count) return res.status(404).json({ error: 'Address not found' }); res.status(204).send(); }));
 
-  app.get('/api/seller/products', requireAuth, requireRole(Role.SELLER, Role.CASHIER), run(async (_req, res) => { const user = actor(res); if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' }); res.json(await prisma.product.findMany({ where: { sellerId: user.sellerId }, include: { inventory: true, variants: true, category: true, images: { orderBy: { id: 'asc' } } }, orderBy: { updatedAt: 'desc' }, take: 200 })); }));
+  app.get('/api/seller/products', requireAuth, requireRole(Role.SELLER, Role.CASHIER), run(async (_req, res) => { const user = actor(res); if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' }); res.json(await prisma.product.findMany({ where: { sellerId: user.sellerId }, include: { inventory: true, variants: true, category: true, brand: true, productType: true, featureAssignments: { include: { feature: true } }, images: { orderBy: { id: 'asc' } }, mediaAttachments: { orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, originalName: true, kind: true, detectedMime: true, safeName: true, scanStatus: true, uploadStatus: true } } } } }, orderBy: { updatedAt: 'desc' }, take: 200 })); }));
   app.patch('/api/seller/products/:id/archive', requireAuth, requireRole(Role.SELLER), run(async (req, res) => { const user = actor(res); if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' }); const product = await prisma.product.findFirst({ where: { id: param(req.params.id), sellerId: user.sellerId } }); if (!product) return res.status(404).json({ error: 'Product not found' }); const updated = await prisma.product.update({ where: { id: product.id }, data: { status: ProductStatus.ARCHIVED } }); await audit(user.id, 'SELLER_PRODUCT_ARCHIVED', 'Product', updated.id); res.json(updated); }));
 
   app.get('/api/dashboard/seller', requireAuth, requireRole(Role.SELLER, Role.CASHIER), run(async (_req, res) => {
@@ -171,13 +190,16 @@ export function registerDashboardRoutes(app: Express) {
     if (!seller) return res.status(403).json({ error: 'Approved seller required' });
     const [summary, products, orders, conversations, payoutMethods, payouts, live] = await Promise.all([
       sellerDashboardSummary(seller.id),
-      prisma.product.findMany({ where: { sellerId: seller.id }, include: { inventory: true, variants: true, category: true, images: { orderBy: { id: 'asc' } } }, orderBy: { updatedAt: 'desc' }, take: 200 }),
-      prisma.parentOrder.findMany({ where: { sellerOrders: { some: { sellerId: seller.id } } }, include: { payment: true, sellerOrders: { where: { sellerId: seller.id }, include: { items: true } } }, orderBy: { createdAt: 'desc' }, take: 100 }),
+      prisma.product.findMany({ where: { sellerId: seller.id }, include: { inventory: true, variants: true, category: true, brand: true, productType: true, featureAssignments: { include: { feature: true } }, images: { orderBy: { id: 'asc' } }, mediaAttachments: { orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, originalName: true, kind: true, detectedMime: true, safeName: true, scanStatus: true, uploadStatus: true } } } } }, orderBy: { updatedAt: 'desc' }, take: 200 }),
+      prisma.parentOrder.findMany({ where: { sellerOrders: { some: { sellerId: seller.id } } }, include: { payment: true, _count: { select: { sellerOrders: true } }, sellerOrders: { where: { sellerId: seller.id }, include: { items: true, shipmentUpdates: { orderBy: { createdAt: 'desc' }, take: 20 }, receiptConfirmedBy: { select: { id: true, name: true } } } } }, orderBy: { createdAt: 'desc' }, take: 100 }),
       prisma.conversation.findMany({ where: { sellerId: seller.id }, include: { buyer: { select: { name: true } }, product: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { updatedAt: 'desc' }, take: 100 }),
       prisma.sellerPayoutMethod.findMany({ where: { sellerId: seller.id }, orderBy: { createdAt: 'desc' } }),
       prisma.sellerPayout.findMany({ where: { sellerId: seller.id }, include: { payoutMethod: { select: { type: true, maskedIdentifier: true } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
       liveShoppingState()
     ]);
-    res.json({ store: seller.store, summary, products, orders, conversations, payoutMethods: payoutMethods.map(safePayoutMethod), payouts, live });
+    const orderCases = await selectCasesForSellerOrders(orders.flatMap(order => order.sellerOrders.map(sellerOrder => sellerOrder.id)));
+    const casesBySellerOrder = new Map(orderCases.map(orderCase => [orderCase.sellerOrderId, orderCase]));
+    const ordersWithCases = orders.map(order => ({ ...order, sellerOrders: order.sellerOrders.map(sellerOrder => ({ ...sellerOrder, resolutionCase: casesBySellerOrder.get(sellerOrder.id) ?? null })) }));
+    res.json({ store: seller.store, summary, products, orders: ordersWithCases, conversations, payoutMethods: payoutMethods.map(safePayoutMethod), payouts, live });
   }));
 }

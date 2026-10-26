@@ -1,0 +1,15 @@
+.adminCatalog{display:grid;gap:.9rem;min-width:0}
+.adminCatalog>h2,.adminCatalog>h3,.adminCatalog>p{margin:.25rem 0}
+.adminCatalogForms{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}
+.adminCatalogForms>.setting{display:grid;align-content:start;justify-content:stretch;gap:.75rem;min-width:0}
+.adminCatalogForms>.setting h3{margin:0}
+.adminCatalogForms>.setting label{min-width:0}
+.adminCatalogForms>.setting button{justify-self:start}
+.catalogCount{display:inline-grid;place-items:center;min-width:1.7rem;height:1.7rem;border-radius:50%;background:#e7f0e8;color:#325a45;font-size:.85rem}
+.catalogReviewList{display:grid;gap:.6rem}
+.catalogReviewItem{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;background:#fff}
+.catalogReviewItem p{margin:.2rem 0}
+.catalogReviewActions{display:flex;gap:.5rem}
+.catalogReviewActions button:last-child{color:#9b3626}
+.adminCatalog .table{min-width:0}
+@media(max-width:700px){.adminCatalogForms{grid-template-columns:minmax(0,1fr)}.catalogReviewItem{grid-template-columns:minmax(0,1fr)}.catalogReviewActions{justify-content:flex-start}}

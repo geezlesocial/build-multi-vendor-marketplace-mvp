@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { env } from './config.js';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { addressSchema } from './validation.js';
+import { effectiveUnitPriceMinor } from './product-pricing.js';
 import {
   normalizeCountryCode, normalizeShippingLocation, quoteShippingService, shippingAddressHash,
   shippingCartHash, signShippingQuote, verifyShippingQuote, type ShippingAddress,
@@ -41,6 +42,8 @@ const zonesSchema = z.array(zoneSchema).min(1).max(30).superRefine((zones, conte
 });
 const serviceSchema = z.object({
   name: z.string().trim().min(2).max(120), feeMinor: z.number().int().min(0).max(2_000_000_000),
+  supportsCod: z.boolean().optional(),
+  carrierProviderId: z.string().trim().min(1).max(64).nullable().optional(),
   estimatedMinDays: z.number().int().min(0).max(365).nullable().optional(),
   estimatedMaxDays: z.number().int().min(0).max(365).nullable().optional(), enabled: z.boolean().optional(), zones: zonesSchema
 }).strict().superRefine((service, context) => {
@@ -66,13 +69,14 @@ const quoteSchema = z.object({ address: addressSchema, serviceSelections: z.reco
 export type ShippingCartRecord = {
   productId: string; variantId: string | null; quantity: number;
   variant: { id: string; priceMinor: number; currency: string } | null;
-  product: { id: string; name: string; priceMinor: number; sellerId: string | null; status: ProductStatus; seller: { id: string; status: SellerStatus; store: { name: string } | null } | null };
+  product: { id: string; name: string; priceMinor: number; salePriceMinor?: number | null; sellerId: string | null; status: ProductStatus; productType: { requiresShipping: boolean }; seller: { id: string; status: SellerStatus; store: { name: string } | null } | null };
 };
 
 async function authorizedSeller(actorUser: ReturnType<typeof actor>) {
   if (!actorUser.sellerId) throw fail(403, 'Seller scope required.');
   const seller = await prisma.seller.findFirst({ where: { id: actorUser.sellerId, status: SellerStatus.APPROVED }, include: { store: true } });
   if (!seller?.store) throw fail(403, 'An approved Store is required to manage shipping.');
+  if (actorUser.role === Role.ADMIN && seller.store.isPlatformStore) return seller;
   if (seller.userId !== actorUser.id) {
     const membership = await prisma.sellerStaff.findFirst({ where: { sellerId: seller.id, userId: actorUser.id, canManageShipping: true }, select: { id: true } });
     if (!membership) throw fail(403, 'The Store owner has not granted shipping-management permission.');
@@ -89,7 +93,7 @@ function zoneRows(zones: z.infer<typeof zonesSchema>) {
 }
 
 function cartLines(items: ShippingCartRecord[]): ShippingCartItem[] {
-  return items.map(item => ({ productId: item.productId, variantId: item.variantId, sellerId: item.product.sellerId, quantity: item.quantity, unitPriceMinor: item.variant?.priceMinor ?? item.product.priceMinor, productName: item.product.name }));
+  return items.filter(item => item.product.productType.requiresShipping).map(item => ({ productId: item.productId, variantId: item.variantId, sellerId: item.product.sellerId, quantity: item.quantity, unitPriceMinor: effectiveUnitPriceMinor(item), productName: item.product.name }));
 }
 
 export async function buildSellerShippingQuote(
@@ -106,18 +110,18 @@ export async function buildSellerShippingQuote(
   const sellerIds = [...new Set(lines.map(line => line.sellerId).filter((value): value is string => Boolean(value)))].sort();
   if (!sellerIds.length) return { currency: env.CURRENCY, itemSubtotalMinor, shippingTotalMinor: 0, totalMinor: itemSubtotalMinor, shipments: [], quoteToken: null as string | null, expiresAt: null as number | null };
 
-  const invalidSeller = items.find(item => item.product.sellerId && (item.product.status !== ProductStatus.APPROVED || item.product.seller?.status !== SellerStatus.APPROVED));
+  const invalidSeller = items.find(item => item.product.productType.requiresShipping && item.product.sellerId && (item.product.status !== ProductStatus.APPROVED || item.product.seller?.status !== SellerStatus.APPROVED));
   if (invalidSeller) throw fail(409, 'A seller or product in the cart is no longer eligible for checkout.', 'SHIPPING_CART_STALE');
   const services = await db.sellerShippingService.findMany({
     where: { sellerId: { in: sellerIds }, enabled: true, currency: env.CURRENCY },
-    include: { zones: true, discounts: { where: { enabled: true }, include: { products: true } } },
+    include: { carrierProvider: true, zones: true, discounts: { where: { enabled: true }, include: { products: true } } },
     orderBy: [{ name: 'asc' }, { id: 'asc' }]
   });
   const shipments: Array<{ sellerId: string; storeName: string; options: unknown[]; selected: ShippingQuoteSelection }> = [];
   for (const sellerId of sellerIds) {
     const sellerItems = items.filter(item => item.product.sellerId === sellerId);
     const sellerLines = lines.filter(line => line.sellerId === sellerId);
-    const options = services.filter(service => service.sellerId === sellerId).flatMap(service => {
+    const options = services.filter(service => service.sellerId === sellerId && (!service.carrierProviderId || service.carrierProvider?.enabled)).flatMap(service => {
       const option = quoteShippingService(service as ShippingService, sellerLines, address, env.CURRENCY, now);
       return option ? [option] : [];
     });
@@ -146,16 +150,20 @@ export async function buildSellerShippingQuote(
 export function registerShippingRoutes(app: Express) {
   app.get('/api/seller/shipping', requireAuth, requireRole(Role.SELLER, Role.CASHIER), run(async (_req, res) => {
     const seller = await authorizedSeller(actor(res));
-    const services = await prisma.sellerShippingService.findMany({ where: { sellerId: seller.id }, include: { zones: true, discounts: { include: { products: { include: { product: { select: { id: true, name: true } } } } } }, _count: { select: { discounts: true } } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
-    res.json({ currency: env.CURRENCY, services });
+    const [services, carrierProviders] = await Promise.all([
+      prisma.sellerShippingService.findMany({ where: { sellerId: seller.id }, include: { carrierProvider: true, zones: true, discounts: { include: { products: { include: { product: { select: { id: true, name: true } } } } } }, _count: { select: { discounts: true } } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }),
+      prisma.shippingCarrierProvider.findMany({ where: { enabled: true }, select: { id: true, code: true, name: true, countries: true, trackingUrlTemplate: true }, orderBy: { name: 'asc' } })
+    ]);
+    res.json({ currency: env.CURRENCY, services, carrierProviders });
   }));
 
   app.post('/api/seller/shipping/services', requireAuth, requireRole(Role.SELLER, Role.CASHIER), run(async (req, res) => {
     const actorUser = actor(res); const seller = await authorizedSeller(actorUser); const input = serviceSchema.parse(req.body);
     const created = await prisma.$transaction(async tx => {
-      const service = await tx.sellerShippingService.create({ data: { sellerId: seller.id, name: input.name, feeMinor: input.feeMinor, currency: env.CURRENCY, estimatedMinDays: input.estimatedMinDays ?? null, estimatedMaxDays: input.estimatedMaxDays ?? null, enabled: input.enabled ?? true } });
+      if (input.carrierProviderId && !await tx.shippingCarrierProvider.findFirst({ where: { id: input.carrierProviderId, enabled: true }, select: { id: true } })) throw fail(409, 'That carrier is unavailable. Refresh the carrier list and try again.');
+      const service = await tx.sellerShippingService.create({ data: { sellerId: seller.id, carrierProviderId: input.carrierProviderId ?? null, name: input.name, feeMinor: input.feeMinor, currency: env.CURRENCY, estimatedMinDays: input.estimatedMinDays ?? null, estimatedMaxDays: input.estimatedMaxDays ?? null, supportsCod: input.supportsCod ?? false, enabled: input.enabled ?? true } });
       await tx.sellerShippingZone.createMany({ data: zoneRows(input.zones).map(zone => ({ ...zone, serviceId: service.id })) });
-      await tx.auditLog.create({ data: { actorId: actorUser.id, action: 'SELLER_SHIPPING_SERVICE_CREATED', entity: 'SellerShippingService', entityId: service.id, metadata: { sellerId: seller.id, feeMinor: service.feeMinor, currency: service.currency, zoneCount: input.zones.length } } });
+      await tx.auditLog.create({ data: { actorId: actorUser.id, action: 'SELLER_SHIPPING_SERVICE_CREATED', entity: 'SellerShippingService', entityId: service.id, metadata: { sellerId: seller.id, feeMinor: service.feeMinor, currency: service.currency, supportsCod: service.supportsCod, zoneCount: input.zones.length } } });
       return service;
     });
     res.status(201).json(created);
@@ -166,10 +174,11 @@ export function registerShippingRoutes(app: Express) {
     const current = await prisma.sellerShippingService.findFirst({ where: { id: serviceId, sellerId: seller.id } });
     if (!current) throw fail(404, 'Shipping service not found for this Store.');
     const updated = await prisma.$transaction(async tx => {
-      const service = await tx.sellerShippingService.update({ where: { id: current.id }, data: { name: input.name, feeMinor: input.feeMinor, currency: env.CURRENCY, estimatedMinDays: input.estimatedMinDays ?? null, estimatedMaxDays: input.estimatedMaxDays ?? null, enabled: input.enabled ?? current.enabled } });
+      if (input.carrierProviderId && !await tx.shippingCarrierProvider.findFirst({ where: { id: input.carrierProviderId, enabled: true }, select: { id: true } })) throw fail(409, 'That carrier is unavailable. Refresh the carrier list and try again.');
+      const service = await tx.sellerShippingService.update({ where: { id: current.id }, data: { carrierProviderId: input.carrierProviderId ?? null, name: input.name, feeMinor: input.feeMinor, currency: env.CURRENCY, estimatedMinDays: input.estimatedMinDays ?? null, estimatedMaxDays: input.estimatedMaxDays ?? null, supportsCod: input.supportsCod ?? current.supportsCod, enabled: input.enabled ?? current.enabled } });
       await tx.sellerShippingZone.deleteMany({ where: { serviceId: service.id } });
       await tx.sellerShippingZone.createMany({ data: zoneRows(input.zones).map(zone => ({ ...zone, serviceId: service.id })) });
-      await tx.auditLog.create({ data: { actorId: actorUser.id, action: 'SELLER_SHIPPING_SERVICE_UPDATED', entity: 'SellerShippingService', entityId: service.id, metadata: { sellerId: seller.id, old: { name: current.name, enabled: current.enabled, feeMinor: current.feeMinor }, new: { name: service.name, enabled: service.enabled, feeMinor: service.feeMinor, zoneCount: input.zones.length } } } });
+      await tx.auditLog.create({ data: { actorId: actorUser.id, action: 'SELLER_SHIPPING_SERVICE_UPDATED', entity: 'SellerShippingService', entityId: service.id, metadata: { sellerId: seller.id, old: { name: current.name, enabled: current.enabled, feeMinor: current.feeMinor, supportsCod: current.supportsCod }, new: { name: service.name, enabled: service.enabled, feeMinor: service.feeMinor, supportsCod: service.supportsCod, zoneCount: input.zones.length } } } });
       return service;
     });
     res.json(updated);
@@ -224,7 +233,7 @@ export function registerShippingRoutes(app: Express) {
           items: {
             include: {
               variant: true,
-              product: { include: { seller: { include: { store: true } } } }
+              product: { include: { productType: true, seller: { include: { store: true } } } }
             }
           }
         }

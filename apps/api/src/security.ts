@@ -26,15 +26,25 @@ export async function createSession(userId: string, res: Response) {
   res.cookie('marketplace_csrf', csrf, { httpOnly: false, secure: env.NODE_ENV === 'production', sameSite: 'lax', expires: expiresAt, path: '/' });
 }
 
-export type AuthUser = { id: string; email: string; name: string; role: Role; sellerId?: string; avatarUrl?: string };
+export type AuthUser = { id: string; email: string; name: string; role: Role; emailVerifiedAt?: Date | null; sellerId?: string; avatarUrl?: string };
 
 export async function currentUser(req: Request): Promise<AuthUser | null> {
   const token = req.cookies?.[env.SESSION_COOKIE_NAME] as string | undefined;
   if (!token) return null;
   const session = await prisma.session.findUnique({ where: { tokenHash: tokenHash(token) }, include: { user: { include: { seller: true, staffMemberships: true } } } });
   if (!session || session.expiresAt <= new Date()) return null;
-  const sellerId = session.user.seller?.id ?? session.user.staffMemberships[0]?.sellerId;
-  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, ...(sellerId ? { sellerId } : {}), ...(session.user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) };
+  const account = await prisma.$queryRaw<{ accountStatus: string }[]>`SELECT "accountStatus" FROM "User" WHERE "id" = ${session.userId}`;
+  if (account[0]?.accountStatus !== 'ACTIVE') {
+    await prisma.session.deleteMany({ where: { userId: session.userId } });
+    return null;
+  }
+  const platformSeller = session.user.role === Role.ADMIN
+    ? await prisma.store.findFirst({ where: { isPlatformStore: true }, select: { sellerId: true } })
+    : null;
+  const sellerId = session.user.role === Role.ADMIN
+    ? platformSeller?.sellerId
+    : session.user.seller?.id ?? session.user.staffMemberships[0]?.sellerId;
+  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, emailVerifiedAt: session.user.emailVerifiedAt, ...(sellerId ? { sellerId } : {}), ...(session.user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) };
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -48,7 +58,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     const user = res.locals.user as AuthUser | undefined;
-    if (!user || !roles.includes(user.role)) return res.status(403).json({ error: 'Insufficient permissions' });
+    const platformAdminSellerAccess = user?.role === Role.ADMIN && Boolean(user.sellerId) && roles.includes(Role.SELLER);
+    if (!user || (!roles.includes(user.role) && !platformAdminSellerAccess)) return res.status(403).json({ error: 'Insufficient permissions' });
     next();
   };
 }

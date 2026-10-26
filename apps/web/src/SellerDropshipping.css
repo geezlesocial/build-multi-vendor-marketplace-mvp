@@ -1,0 +1,36 @@
+.sellerDropshipping { display: grid; gap: 1.25rem; }
+.sellerDropshippingHeader, .supplierProviderTop, .supplierSectionHeading, .supplierConnectionCard { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.sellerDropshippingHeader h2, .supplierSearchSection h3 { margin: .2rem 0; }
+.dropshippingCurrency, .supplierSectionHeading > span { border: 1px solid var(--line, #d9e2da); border-radius: 999px; padding: .5rem .8rem; color: var(--green, #315d49); background: #edf4ed; white-space: nowrap; font-size: .85rem; }
+.supplierProviderGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.supplierProvider, .supplierConnectCard, .supplierConnectionCard, .supplierImportHistory { border: 1px solid var(--line, #d9e2da); border-radius: 1rem; background: white; padding: 1.1rem; }
+.supplierProviderReady { border-color: #a9c8b5; }
+.supplierProvider h3, .supplierConnectCard h3, .supplierConnectionCard h3, .supplierImportHistory h3 { margin: .15rem 0 .45rem; }
+.supplierProvider > p, .supplierConnectCard p, .supplierConnectionCard p { margin: .4rem 0; }
+.supplierProvider > a { color: var(--green, #315d49); }
+.supplierBadge { display: inline-flex; border-radius: 999px; padding: .3rem .55rem; color: #59645d; background: #f2f4f1; font-size: .72rem; font-weight: 700; }
+.supplierBadgeReady, .supplierImportedState { color: #275b42; background: #e7f2e9; }
+.supplierConnectCard { display: grid; gap: .8rem; }
+.supplierConnectCard label, .supplierSearchForm label, .supplierImportFields label { display: grid; gap: .35rem; font-weight: 650; }
+.supplierConnectCard input, .supplierSearchForm input, .supplierImportFields input { width: 100%; }
+.supplierConnectCard .primary { justify-self: start; }
+.supplierSearchSection { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, .8fr); gap: 1.5rem; align-items: end; padding-top: .5rem; }
+.supplierSearchForm > div { display: flex; gap: .5rem; }
+.supplierSearchForm > div input { flex: 1; min-width: 10rem; }
+.supplierSearchResults { display: grid; gap: .8rem; }
+.supplierProductCard { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 1rem; padding: 1rem; border: 1px solid var(--line, #d9e2da); border-radius: 1rem; background: white; }
+.supplierProductCard > img, .supplierProductPlaceholder { width: 7rem; height: 7rem; object-fit: cover; border-radius: .7rem; background: #edf4ed; }
+.supplierProductPlaceholder { display: grid; place-items: center; color: #315d49; font-weight: 800; }
+.supplierProductDetails h4 { margin: .6rem 0 .3rem; }
+.supplierProductDetails > p { margin: .3rem 0 .8rem; }
+.supplierImportFields { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(8rem, .7fr) auto; gap: .7rem; align-items: end; }
+.supplierImportFields .primary { min-height: 2.8rem; }
+.supplierImportHistory { display: grid; gap: .8rem; }
+.supplierImportList { display: grid; }
+.supplierImportList article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 1rem; align-items: center; padding: .75rem 0; border-top: 1px solid #edf0eb; }
+.supplierImportList small { display: block; margin-top: .2rem; color: #78837b; }
+.supplierImportList > article > span { font-size: .78rem; color: #315d49; font-weight: 700; }
+.supplierImportList a { color: #315d49; }
+.supplierSafetyNote { margin: 0; padding: .9rem 1rem; border: 1px solid #f0d18d; border-radius: .75rem; color: #5b4d2c; background: #fff5df; line-height: 1.55; }
+@media (max-width: 800px) { .supplierProviderGrid { grid-template-columns: 1fr; } .supplierSearchSection { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .sellerDropshippingHeader, .supplierConnectionCard { flex-direction: column; } .supplierProductCard { grid-template-columns: 4.5rem minmax(0, 1fr); gap: .7rem; } .supplierProductCard > img, .supplierProductPlaceholder { width: 4.5rem; height: 4.5rem; } .supplierImportFields { grid-template-columns: 1fr 1fr; } .supplierImportFields button { grid-column: 1 / -1; } .supplierImportList article { grid-template-columns: 1fr auto; } .supplierImportList article a { grid-column: 1 / -1; } }

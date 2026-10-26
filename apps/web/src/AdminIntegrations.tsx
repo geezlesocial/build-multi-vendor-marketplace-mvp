@@ -33,8 +33,16 @@ export function AdminIntegrations({ section = 'providers' }: { section?: 'provid
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [codMaxInput, setCodMaxInput] = useState('');
 
-  const load = async () => setData(await api<IntegrationData>('/api/admin/integrations'));
+  const load = async () => {
+    const [integrations, platformSettings] = await Promise.all([
+      api<IntegrationData>('/api/admin/integrations'),
+      api<{ codMaxMinor: number | null }>('/api/admin/platform/settings')
+    ]);
+    setData(integrations);
+    setCodMaxInput(platformSettings.codMaxMinor == null ? '' : String(platformSettings.codMaxMinor));
+  };
   useEffect(() => { load().catch(error => setMessage(error.message)).finally(() => setLoading(false)); }, []);
   const perform = async (work: () => Promise<unknown>, success: string) => {
     setSaving(true); setMessage('');
@@ -70,6 +78,12 @@ export function AdminIntegrations({ section = 'providers' }: { section?: 'provid
     if (!reason.trim()) { setMessage('Enter a reason before changing a payment-method switch.'); return; }
     if (!window.confirm(`${enabled ? 'Enable' : 'Disable'} ${method} for new marketplace transactions? Existing records are preserved.`)) return;
     void perform(() => api(`/api/admin/integrations/payment-methods/${method}`, { method: 'PATCH', body: JSON.stringify({ enabled, reason }) }), `${method} payment-method setting updated.`);
+  };
+  const saveCodLimit = () => {
+    if (!reason.trim()) { setMessage('Enter a reason before changing the COD order limit.'); return; }
+    const codMaxMinor = codMaxInput.trim() ? Number(codMaxInput) : null;
+    if (codMaxMinor !== null && (!Number.isSafeInteger(codMaxMinor) || codMaxMinor < 0 || codMaxMinor > 2_000_000_000)) { setMessage('Enter a whole-number limit from 0 to 2,000,000,000 minor units, or leave it blank for no cap.'); return; }
+    void perform(() => api('/api/admin/platform/settings', { method: 'PATCH', body: JSON.stringify({ codMaxMinor, reason }) }), 'COD order limit saved.');
   };
 
   if (loading) return <p className="empty" role="status">Loading integrations and payment methods…</p>;
@@ -123,6 +137,7 @@ export function AdminIntegrations({ section = 'providers' }: { section?: 'provid
       <h3 id="payment-method-title">Buyer checkout payment methods</h3>
       <p className="muted">These switches are the existing server-enforced controls for new Stripe, PayPal, COD, and POS transactions. They remain independent of plan eligibility and provider configuration inventory.</p>
       <div className="settings">{data.paymentMethods.map(item => <div className="setting" key={item.method}><div><strong>{item.method}</strong><p>New transactions: {item.enabled ? 'enabled by marketplace setting' : 'disabled by marketplace setting'}.</p></div><button type="button" disabled={saving} aria-pressed={item.enabled} onClick={() => changeMethod(item.method, !item.enabled)}>{item.enabled ? 'Disable' : 'Enable'}</button></div>)}</div>
+      <div className="setting codLimitSetting"><div><strong>Maximum COD order total</strong><p>Applies to merchandise after discounts plus delivery charges. Use checkout-currency minor units; blank means no platform cap. Every selected seller delivery service must separately accept COD.</p></div><label>Limit in minor units<input type="number" min="0" max="2000000000" step="1" value={codMaxInput} onChange={event => setCodMaxInput(event.target.value)} placeholder="No limit" /></label><button type="button" disabled={saving} onClick={saveCodLimit}>Save COD limit</button></div>
       <p><a href="/admin/platform?section=integrations">Manage provider configurations and readiness</a></p>
     </section>}
   </section>;

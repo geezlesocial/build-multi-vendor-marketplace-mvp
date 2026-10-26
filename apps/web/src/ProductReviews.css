@@ -1,0 +1,75 @@
+.productReviews {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--line, #d9e1d9);
+}
+
+.productReviews > .sectionHeading {
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+.productReviews > .sectionHeading h2 {
+  margin: .25rem 0 0;
+}
+
+.productReviews > .sectionHeading > strong {
+  color: var(--green, #315d48);
+}
+
+.productReviewForm,
+.productReview {
+  display: grid;
+  gap: .8rem;
+  margin: 1rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--line, #d9e1d9);
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.productReviewForm label {
+  display: grid;
+  gap: .35rem;
+}
+
+.productReviewForm button {
+  justify-self: start;
+}
+
+.productReviewList {
+  display: grid;
+  gap: .75rem;
+}
+
+.productReview header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--green, #315d48);
+}
+
+.productReview h3,
+.productReview p {
+  margin: 0;
+}
+
+.productReview small,
+.productReview time {
+  color: var(--muted, #69756d);
+}
+
+.adminReviewList {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.adminReviewCard {
+  padding: 1.25rem;
+}
+
+.adminReviewCard label {
+  display: grid;
+  gap: .4rem;
+}

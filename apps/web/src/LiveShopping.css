@@ -1,0 +1,505 @@
+.liveShopping {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.liveShopping > .sectionHeading h2,
+.liveShopping h3,
+.liveShopping h4,
+.liveSessionListHeading h3 {
+  margin: .2rem 0;
+}
+
+.liveReadiness,
+.liveReadinessPanel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid #edcf91;
+  border-radius: .9rem;
+  background: #fff7e8;
+}
+
+.liveReadiness > span,
+.liveReadiness > small {
+  display: block;
+  color: #68736b;
+}
+
+.liveReadinessReady {
+  border-color: #c9dfce;
+  background: #edf5ee;
+}
+
+.liveReadinessPanel p,
+.liveReadinessPanel small {
+  display: block;
+  margin: .25rem 0 0;
+  color: #68736b;
+}
+
+.liveProviderConfig {
+  display: grid;
+  gap: 1rem;
+  padding: 1.2rem;
+  background: #fff;
+  border: 1px solid #e0e6df;
+  border-radius: 1rem;
+}
+
+.liveProviderConfig .sectionHeading {
+  margin: 0;
+}
+
+.liveProviderForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .9rem 1rem;
+}
+
+.liveProviderForm label {
+  display: grid;
+  gap: .35rem;
+}
+
+.liveProviderForm label:first-child,
+.liveProviderForm label:nth-child(3),
+.liveProviderForm label:nth-child(5),
+.liveProviderForm button {
+  grid-column: 1 / -1;
+}
+
+.liveProviderForm small {
+  color: #68736b;
+  font-weight: 400;
+}
+
+.liveProviderCheckbox {
+  display: flex !important;
+  align-items: center;
+  grid-column: 1 / -1;
+  gap: .55rem !important;
+}
+
+.liveProviderCheckbox input {
+  width: auto;
+}
+
+.liveConfigStatus {
+  align-self: start;
+  padding: .35rem .65rem;
+  border-radius: 999px;
+  background: #fff7e8;
+  color: #8a5b13;
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.liveConfigStatusReady {
+  background: #edf5ee;
+  color: #2f654d;
+}
+
+.liveSessionForm,
+.liveSellerSession {
+  display: grid;
+  gap: .85rem;
+  padding: 1.2rem;
+  background: #fff;
+  border: 1px solid #e0e6df;
+  border-radius: 1rem;
+}
+
+.liveSessionForm label,
+.liveSessionEdit label {
+  display: grid;
+  gap: .35rem;
+}
+
+.liveSessionForm small,
+.liveSessionEdit small {
+  color: #68736b;
+  font-weight: 400;
+}
+
+.liveSessionForm select[multiple] {
+  min-height: 7rem;
+}
+
+.liveSessionForm button {
+  justify-self: start;
+}
+
+.liveSessionListHeading,
+.liveSellerSession > header,
+.liveAdminReport {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.liveSessionListHeading {
+  margin-top: .65rem;
+}
+
+.liveSessionListHeading > span {
+  color: #68736b;
+  font-size: .82rem;
+}
+
+.liveSellerSessionList,
+.liveAdminReports {
+  display: grid;
+  gap: .8rem;
+}
+
+.liveSellerSession > header h4,
+.liveAdminReport h4 {
+  margin: .4rem 0 .15rem;
+}
+
+.liveSellerSession > header p,
+.liveAdminReport p {
+  margin: .2rem 0;
+}
+
+.liveStatusPill {
+  display: inline-flex;
+  width: fit-content;
+  padding: .22rem .55rem;
+  border-radius: 99px;
+  background: #e7f0e8;
+  color: #315d48;
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.liveSellerSessionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+}
+
+.liveSellerSessionActions button {
+  padding: .5rem .75rem;
+  font-size: .84rem;
+}
+
+.liveSessionEdit {
+  padding-top: .75rem;
+  border-top: 1px solid #edf0ec;
+}
+
+.liveSessionEdit summary {
+  color: #315d48;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.liveSessionEdit form {
+  display: grid;
+  gap: .75rem;
+  margin-top: .8rem;
+}
+
+.liveSessionEdit textarea,
+.liveSessionForm textarea {
+  width: 100%;
+  padding: .75rem;
+  border: 1px solid #c6d0c7;
+  border-radius: .6rem;
+  background: #fff;
+  color: #18211d;
+  font: inherit;
+}
+
+.liveRefreshButton {
+  justify-self: start;
+  padding: .4rem .7rem;
+  color: #315d48;
+  font-size: .8rem;
+}
+
+.liveLinkedProducts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem 1.2rem;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: #536258;
+  font-size: .86rem;
+}
+
+.liveProductRail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: .6rem;
+}
+
+.liveProductLink {
+  display: grid;
+  gap: .2rem;
+  padding: .8rem;
+  border: 1px solid #dce6dc;
+  border-radius: .8rem;
+  color: inherit;
+  text-decoration: none;
+  background: #f8faf7;
+}
+
+.liveProductLink:hover,
+.liveProductLink:focus-visible {
+  border-color: #315d48;
+}
+
+.liveProductLink span {
+  color: #b55d36;
+  font-size: .67rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.liveProductLink small,
+.liveAdminReport small {
+  color: #68736b;
+}
+
+.liveSessionPlayer {
+  display: block;
+  width: 100%;
+  max-height: 560px;
+  aspect-ratio: 16 / 9;
+  border-radius: .8rem;
+  background: #111;
+}
+
+.liveKitMount {
+  width: 100%;
+  min-height: 8rem;
+  overflow: hidden;
+  border-radius: .8rem;
+  background: #111;
+}
+
+.liveSessionCard progress {
+  width: 100%;
+  accent-color: #315d48;
+}
+
+.liveStatusPill { display: inline-flex; align-items: center; gap: .4rem; padding: .35rem .6rem; border-radius: 99px; background: #e8f3ea; color: #315d48; font-size: .75rem; font-weight: 800; }
+.liveStatusPill i { width: .45rem; height: .45rem; border-radius: 50%; background: #cb543c; }
+.liveInlinePreview { display: flex; align-items: center; gap: .8rem; width: 100%; min-height: 6rem; padding: 1rem; border: 1px solid #dce7dc; border-radius: .9rem; background: linear-gradient(105deg, #f0f6f0, #fff); color: #18211d; text-align: left; cursor: pointer; }
+.liveInlinePreview:hover { border-color: #82a28a; box-shadow: 0 10px 28px #23452d0b; }
+.liveInlinePreviewMark { display: grid; flex: 0 0 2.8rem; width: 2.8rem; height: 2.8rem; place-items: center; border-radius: 50%; background: #315d48; color: #fff; }
+.liveInlinePreview > span:nth-child(2) { display: grid; flex: 1; gap: .2rem; }
+.liveInlinePreview small { color: #68736b; }
+.liveInlinePreviewArrow { color: #315d48; font-size: 1.25rem; }
+.liveDashboardHeaderActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .55rem; }
+.liveWatchDashboardButton { display: inline-flex; align-items: center; gap: .6rem; padding: .62rem .9rem; white-space: nowrap; }
+.liveWatchDashboardButton .homeLiveDot { width: .48rem; height: .48rem; background: #f18a70; box-shadow: 0 0 0 4px #f18a7030; }
+.liveWatchDashboardButton b { display: grid; min-width: 1.3rem; height: 1.3rem; place-items: center; border-radius: 99px; background: #ffffff30; color: inherit; font-size: .75rem; }
+
+.liveAdminReport {
+  padding: 1rem;
+  border: 1px solid #e0e6df;
+  border-radius: .9rem;
+  background: #fff;
+}
+
+.liveAdminReport > div:first-child {
+  min-width: 0;
+}
+
+.homeLiveSection {
+  display: grid;
+  gap: 1.1rem;
+  margin: clamp(2rem, 5vw, 4rem) 0 1.5rem;
+  padding: clamp(1rem, 3vw, 1.6rem);
+  border: 1px solid #dce7dc;
+  border-radius: 1.25rem;
+  background: linear-gradient(115deg, #edf5ee, #fff 65%);
+  box-shadow: 0 14px 40px #23452d0b;
+}
+
+.homeLiveHeading,
+.homeLiveSellerRail,
+.homeLiveSeller,
+.homeLiveSeller > span:nth-child(2) {
+  display: flex;
+  align-items: center;
+}
+
+.homeLiveHeading {
+  justify-content: space-between;
+  gap: 1.25rem;
+}
+
+.homeLiveHeading h2 { margin: .2rem 0; }
+.homeLiveHeading p:not(.eyebrow) { margin: .3rem 0 0; color: #68736b; }
+.homeLiveHeading .eyebrow { display: flex; align-items: center; gap: .45rem; margin: 0; }
+.homeLiveHeading > button { flex: 0 0 auto; }
+
+.homeLiveDot,
+.liveWatchLiveTag > span {
+  display: inline-block;
+  width: .55rem;
+  height: .55rem;
+  border-radius: 50%;
+  background: #cb543c;
+  box-shadow: 0 0 0 4px #cb543c20;
+  animation: livePulse 1.8s ease-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { box-shadow: 0 0 0 3px #cb543c1c; }
+  50% { box-shadow: 0 0 0 7px #cb543c08; }
+}
+
+.homeLiveSellerRail { flex-wrap: wrap; gap: .65rem; }
+.homeLiveSeller,
+.homeLiveMore {
+  min-width: min(240px, 100%);
+  gap: .65rem;
+  padding: .55rem .75rem;
+  border: 1px solid #e0e8e0;
+  border-radius: .85rem;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+.homeLiveSeller:hover,
+.homeLiveMore:hover { border-color: #86a48e; transform: translateY(-1px); }
+.homeLiveAvatar { display: grid; flex: 0 0 2.5rem; width: 2.5rem; height: 2.5rem; place-items: center; border-radius: 50%; background: #e7f0e8; color: #315d48; font-weight: 800; }
+.homeLiveSeller > span:nth-child(2) { align-items: flex-start; flex: 1; min-width: 0; flex-direction: column; gap: .12rem; }
+.homeLiveSeller strong,.homeLiveSeller small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.homeLiveSeller small { color: #68736b; }
+.homeLiveNow { padding: .2rem .42rem; border-radius: 99px; background: #fcedea; color: #a43f2b; font-size: .65rem; font-weight: 800; letter-spacing: .06em; }
+.homeLiveMore { min-width: 0; color: #315d48; font-weight: 700; text-align: center; }
+.homeWatchLiveButton { display: inline-flex; align-items: center; gap: .55rem; padding: .72rem 1rem; border: 1px solid #315d48; border-radius: 999px; background: #fff; color: #234b38; font-weight: 750; cursor: pointer; }
+.homeWatchLiveButton b { display: grid; min-width: 1.35rem; height: 1.35rem; place-items: center; padding: 0 .3rem; border-radius: 99px; background: #315d48; color: #fff; font-size: .75rem; }
+
+.liveWatchOverlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 4.25rem minmax(0, 1fr);
+  overflow: hidden;
+  background: #111714;
+  color: #fff;
+}
+.liveWatchTopbar { z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem clamp(1rem, 3vw, 2.5rem); border-bottom: 1px solid #ffffff20; background: #111714; }
+.liveWatchBrand { display: flex; align-items: center; gap: .75rem; color: #fff; text-decoration: none; font-weight: 800; }
+.liveWatchBrand span { padding: .25rem .55rem; border: 1px solid #ffffff36; border-radius: 99px; color: #e3eae4; font-size: .73rem; font-weight: 600; }
+.liveWatchClose { display: inline-flex; align-items: center; gap: .4rem; padding: .45rem .75rem; border: 1px solid #ffffff40; border-radius: 99px; background: #ffffff0d; color: #fff; font-size: 1.2rem; cursor: pointer; }
+.liveWatchClose span { font-size: .82rem; }
+.liveWatchFeed { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y mandatory; scrollbar-width: none; }
+.liveWatchFeed::-webkit-scrollbar { display: none; }
+.liveWatchSlide { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); align-items: stretch; gap: clamp(1rem, 2.5vw, 2rem); width: min(1260px, 100%); min-height: calc(100dvh - 4.25rem); margin: 0 auto; padding: clamp(.75rem, 2vw, 1.5rem); scroll-snap-align: start; scroll-snap-stop: always; }
+.liveWatchVideo { position: relative; align-self: center; width: 100%; height: min(78dvh, 850px); min-height: min(440px, 62dvh); overflow: hidden; border: 1px solid #ffffff20; border-radius: 1.25rem; background: radial-gradient(ellipse at 48% 38%, #273a30, #0b100d 70%); box-shadow: 0 24px 70px #0007; }
+.liveWatchMount,.liveWatchStandby { position: absolute; inset: 0; display: grid; width: 100%; height: 100%; min-height: 0; place-items: center; overflow: hidden; border-radius: inherit; background: #080b09; }
+.liveWatchStandby { background: radial-gradient(ellipse at 45% 38%, #314d3c, #101713 70%); }
+.liveWatchStandby span { padding: .5rem .8rem; border: 1px solid #ffffff35; border-radius: 99px; color: #fff; font-size: .8rem; font-weight: 800; letter-spacing: .1em; }
+.liveWatchMount .liveSessionPlayer { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; aspect-ratio: auto; border-radius: 0; object-fit: contain; }
+.liveWatchMount audio { display: none; }
+.liveWatchVideoShade { position: absolute; z-index: 1; inset: 0; pointer-events: none; background: linear-gradient(180deg, #05090699 0%, transparent 24%, transparent 48%, #050906c9 100%); }
+.liveWatchLiveTag,.liveWatchVideoCounts { position: absolute; z-index: 2; top: 1rem; display: flex; align-items: center; gap: .5rem; padding: .45rem .7rem; border: 1px solid #ffffff35; border-radius: 99px; background: #101713b8; color: #fff; font-size: .72rem; font-weight: 800; letter-spacing: .07em; backdrop-filter: blur(12px); }
+.liveWatchLiveTag { left: 1rem; }
+.liveWatchLiveTag > span { width: .45rem; height: .45rem; }
+.liveWatchVideoCounts { right: 1rem; gap: .7rem; font-weight: 600; letter-spacing: 0; }
+.liveWatchVideoCounts span { white-space: nowrap; }
+.liveWatchOverlayCopy { position: absolute; z-index: 2; right: 5rem; bottom: 1.25rem; left: 1.25rem; display: grid; gap: .35rem; pointer-events: none; }
+.liveWatchOverlayCopy .eyebrow { margin: 0; color: #d6e7d8; }
+.liveWatchOverlayCopy h2 { margin: 0; font-size: clamp(1.45rem, 3vw, 2.4rem); line-height: 1.08; }
+.liveWatchOverlayCopy p:not(.eyebrow) { display: -webkit-box; max-width: 50ch; margin: .1rem 0; overflow: hidden; color: #eef3ef; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.liveWatchOverlayCopy a { width: fit-content; margin-top: .2rem; color: #fff; font-weight: 750; pointer-events: auto; }
+.liveWatchReactionRail { position: absolute; z-index: 3; right: .75rem; bottom: 1rem; display: grid; gap: .55rem; }
+.liveReaction { display: grid; min-width: 3.1rem; min-height: 3.35rem; place-items: center; gap: .08rem; padding: .35rem; border: 1px solid #ffffff3d; border-radius: 1rem; background: #141a16b8; color: #fff; cursor: pointer; backdrop-filter: blur(12px); }
+.liveReaction > span { font-size: 1.2rem; line-height: 1; }
+.liveReaction small { font-size: .7rem; }
+.liveReaction:hover,.liveReaction.active { border-color: #d6ecda; background: #2d674dbd; transform: scale(1.04); }
+.liveReaction:disabled { opacity: .55; cursor: not-allowed; }
+.liveWatchInfo { display: flex; align-self: center; flex-direction: column; gap: 1rem; min-width: 0; max-height: min(78vh, 850px); overflow-y: auto; padding: clamp(1rem, 2vw, 1.5rem); border: 1px solid #e1e8e1; border-radius: 1.2rem; background: #fbfcf9; color: #18211d; }
+.liveWatchInfoHeading { display: flex; justify-content: space-between; align-items: center; gap: .75rem; padding-bottom: .85rem; border-bottom: 1px solid #e6ebe5; }
+.liveWatchInfoHeading span { color: #68736b; font-size: .8rem; white-space: nowrap; }
+.liveWatchProducts { display: grid; gap: .6rem; }
+.liveWatchProduct { display: grid; gap: .22rem; padding: .85rem; border: 1px solid #e0e8e0; border-radius: .8rem; background: #fff; color: inherit; text-decoration: none; }
+.liveWatchProduct:hover { border-color: #71957e; box-shadow: 0 8px 22px #23452d0b; }
+.liveWatchProduct > span { color: #b55d36; font-size: .65rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.liveWatchProduct > small { color: #315d48; font-weight: 700; }
+.liveWatchAttendance { display: grid; gap: .45rem; margin-top: auto; color: #536258; font-size: .82rem; }
+.liveWatchAttendance progress { width: 100%; height: .55rem; accent-color: #315d48; }
+.liveWatchHint,.liveWatchMessage { margin: 0; color: #68736b; font-size: .82rem; line-height: 1.45; }
+.liveWatchHint a { color: #315d48; font-weight: 750; }
+.liveWatchMessage { padding: .65rem .75rem; border-radius: .65rem; background: #fff4df; color: #755522; }
+.liveWatchNav { position: fixed; z-index: 4; top: 50%; right: 1rem; display: grid; justify-items: center; gap: .45rem; transform: translateY(-50%); color: #fff; font-size: .72rem; }
+.liveWatchNav button { display: grid; width: 2.65rem; height: 2.65rem; place-items: center; border: 1px solid #ffffff45; border-radius: 50%; background: #111714b8; color: #fff; font-size: 1.2rem; cursor: pointer; }
+.liveWatchNav button:disabled { opacity: .35; cursor: default; }
+
+@media (max-width: 720px) {
+  .liveProviderForm {
+    grid-template-columns: 1fr;
+  }
+
+  .liveProviderForm label,
+  .liveProviderForm label:first-child,
+  .liveProviderForm label:nth-child(3),
+  .liveProviderForm label:nth-child(5),
+  .liveProviderForm button {
+    grid-column: auto;
+  }
+
+  .liveReadiness,
+  .liveReadinessPanel,
+  .liveSessionListHeading,
+  .liveSellerSession > header,
+  .liveAdminReport {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .liveDashboardHeaderActions { justify-content: flex-start; }
+
+  .liveSellerSessionActions button,
+  .liveReadinessPanel button {
+    flex: 1 1 auto;
+  }
+
+  .homeLiveHeading { align-items: stretch; flex-direction: column; }
+  .homeLiveHeading > button { width: 100%; }
+  .homeLiveSellerRail { display: grid; grid-template-columns: 1fr; }
+  .homeLiveSeller,.homeLiveMore { width: 100%; }
+  .liveWatchOverlay { grid-template-rows: 3.5rem minmax(0, 1fr); }
+  .liveWatchSlide { display: flex; flex-direction: column; gap: 0; min-height: calc(100dvh - 3.5rem); padding: .55rem; }
+  .liveWatchVideo { flex: 1 1 auto; height: min(67dvh, 680px); min-height: 52dvh; border-radius: 1rem; }
+  .liveWatchInfo { flex: 0 0 auto; gap: .6rem; max-height: 35dvh; overflow-y: auto; padding: .8rem; border-radius: 0 0 1rem 1rem; }
+  .liveWatchProducts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .liveWatchProduct { padding: .65rem; font-size: .85rem; }
+  .liveWatchVideoCounts { top: .75rem; right: .65rem; flex-direction: column; align-items: flex-end; gap: .2rem; border: 0; background: transparent; padding: 0; text-shadow: 0 1px 6px #000; }
+  .liveWatchLiveTag { top: .7rem; left: .7rem; }
+  .liveWatchOverlayCopy { right: 3.8rem; bottom: .85rem; left: .85rem; }
+  .liveWatchOverlayCopy h2 { font-size: 1.45rem; }
+  .liveWatchOverlayCopy p:not(.eyebrow) { -webkit-line-clamp: 2; }
+  .liveWatchReactionRail { right: .45rem; bottom: .65rem; gap: .35rem; }
+  .liveReaction { min-width: 2.65rem; min-height: 2.85rem; border-radius: .8rem; }
+  .liveReaction > span { font-size: 1.05rem; }
+  .liveWatchNav { right: .5rem; }
+  .liveWatchNav button { width: 2.3rem; height: 2.3rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .homeLiveDot,
+  .liveWatchLiveTag > span { animation: none; }
+  .liveWatchFeed { scroll-behavior: auto; }
+  .homeLiveSeller:hover,
+  .homeLiveMore:hover,
+  .liveReaction:hover,
+  .liveInlinePreview:hover { transform: none; }
+}

@@ -8,6 +8,7 @@ import { assertBalancedPostings, assertCoinEntry, assertTransferAllowed, currenc
 import { appendWalletAllocations, buildPostingAllocations } from './wallet-ledger.js';
 import { buildWalletReconciliationReport } from './wallet-reconciliation.js';
 import { createWalletFundingPayment, getStripeWalletFundingProvider, persistWalletFundingProviderReference, processWalletFundingEvent, recoverWalletFundingPaymentIntent, validateWalletFundingPaymentIntent, walletFundingSandboxEnabled, WalletFundingRetryableError } from './wallet-funding.js';
+import { liveShoppingState } from './live-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
@@ -51,8 +52,10 @@ const ruleSchema = z.object({
   expiresAfterDays: z.number().int().positive().max(3650).optional().nullable(),
   effectiveFrom: z.string().datetime().optional().nullable(),
   effectiveTo: z.string().datetime().optional().nullable(),
-  eligibleGroups: z.array(z.string().trim().min(1).max(80)).max(50).optional().nullable()
+  eligibleGroups: z.array(z.string().trim().min(1).max(80)).max(50).optional().nullable(),
+  reason: z.string().trim().min(3).max(500)
 });
+const connectedClubCoinEvents = ['ACCOUNT_VERIFIED', 'PURCHASE_COMPLETED', 'REVIEW_SUBMITTED', 'LIVE_ATTENDANCE'] as const;
 const coinAdjustmentSchema = z.object({ userId: z.string().cuid(), amount: z.number().int().refine(value => value !== 0, 'Adjustment cannot be zero').max(1_000_000).min(-1_000_000), reason: z.string().trim().min(3).max(500), reference: z.string().trim().min(1).max(160), idempotencyKey: z.string().trim().min(8).max(120) });
 
 export type ClubCoinAdjustmentInput = z.infer<typeof coinAdjustmentSchema>;
@@ -67,6 +70,12 @@ type WalletSettings = {
 };
 
 function actor(res: Response) { return res.locals.user as { id: string; role: Role }; }
+
+async function assertRewardEventReady(eventType: string) {
+  if (eventType !== 'LIVE_ATTENDANCE') return;
+  const state = await liveShoppingState();
+  if (!state.effectiveEnabled) throw fail(409, `Live-attendance rewards cannot be activated: ${state.reason}`);
+}
 
 export const walletAudit = {
   async write(tx: Prisma.TransactionClient, actorId: string | undefined, action: string, entity: string, entityId: string | undefined, metadata?: unknown) {
@@ -376,6 +385,53 @@ export function registerWalletRoutes(app: Express) {
     res.json(accounts.map(account => ({ id: account.id, user: account.user, status: account.status, balances: account.balances })));
   }));
 
+  app.get('/api/admin/club-coins/accounts', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const query = z.object({ q: z.string().trim().max(120).optional(), cursor: z.string().cuid().optional() }).strict().parse(req.query);
+    const search = query.q?.trim() ?? '';
+    const where = search ? { OR: [{ email: { contains: search, mode: 'insensitive' as const } }, { name: { contains: search, mode: 'insensitive' as const } }] } : {};
+    if (query.cursor && !(await prisma.user.findFirst({ where: { ...where, id: query.cursor }, select: { id: true } }))) throw fail(400, 'Member cursor is invalid for this search');
+    const users = await prisma.user.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 31,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+      select: {
+        id: true, name: true, email: true, role: true, createdAt: true,
+        clubCoinAccount: { select: { id: true, status: true, balance: true, updatedAt: true, _count: { select: { entries: true } } } }
+      }
+    });
+    const hasMore = users.length > 30;
+    const page = hasMore ? users.slice(0, 30) : users;
+    res.json({
+      items: page.map(user => ({
+        user: { id: user.id, name: user.name, email: user.email, role: user.role, createdAt: user.createdAt },
+        account: user.clubCoinAccount ? { id: user.clubCoinAccount.id, status: user.clubCoinAccount.status, balance: user.clubCoinAccount.balance, updatedAt: user.clubCoinAccount.updatedAt, entryCount: user.clubCoinAccount._count.entries } : null
+      })),
+      nextCursor: hasMore ? page.at(-1)?.id ?? null : null
+    });
+  }));
+
+  app.get('/api/admin/club-coins/accounts/:userId/entries', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const input = z.object({ userId: z.string().cuid() }).parse({ userId: param(req.params.userId) });
+    const query = z.object({ cursor: z.string().cuid().optional() }).strict().parse(req.query);
+    const account = await prisma.clubCoinAccount.findUnique({ where: { userId: input.userId }, select: { id: true, status: true, balance: true } });
+    if (!account) return res.json({ account: null, entries: [], nextCursor: null });
+    if (query.cursor) {
+      const cursorEntry = await prisma.clubCoinEntry.findFirst({ where: { id: query.cursor, accountId: account.id }, select: { id: true } });
+      if (!cursorEntry) throw fail(400, 'Ledger cursor is invalid for this Club Coins account');
+    }
+    const entries = await prisma.clubCoinEntry.findMany({
+      where: { accountId: account.id },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 51,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+      select: { id: true, entryType: true, amount: true, referenceType: true, referenceId: true, policyVersion: true, expiresAt: true, reversalOfId: true, reason: true, createdAt: true }
+    });
+    const hasMore = entries.length > 50;
+    const page = hasMore ? entries.slice(0, 50) : entries;
+    res.json({ account, entries: page, nextCursor: hasMore ? page.at(-1)?.id ?? null : null });
+  }));
+
   app.patch('/api/admin/wallet/users/:userId/status', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const currentActor = actor(res);
     const input = z.object({ status: z.enum(['ACTIVE', 'FROZEN', 'CLOSED']), reason: z.string().trim().min(3).max(500) }).parse(req.body);
@@ -413,24 +469,62 @@ export function registerWalletRoutes(app: Express) {
   app.post('/api/admin/club-coins/rules', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const currentActor = actor(res);
     const input = ruleSchema.parse(req.body);
-    const rule = await prisma.$transaction(async tx => {
-      const created = await tx.clubCoinRule.create({ data: { code: input.code, eventType: input.eventType, enabled: input.enabled, awardAmount: input.awardAmount, perUserCap: input.perUserCap, perOrderCap: input.perOrderCap, dailyCap: input.dailyCap, expiresAfterDays: input.expiresAfterDays, effectiveFrom: input.effectiveFrom ? new Date(input.effectiveFrom) : null, effectiveTo: input.effectiveTo ? new Date(input.effectiveTo) : null, eligibleGroupsJson: inputJson(input.eligibleGroups ?? []), createdById: currentActor.id } });
-      await auditInTransaction(tx, currentActor.id, 'CLUB_COINS_RULE_CREATED', 'ClubCoinRule', created.id, { code: created.code, eventType: created.eventType, awardAmount: created.awardAmount });
-      return created;
-    });
-    res.status(201).json(rule);
+    if (input.effectiveFrom && input.effectiveTo && new Date(input.effectiveTo) <= new Date(input.effectiveFrom)) throw fail(400, 'Rule end time must be after its start time');
+    if (input.enabled) {
+      if (!connectedClubCoinEvents.includes(input.eventType as typeof connectedClubCoinEvents[number])) throw fail(409, 'This reward event is not connected to a verified marketplace event source');
+      await assertRewardEventReady(input.eventType);
+      if ((input.eligibleGroups?.length ?? 0) > 0 || input.expiresAfterDays != null) throw fail(409, 'Group-targeted or expiring rewards cannot be activated until membership and expiry services are implemented');
+      if (env.CLUB_COINS_HARD_DISABLED) throw fail(409, 'Club Coins are hard-disabled by server configuration');
+      const currentSettings = await settings();
+      if (!currentSettings.clubCoinsEnabled || !currentSettings.clubCoinsEarnEnabled) throw fail(409, 'Enable Club Coins and earning policy before activating reward rules');
+    }
+    try {
+      const { reason, ...ruleInput } = input;
+      const rule = await prisma.$transaction(async tx => {
+        const created = await tx.clubCoinRule.create({ data: { code: ruleInput.code, eventType: ruleInput.eventType, enabled: ruleInput.enabled, awardAmount: ruleInput.awardAmount, perUserCap: ruleInput.perUserCap, perOrderCap: ruleInput.perOrderCap, dailyCap: ruleInput.dailyCap, expiresAfterDays: ruleInput.expiresAfterDays, effectiveFrom: ruleInput.effectiveFrom ? new Date(ruleInput.effectiveFrom) : null, effectiveTo: ruleInput.effectiveTo ? new Date(ruleInput.effectiveTo) : null, eligibleGroupsJson: inputJson(ruleInput.eligibleGroups ?? []), createdById: currentActor.id } });
+        await auditInTransaction(tx, currentActor.id, 'CLUB_COINS_RULE_CREATED', 'ClubCoinRule', created.id, { code: created.code, eventType: created.eventType, awardAmount: created.awardAmount, enabled: created.enabled, reason });
+        return created;
+      });
+      res.status(201).json(rule);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) throw fail(409, 'A reward rule with this code already exists');
+      throw error;
+    }
   }));
 
   app.patch('/api/admin/club-coins/rules/:id', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const currentActor = actor(res);
-    const input = ruleSchema.partial().parse(req.body);
-    const { effectiveFrom, effectiveTo, eligibleGroups, ...scalarInput } = input;
-    const rule = await prisma.$transaction(async tx => {
-      const updated = await tx.clubCoinRule.update({ where: { id: param(req.params.id) }, data: { ...scalarInput, ...(effectiveFrom !== undefined ? { effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : null } : {}), ...(effectiveTo !== undefined ? { effectiveTo: effectiveTo ? new Date(effectiveTo) : null } : {}), ...(eligibleGroups !== undefined ? { eligibleGroupsJson: inputJson(eligibleGroups ?? []) } : {}) } });
-      await auditInTransaction(tx, currentActor.id, 'CLUB_COINS_RULE_UPDATED', 'ClubCoinRule', updated.id, { changed: Object.keys(input) });
-      return updated;
-    });
-    res.json(rule);
+    const input = ruleSchema.partial().extend({ reason: z.string().trim().min(3).max(500) }).parse(req.body);
+    const currentRule = await prisma.clubCoinRule.findUnique({ where: { id: param(req.params.id) } });
+    if (!currentRule) throw fail(404, 'Club Coins reward rule not found');
+    const nextFrom = input.effectiveFrom !== undefined ? input.effectiveFrom : currentRule.effectiveFrom?.toISOString() ?? null;
+    const nextTo = input.effectiveTo !== undefined ? input.effectiveTo : currentRule.effectiveTo?.toISOString() ?? null;
+    if (nextFrom && nextTo && new Date(nextTo) <= new Date(nextFrom)) throw fail(400, 'Rule end time must be after its start time');
+    const nextEnabled = input.enabled ?? currentRule.enabled;
+    const nextEventType = input.eventType ?? currentRule.eventType;
+    const currentGroups = Array.isArray(currentRule.eligibleGroupsJson) ? currentRule.eligibleGroupsJson : [];
+    const nextGroups = input.eligibleGroups ?? currentGroups;
+    const nextExpiresAfterDays = input.expiresAfterDays !== undefined ? input.expiresAfterDays : currentRule.expiresAfterDays;
+    if (nextEnabled && !connectedClubCoinEvents.includes(nextEventType as typeof connectedClubCoinEvents[number])) throw fail(409, 'This reward event is not connected to a verified marketplace event source');
+    if (nextEnabled) await assertRewardEventReady(nextEventType);
+    if (nextEnabled && (nextGroups.length > 0 || nextExpiresAfterDays != null)) throw fail(409, 'Group-targeted or expiring rewards cannot be activated until membership and expiry services are implemented');
+    if (input.enabled === true && !currentRule.enabled) {
+      if (env.CLUB_COINS_HARD_DISABLED) throw fail(409, 'Club Coins are hard-disabled by server configuration');
+      const currentSettings = await settings();
+      if (!currentSettings.clubCoinsEnabled || !currentSettings.clubCoinsEarnEnabled) throw fail(409, 'Enable Club Coins and earning policy before activating reward rules');
+    }
+    const { effectiveFrom, effectiveTo, eligibleGroups, reason, ...scalarInput } = input;
+    try {
+      const rule = await prisma.$transaction(async tx => {
+        const updated = await tx.clubCoinRule.update({ where: { id: currentRule.id }, data: { ...scalarInput, ...(effectiveFrom !== undefined ? { effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : null } : {}), ...(effectiveTo !== undefined ? { effectiveTo: effectiveTo ? new Date(effectiveTo) : null } : {}), ...(eligibleGroups !== undefined ? { eligibleGroupsJson: inputJson(eligibleGroups ?? []) } : {}) } });
+        await auditInTransaction(tx, currentActor.id, 'CLUB_COINS_RULE_UPDATED', 'ClubCoinRule', updated.id, { changed: Object.keys(scalarInput).concat(effectiveFrom !== undefined ? ['effectiveFrom'] : [], effectiveTo !== undefined ? ['effectiveTo'] : [], eligibleGroups !== undefined ? ['eligibleGroups'] : []), reason });
+        return updated;
+      });
+      res.json(rule);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) throw fail(409, 'A reward rule with this code already exists');
+      throw error;
+    }
   }));
 
   app.post('/api/admin/club-coins/adjustments', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {

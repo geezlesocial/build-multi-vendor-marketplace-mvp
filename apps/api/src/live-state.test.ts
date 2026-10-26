@@ -11,13 +11,16 @@ describe('live-shopping safety boundary', () => {
 
   it('rejects impossible lifecycle transitions', () => {
     expect(canTransition('DRAFT', 'SCHEDULED')).toBe(true);
+    expect(canTransition('SCHEDULED', 'DRAFT')).toBe(true);
+    expect(canTransition('SCHEDULED', 'CANCELLED')).toBe(true);
     expect(canTransition('DRAFT', 'LIVE')).toBe(false);
+    expect(canTransition('LIVE', 'DRAFT')).toBe(false);
     expect(canTransition('ENDED', 'LIVE')).toBe(false);
   });
 
   it('fails closed instead of simulating a provider', async () => {
     const provider = new UnavailableLiveProvider();
-    await expect(provider.getReadiness()).resolves.toMatchObject({ configured: false, healthy: false });
+    await expect(provider.getReadiness()).resolves.toMatchObject({ configured: false, healthy: false, attendanceVerificationAvailable: false });
     await expect(provider.createSession({ title: 'test' })).rejects.toThrow('real managed streaming provider');
   });
 });

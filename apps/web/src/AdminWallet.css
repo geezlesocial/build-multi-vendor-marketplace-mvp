@@ -1,0 +1,70 @@
+.adminWallet{max-width:1160px}
+.adminWalletMetrics{margin:1.25rem 0}
+.adminWalletMetrics .cardBody h2{font-size:1rem}
+.adminWalletMetrics .cardBody>strong{font-size:1.8rem;color:#325a45}
+.adminCoinAccounts{display:grid;gap:1rem;margin:1.5rem 0 2.5rem}
+.adminCoinAccounts>.sectionHeading{margin-top:.25rem}
+.adminCoinAccounts h2{margin:.15rem 0}
+.adminCoinSearch{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.75rem;padding:1rem 1.15rem;border:1px solid #e0e6df;border-radius:.9rem;background:#fff}
+.adminCoinSearch label{display:grid;gap:.35rem}
+.adminCoinSearch button,.adminCoinAccountList>button:last-child,.adminCoinAccountDetail>button{min-height:2.65rem;padding:.55rem .9rem;border:1px solid #cbd8ce;border-radius:999px;background:#fff;color:#325a45;font:inherit;cursor:pointer}
+.adminCoinAccountLayout{display:grid;grid-template-columns:minmax(250px,.8fr) minmax(0,1.5fr);align-items:start;gap:1rem}
+.adminCoinAccountList{display:grid;gap:.55rem;max-height:42rem;overflow:auto;padding:.7rem;border:1px solid #e0e6df;border-radius:.9rem;background:#f9faf7}
+.adminCoinAccountRow{display:flex;justify-content:space-between;align-items:center;gap:.75rem;width:100%;padding:.8rem;border:1px solid #e2e8e2;border-radius:.7rem;background:#fff;color:inherit;text-align:left;cursor:pointer}
+.adminCoinAccountRow:hover,.adminCoinAccountRow.isSelected{border-color:#91aa9a;background:#edf4ee}
+.adminCoinAccountRow>span{display:grid;gap:.2rem;min-width:0}
+.adminCoinAccountRow>span:last-child{text-align:right;white-space:nowrap}
+.adminCoinAccountRow small{overflow:hidden;color:#6e7c73;text-overflow:ellipsis;font-size:.78rem}
+.adminCoinAccountDetail{display:grid;gap:.8rem;min-width:0;padding:1rem;border:1px solid #e0e6df;border-radius:.9rem;background:#fff}
+.adminCoinAccountDetail>.sectionHeading{align-items:center}
+.adminCoinAccountDetail h3,.adminCoinAccountDetail h4{margin:.3rem 0}
+.adminCoinAccountDetail .sectionHeading p{margin:.25rem 0}
+.adminCoinBalance{display:grid;justify-items:end;color:#325a45}
+.adminCoinBalance strong{font-size:1.6rem}
+.adminCoinBalance span,.adminCoinLedgerHeading span{font-size:.8rem;color:#6e7c73}
+.adminCoinAdjustment{display:grid;gap:.7rem;padding:1rem;border:1px solid #e5e9e3;border-radius:.8rem;background:#f8faf7}
+.adminCoinAdjustment h4,.adminCoinLedgerHeading h4{margin:0}
+.adminCoinAdjustment>p{margin:0}
+.adminCoinAdjustment>button{justify-self:start}
+.adminCoinLedgerHeading{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding-top:.25rem}
+.adminCoinLedger{display:grid;gap:.5rem;max-height:27rem;overflow:auto}
+.adminCoinLedgerEntry{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.3rem .8rem;padding:.75rem;border:1px solid #e5e9e3;border-radius:.7rem;background:#fbfcfa}
+.adminCoinLedgerEntry>div{display:grid;gap:.2rem}
+.adminCoinLedgerEntry small,.adminCoinLedgerEntry p{margin:0;color:#6e7c73;font-size:.8rem}
+.adminCoinLedgerEntry p,.adminCoinLedgerEntry>small{grid-column:1/-1;overflow-wrap:anywhere}
+.adminCoinLedgerEntry .isPositive{color:#325a45}
+.adminCoinLedgerEntry .isNegative{color:#a9432b}
+.adminWalletPolicy{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem 1.25rem;margin:1.5rem 0 2.5rem;padding:1.25rem}
+.adminWalletPolicy>div:first-child,.adminWalletWide{grid-column:1/-1}
+.adminWalletPolicy h2,.adminCoinRules h2{margin:.15rem 0}
+.adminWalletPolicy .settingRow{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.65rem .8rem;border:1px solid #e0e6df;border-radius:.7rem;background:#f9faf7}
+.adminWalletPolicy .settingRow input,.adminCoinEnabled input{width:auto;min-width:1.1rem;accent-color:#325a45}
+.adminWalletBadge{display:inline-flex;align-items:center;width:max-content;padding:.3rem .65rem;border-radius:99px;background:#e8f1e9;color:#325a45;font-size:.75rem;font-weight:700}
+.adminCoinRules{display:grid;gap:1rem}
+.adminCoinRules>.sectionHeading{margin-top:.5rem}
+.adminCoinRuleForm{display:grid;gap:1rem;padding:1.25rem}
+.adminCoinRuleForm h3,.adminCoinRule h3{margin:.35rem 0}
+.adminCoinRuleForm .sectionHeading{align-items:center}
+.adminCoinRuleForm .sectionHeading p{margin:.25rem 0}
+.adminCoinRuleGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem 1rem}
+.adminCoinRuleForm label{min-width:0}
+.adminCoinEnabled{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.65rem .8rem;border:1px solid #e0e6df;border-radius:.7rem}
+.adminCoinRuleForm>button{justify-self:start;min-width:12rem}
+.adminCoinRuleList{display:grid;gap:.75rem}
+.adminCoinRule{padding:1rem 1.2rem}
+.adminCoinRule .sectionHeading{align-items:center}
+.adminCoinRule .sectionHeading p{margin:.25rem 0}
+.adminCoinRule .profileActions{display:flex;flex-wrap:wrap;gap:.5rem}
+.adminCoinRule>p:last-child{margin:.4rem 0 0}
+@media(max-width:700px){
+  .adminWalletPolicy,.adminCoinRuleGrid,.adminCoinAccountLayout{grid-template-columns:minmax(0,1fr)}
+  .adminWalletPolicy>div:first-child,.adminWalletWide{grid-column:1}
+  .adminCoinSearch{grid-template-columns:minmax(0,1fr)}
+  .adminCoinSearch button{width:100%}
+  .adminCoinAccountList{max-height:22rem}
+  .adminCoinAccountDetail>.sectionHeading{align-items:flex-start;flex-direction:column}
+  .adminCoinBalance{justify-items:start}
+  .adminCoinRuleForm .sectionHeading,.adminCoinRule .sectionHeading{align-items:flex-start;flex-direction:column}
+  .adminCoinRule .profileActions{width:100%}
+  .adminCoinRule .profileActions button{flex:1}
+}

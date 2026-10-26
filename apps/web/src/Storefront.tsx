@@ -6,11 +6,12 @@ type StorefrontData = {
   slug: string;
   publicPath: string;
   theme: { themePreset: string; mobileTemplate: string; description: string; primaryColor: string; accentColor: string; font: string; logoMediaId: string | null; faviconMediaId: string | null; bannerMediaId: string | null };
-  products: { id: string; name: string; description: string; priceMinor: number; currency: string; availableStock: number; category: { name: string } | null }[];
+  products: { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; category: { name: string } | null; images?: { url: string; alt: string }[]; mediaAttachments?: { kind: string; url: string; label?: string | null }[] }[];
   content?: { posts: { slug: string; title: string; excerpt: string | null }[]; pages: { slug: string; title: string }[] };
   redirectTo?: string;
 };
 type StoreCurrency = { code: string; name: string; displayAvailable: boolean; rate: { provider: string; sourceDate: string; fetchedAt: string; freshness: string } | null };
+type NewsletterStatus = { available: boolean; enabledForPlan: boolean; deliveryAvailable: boolean; message: string };
 
 export function Storefront({ slug }: { slug: string }) {
   const [store, setStore] = useState<StorefrontData | null>(null);
@@ -20,6 +21,12 @@ export function Storefront({ slug }: { slug: string }) {
   const [displayAmounts, setDisplayAmounts] = useState<Record<string, number>>({});
   const [rateDescription, setRateDescription] = useState('');
   const [currencyError, setCurrencyError] = useState('');
+  const [newsletter, setNewsletter] = useState<NewsletterStatus | null>(null);
+  const [newsletterEmail, setNewsletterEmail] = useState('');
+  const [newsletterConsent, setNewsletterConsent] = useState(false);
+  const [newsletterBusy, setNewsletterBusy] = useState(false);
+  const [newsletterMessage, setNewsletterMessage] = useState('');
+  const [newsletterError, setNewsletterError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -43,6 +50,26 @@ export function Storefront({ slug }: { slug: string }) {
       .catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Store not found'); });
     return () => { active = false; };
   }, [slug]);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/stores/${encodeURIComponent(slug)}/newsletter/status`, { credentials: 'include' })
+      .then(async response => { const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error ?? 'Newsletter status unavailable'); return body as NewsletterStatus; })
+      .then(body => { if (active) setNewsletter(body); })
+      .catch(() => { if (active) setNewsletter(null); });
+    return () => { active = false; };
+  }, [slug]);
+
+  const subscribe = async (event: React.FormEvent) => {
+    event.preventDefault(); setNewsletterBusy(true); setNewsletterError(''); setNewsletterMessage('');
+    try {
+      const response = await fetch(`/api/stores/${encodeURIComponent(slug)}/newsletter`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: newsletterEmail, consent: newsletterConsent, consentSource: 'storefront' }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error ?? 'We could not process your request.');
+      setNewsletterMessage(body.message ?? 'Check your inbox for a confirmation link.'); setNewsletterEmail(''); setNewsletterConsent(false);
+    } catch (reason) { setNewsletterError(reason instanceof Error ? reason.message : 'We could not process your request.'); }
+    finally { setNewsletterBusy(false); }
+  };
 
   useEffect(() => {
     if (!store || !displayCurrency) return;
@@ -84,8 +111,9 @@ export function Storefront({ slug }: { slug: string }) {
     <div className="sectionHeading"><h2>Products</h2>{currencies.length > 1 && <label>Display currency<select aria-label="Store display currency" value={displayCurrency} onChange={event => setDisplayCurrency(event.target.value)}>{currencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>}</div>
     {displayCurrency !== store.products[0]?.currency && rateDescription && <p className="muted">Estimated display prices · {rateDescription} These are not payment conversion rates.</p>}
     {currencyError && <p className="notice" role="status">{currencyError} Listing prices remain available in their original currency.</p>}
-    <div className="grid">{store.products.map(product => <article className="card" key={product.id}><div className="productMark">{product.name.slice(0, 1)}</div><div className="cardBody"><p className="eyebrow">{product.category?.name ?? 'Product'}</p><h2>{product.name}</h2><p>{product.description}</p><div className="cardBottom"><strong>{displayAmounts[product.id] !== undefined && !currencyError ? formatMinor(displayAmounts[product.id]!, displayCurrency) : formatMinor(product.priceMinor, product.currency)}</strong><span>{product.availableStock} in stock</span></div>{displayCurrency !== product.currency && displayAmounts[product.id] !== undefined && <small>Reference estimate only · listing price {formatMinor(product.priceMinor, product.currency)}</small>}</div></article>)}</div>
+    <div className="grid">{store.products.map(product => { const image = product.images?.[0] ?? product.mediaAttachments?.find(media => media.kind === 'IMAGE'); const sale = product.salePriceMinor != null && product.salePriceMinor < product.priceMinor; return <article className="card productCard" key={product.id}>{image ? <a href={`/products/${product.id}`}><img src={image.url} alt={'alt' in image ? image.alt : image.label || product.name} /></a> : <a className="productVisual productVisualFallback" href={`/products/${product.id}`} aria-label={`View ${product.name}`}><span>{product.name.slice(0, 1)}</span></a>}<div className="cardBody"><p className="eyebrow">{product.category?.name ?? 'Product'}</p><h2><a href={`/products/${product.id}`}>{product.name}</a></h2><p>{product.description}</p><div className="cardBottom"><strong>{displayAmounts[product.id] !== undefined && !currencyError ? formatMinor(displayAmounts[product.id]!, displayCurrency) : formatMinor(sale ? product.salePriceMinor! : product.priceMinor, product.currency)}</strong><span>{product.availableStock} in stock</span></div>{sale && <small>{displayCurrency === product.currency || displayAmounts[product.id] === undefined ? <del>{formatMinor(product.priceMinor, product.currency)}</del> : `Sale · regular ${formatMinor(product.priceMinor, product.currency)}`}</small>}{displayCurrency !== product.currency && displayAmounts[product.id] !== undefined && <small>Reference estimate only · listing currency {product.currency}</small>}</div></article>; })}</div>
     {store.products.length === 0 && <div className="empty">This store has no approved products available.</div>}
+    {newsletter?.available && <section className="card cardBody storeNewsletter"><p className="eyebrow">From {store.name}</p><h2>Get store updates</h2><p className="muted">Optional email updates from this Store. Confirm your address before any marketing email is sent; unsubscribe at any time.</p><form onSubmit={subscribe}><label>Email address<input type="email" autoComplete="email" maxLength={254} required value={newsletterEmail} onChange={event => setNewsletterEmail(event.target.value)} /></label><label className="storePlanCheck"><input type="checkbox" required checked={newsletterConsent} onChange={event => setNewsletterConsent(event.target.checked)} />I agree to receive optional email updates from {store.name}. I can unsubscribe at any time.</label><button className="primary" disabled={newsletterBusy || !newsletterConsent}>{newsletterBusy ? 'Submitting…' : 'Send confirmation email'}</button></form>{newsletterError && <p className="notice" role="alert">{newsletterError}</p>}{newsletterMessage && <p className="notice" role="status">{newsletterMessage}</p>}</section>}
     {((store.content?.posts.length ?? 0) + (store.content?.pages.length ?? 0)) > 0 && <section className="storeContentLinks"><h2>From this store</h2>{store.content?.pages.map(page => <p key={`page-${page.slug}`}><a href={`/store/${store.slug}/pages/${page.slug}`}>{page.title}</a></p>)}{store.content?.posts.map(post => <article className="card cardBody" key={`post-${post.slug}`}><h3><a href={`/store/${store.slug}/blog/${post.slug}`}>{post.title}</a></h3>{post.excerpt && <p>{post.excerpt}</p>}</article>)}</section>}
   </section>;
 }

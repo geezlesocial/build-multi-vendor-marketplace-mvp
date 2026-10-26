@@ -7,6 +7,8 @@ import { prisma, requireAuth, requireRole } from './security.js';
 import { convertMinorExact, FrankfurterRateAdapter, isRateFresh, parseRate } from './currency-domain.js';
 import { assertShippingSelectionsMatch, buildSellerShippingQuote, verifyCheckoutShippingQuote, type ShippingCartRecord } from './shipping-routes.js';
 import { addressSchema } from './validation.js';
+import { effectiveProductPriceMinor, effectiveUnitPriceMinor } from './product-pricing.js';
+import { resolveCartProductDiscount } from './product-discount-routes.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const actor = (res: Response) => res.locals.user as { id: string; role: Role; sellerId?: string };
@@ -20,6 +22,7 @@ async function currencyManager(user: ReturnType<typeof actor>) {
   if (!user.sellerId) throw fail(403, 'Seller Store scope is required.');
   const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, include: { store: true } });
   if (!seller?.store) throw fail(403, 'An approved Store is required.');
+  if (user.role === Role.ADMIN && seller.store.isPlatformStore) return seller;
   if (seller.userId !== user.id) {
     const permission = await prisma.sellerStaff.findFirst({ where: { sellerId: seller.id, userId: user.id, canManageCurrency: true }, select: { id: true } });
     if (!permission) throw fail(403, 'The Store owner has not granted currency-management permission.');
@@ -144,7 +147,7 @@ export function registerCurrencyRoutes(app: Express) {
   }));
 
   app.post('/api/currency/cart-estimate', requireAuth, run(async (req, res) => {
-    const input = z.object({ displayCurrency: z.string().length(3).transform(value => value.toUpperCase()), address: addressSchema.optional(), shippingQuoteToken: z.string().min(20).max(8000).optional() }).strict().parse(req.body);
+    const input = z.object({ displayCurrency: z.string().length(3).transform(value => value.toUpperCase()), address: addressSchema.optional(), shippingQuoteToken: z.string().min(20).max(8000).optional(), discountCode: z.string().trim().min(3).max(64).optional() }).strict().parse(req.body);
     const user = actor(res);
     const cart = await prisma.cart.findUnique({
       where: { userId: user.id },
@@ -152,12 +155,15 @@ export function registerCurrencyRoutes(app: Express) {
         items: {
           include: {
             variant: true,
-            product: { include: { seller: { include: { store: { include: { currencyOffers: true } } } } } }
+            product: { include: { productType: true, seller: { include: { store: { include: { currencyOffers: true } } } } } }
           }
         }
       }
     });
     if (!cart?.items.length) return res.status(409).json({ error: 'Your cart is empty.' });
+    const appliedDiscount = input.discountCode ? await resolveCartProductDiscount(prisma, input.discountCode, cart.items) : null;
+    if (appliedDiscount && appliedDiscount.discount.currency !== env.CURRENCY) return res.status(409).json({ error: `This discount is in ${appliedDiscount.discount.currency} and cannot be charged in ${env.CURRENCY}.` });
+    const discountAllocations = new Map((appliedDiscount?.quote.allocations ?? []).map(item => [item.cartItemId, item.discountMinor]));
     const target = await prisma.currencyCatalogEntry.findFirst({ where: { code: input.displayCurrency, active: true, displayEnabled: true } });
     if (!target) return res.status(409).json({ error: 'This currency is not enabled for display.' });
     const sourceCurrencies = new Set<string>();
@@ -178,7 +184,7 @@ export function registerCurrencyRoutes(app: Express) {
     for (const item of cart.items) {
       const store = item.product.seller?.store;
       const sourceCurrency = item.variant?.currency ?? item.product.currency;
-      const baseMinor = (item.variant?.priceMinor ?? item.product.priceMinor) * item.quantity;
+      const baseMinor = effectiveUnitPriceMinor(item) * item.quantity - (discountAllocations.get(item.id) ?? 0);
       const rate = await latestDisplayRate(sourceCurrency, input.displayCurrency, store?.id);
       const sourceExponent = exponents.get(sourceCurrency);
       if (!rate || rate.freshness === 'stale' || sourceExponent === undefined) return res.status(409).json({ error: `No current reference rate is available for ${sourceCurrency}/${input.displayCurrency}; no estimate is shown.` });
@@ -188,15 +194,16 @@ export function registerCurrencyRoutes(app: Express) {
       displayMerchandiseMinor += estimatedAmountMinor;
       snapshots.push({ productId: item.productId, quantity: item.quantity, sourceAmountMinor: baseMinor, sourceCurrency, estimatedAmountMinor, targetCurrency: input.displayCurrency, rate: rate.rate, provider: rate.provider, sourceDate: rate.sourceDate, fetchedAt: rate.fetchedAt, freshness: rate.freshness, rounding: 'HALF_UP', purpose: 'DISPLAY_ESTIMATE_ONLY' });
     }
-    const sellerIds = [...new Set(cart.items.map(item => item.product.sellerId).filter((id): id is string => Boolean(id)))];
+    const shippingItems = cart.items.filter(item => item.product.productType.requiresShipping);
+    const sellerIds = [...new Set(shippingItems.map(item => item.product.sellerId).filter((id): id is string => Boolean(id)))];
     let chargeShippingMinor = 0;
     let displayShippingMinor = 0;
     const shippingSnapshots: Record<string, unknown>[] = [];
     if (sellerIds.length) {
       if (!input.address || !input.shippingQuoteToken) return res.status(409).json({ error: 'Calculate shipping before viewing a complete converted order estimate.' });
-      const verified = verifyCheckoutShippingQuote({ token: input.shippingQuoteToken, userId: user.id, address: input.address, items: cart.items as ShippingCartRecord[] });
+      const verified = verifyCheckoutShippingQuote({ token: input.shippingQuoteToken, userId: user.id, address: input.address, items: shippingItems as ShippingCartRecord[] });
       const selections = Object.fromEntries(verified.selections.map(selection => [selection.sellerId, selection.serviceId]));
-      const current = await prisma.$transaction(tx => buildSellerShippingQuote(tx, user.id, input.address!, cart.items as ShippingCartRecord[], selections));
+      const current = await prisma.$transaction(tx => buildSellerShippingQuote(tx, user.id, input.address!, shippingItems as ShippingCartRecord[], selections));
       assertShippingSelectionsMatch(verified, current.shipments.map(shipment => shipment.selected));
       chargeShippingMinor = current.shippingTotalMinor;
       for (const shipment of current.shipments) {
@@ -212,7 +219,7 @@ export function registerCurrencyRoutes(app: Express) {
         shippingSnapshots.push({ storeId: store?.id, serviceId: shipment.selected.serviceId, sourceAmountMinor: shipment.selected.shippingMinor, sourceCurrency: env.CURRENCY, estimatedAmountMinor: Number(estimate), targetCurrency: input.displayCurrency, rate: rate.rate, provider: rate.provider, sourceDate: rate.sourceDate, fetchedAt: rate.fetchedAt, freshness: rate.freshness, rounding: 'HALF_UP', purpose: 'DISPLAY_ESTIMATE_ONLY' });
       }
     }
-    res.json({ displayCurrency: input.displayCurrency, displayMerchandiseMinor, displayShippingMinor, displayTotalMinor: displayMerchandiseMinor + displayShippingMinor, chargeCurrency: env.CURRENCY, chargeMerchandiseMinor: cart.items.reduce((sum, item) => sum + (item.variant?.priceMinor ?? item.product.priceMinor) * item.quantity, 0), chargeShippingMinor, rates: snapshots, shippingRates: shippingSnapshots, note: `Reference-rate estimate only. Actual order and provider charge remain in ${env.CURRENCY}; final provider conversion, if any, is authoritative.` });
+    res.json({ displayCurrency: input.displayCurrency, displayMerchandiseMinor, displayShippingMinor, displayTotalMinor: displayMerchandiseMinor + displayShippingMinor, chargeCurrency: env.CURRENCY, chargeMerchandiseMinor: cart.items.reduce((sum, item) => sum + effectiveUnitPriceMinor(item) * item.quantity, 0) - (appliedDiscount?.quote.discountMinor ?? 0), discountMinor: appliedDiscount?.quote.discountMinor ?? 0, chargeShippingMinor, rates: snapshots, shippingRates: shippingSnapshots, note: `Reference-rate estimate only. Actual order and provider charge remain in ${env.CURRENCY}; final provider conversion, if any, is authoritative.` });
   }));
 
   app.get('/api/stores/:slug/currencies', run(async (req, res) => {
@@ -236,7 +243,7 @@ export function registerCurrencyRoutes(app: Express) {
     if (!/^[A-Z]{3}$/.test(currency)) return res.status(400).json({ error: 'Choose a valid display currency.' });
     const store = await prisma.store.findFirst({
       where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } },
-      include: { currencyOffers: { where: { displayEnabled: true } }, seller: { include: { products: { where: { status: ProductStatus.APPROVED }, select: { id: true, priceMinor: true, currency: true } } } } }
+      include: { currencyOffers: { where: { displayEnabled: true } }, seller: { include: { products: { where: { status: ProductStatus.APPROVED }, select: { id: true, priceMinor: true, salePriceMinor: true, currency: true } } } } }
     });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
     if (currency !== store.baseCurrency && !store.currencyOffers.some(offer => offer.currency === currency)) return res.status(409).json({ error: 'This Store has not offered that display currency.' });
@@ -250,9 +257,10 @@ export function registerCurrencyRoutes(app: Express) {
       if (sourceExponent === undefined) return res.status(409).json({ error: `Currency ${product.currency} is unavailable for this Store's display estimate.` });
       const rate = await latestDisplayRate(product.currency, currency, store.id);
       if (!rate || rate.freshness === 'stale') return res.status(409).json({ error: `A current reference rate is unavailable for ${product.currency}/${currency}. No estimate is shown.` });
-      const amount = convertMinorExact(BigInt(product.priceMinor), rate.rate, sourceExponent, target.minorUnitExponent);
+      const originalAmountMinor = effectiveProductPriceMinor(product);
+      const amount = convertMinorExact(BigInt(originalAmountMinor), rate.rate, sourceExponent, target.minorUnitExponent);
       if (amount > 2_147_483_647n) return res.status(409).json({ error: 'The converted display estimate exceeds the supported range.' });
-      estimates.push({ productId: product.id, originalAmountMinor: product.priceMinor, originalCurrency: product.currency, estimatedAmountMinor: Number(amount), currency, rate: { base: product.currency, quote: currency, value: rate.rate, provider: rate.provider, sourceDate: rate.sourceDate, fetchedAt: rate.fetchedAt, freshness: rate.freshness, estimateOnly: true } });
+      estimates.push({ productId: product.id, originalAmountMinor, originalCurrency: product.currency, estimatedAmountMinor: Number(amount), currency, rate: { base: product.currency, quote: currency, value: rate.rate, provider: rate.provider, sourceDate: rate.sourceDate, fetchedAt: rate.fetchedAt, freshness: rate.freshness, estimateOnly: true } });
     }
     res.json({ store: { slug: store.slug, name: store.name }, currency, note: 'Reference-rate display estimate only; checkout and payment use the configured platform charge currency.', items: estimates });
   }));

@@ -21,10 +21,14 @@ const publicProduct = (product: any) => ({
   name: product.name,
   description: product.description,
   priceMinor: product.priceMinor,
+  salePriceMinor: product.salePriceMinor,
+  color: product.color,
+  features: (product.featureAssignments ?? []).map((assignment: any) => ({ id: assignment.feature.id, name: assignment.feature.name })),
   currency: product.currency,
   availableStock: product.inventory?.quantity ?? 0,
-  image: product.images?.[0] ? { url: product.images[0].url, alt: product.images[0].alt } : null,
+  image: product.images?.[0] ? { url: product.images[0].url, alt: product.images[0].alt } : product.mediaAttachments?.find((item: any) => item.mediaAsset.kind === 'IMAGE') ? { url: `/content-media/${encodeURIComponent(product.mediaAttachments.find((item: any) => item.mediaAsset.kind === 'IMAGE').mediaAsset.id)}`, alt: product.name } : null,
   category: product.category ? { name: product.category.name, slug: product.category.slug } : null,
+  brand: product.brand ? { name: product.brand.name, slug: product.brand.slug } : null,
   store: product.seller?.store ? { name: product.seller.store.name, slug: product.seller.store.slug } : null
 });
 
@@ -40,7 +44,7 @@ export function registerMarketplaceRoutes(app: Express) {
   app.get('/api/marketplace/home', run(async (_req, res) => {
     const [categories, products, stores] = await Promise.all([
       prisma.category.findMany({ where: { status: TaxonomyStatus.ACTIVE }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }], take: 8 }),
-      prisma.product.findMany({ where: { ...approvedProductWhere(), inventory: { quantity: { gt: 0 } } }, include: { inventory: true, images: { take: 1 }, category: true, seller: { include: { store: true } } }, orderBy: { createdAt: 'desc' }, take: 12 }),
+      prisma.product.findMany({ where: { ...approvedProductWhere(), inventory: { quantity: { gt: 0 } } }, include: { inventory: true, images: { take: 1 }, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true } } } }, category: true, brand: true, featureAssignments: { include: { feature: true } }, seller: { include: { store: true } } }, orderBy: { createdAt: 'desc' }, take: 12 }),
       prisma.store.findMany({ where: { seller: { status: SellerStatus.APPROVED, products: { some: { status: ProductStatus.APPROVED } } } }, orderBy: { name: 'asc' }, take: 8 })
     ]);
     res.json({
@@ -55,7 +59,7 @@ export function registerMarketplaceRoutes(app: Express) {
   app.get('/api/marketplace/search', run(async (req, res) => {
     const input = normalizeMarketplaceSearch({ q: req.query.q, limit: req.query.limit });
     const [products, stores] = await Promise.all([
-      prisma.product.findMany({ where: approvedProductWhere(input.q), include: { inventory: true, images: { take: 1 }, category: true, seller: { include: { store: true } } }, orderBy: { updatedAt: 'desc' }, take: input.limit }),
+      prisma.product.findMany({ where: approvedProductWhere(input.q), include: { inventory: true, images: { take: 1 }, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true } } } }, category: true, brand: true, featureAssignments: { include: { feature: true } }, seller: { include: { store: true } } }, orderBy: { updatedAt: 'desc' }, take: input.limit }),
       prisma.store.findMany({ where: { seller: { status: SellerStatus.APPROVED, products: { some: { status: ProductStatus.APPROVED } } }, OR: [{ name: { contains: input.q, mode: 'insensitive' } }, { description: { contains: input.q, mode: 'insensitive' } }] }, orderBy: { name: 'asc' }, take: input.limit })
     ]);
     res.json({

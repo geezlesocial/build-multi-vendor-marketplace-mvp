@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { PassThrough, type Readable } from 'node:stream';
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
@@ -28,18 +28,38 @@ function safePath(key: string) {
 }
 
 export class LocalContentStorage implements ContentStorage {
-  async put(key: string, bytes: Buffer) {
+  private readonly metadata = new Map<string, { size: number; contentType: string }>();
+
+  async put(key: string, bytes: Buffer, contentType = 'application/octet-stream') {
     const target = safePath(key);
     await mkdir(path.dirname(target), { recursive: true });
     const temporary = `${target}.uploading`;
     await writeFile(temporary, bytes, { flag: 'wx' });
     await rename(temporary, target);
+    this.metadata.set(key, { size: bytes.length, contentType });
+  }
+
+  async createUploadForm(_key: string, _contentType: string, _maxBytes: number): Promise<DirectUploadForm> {
+    throw new Error('Local storage uses the authenticated application upload endpoint.');
+  }
+
+  async head(key: string) {
+    const file = await stat(safePath(key));
+    const metadata = this.metadata.get(key);
+    return { ContentLength: file.size, ContentType: metadata?.contentType ?? 'application/octet-stream' };
+  }
+
+  async readLimited(key: string, maxBytes: number) {
+    const bytes = await readFile(safePath(key));
+    if (bytes.length > maxBytes) throw new Error('Uploaded object exceeded its reserved size');
+    const metadata = this.metadata.get(key);
+    return { bytes, contentLength: bytes.length, contentType: metadata?.contentType ?? 'application/octet-stream' };
   }
 
   open(key: string) { return createReadStream(safePath(key)); }
 
   async remove(key: string) {
-    try { await unlink(safePath(key)); }
+    try { await unlink(safePath(key)); this.metadata.delete(key); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
 }

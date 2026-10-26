@@ -1,0 +1,41 @@
+.adminOperations{display:grid;gap:1.2rem;min-width:0}
+.adminOperationsHeader,.adminOpsEvents>header{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem}
+.adminOperationsHeader h2,.adminOpsEvents h3{margin:.1rem 0 .35rem}
+.adminOperationsHeader p,.adminOpsEvents header p{margin:.25rem 0}
+.adminOpsMetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8rem}
+.adminOpsMetrics .card{display:grid;gap:.35rem;min-width:0}
+.adminOpsMetrics .card>span,.adminOpsMetrics small{color:#68736b}
+.adminOpsMetrics strong{font-size:1.35rem}
+.adminOpsMetrics small{font-size:.78rem}
+.opsOk{color:#315d47}.opsWarn{color:#a05224}
+.adminOpsRefreshNote{margin:-.75rem 0 0;color:#68736b;font-size:.82rem}
+.adminOperations .cardBody h3{margin-top:0}
+.adminOpsEndpointGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}
+.adminOpsEndpoint,.adminOpsProvider{display:grid;gap:.45rem;padding:.9rem;border:1px solid #e0e6df;border-radius:.8rem;background:#f8f9f6;min-width:0}
+.adminOpsEndpoint>div,.adminOpsProvider{align-items:start}
+.adminOpsEndpoint>div{display:flex;justify-content:space-between;gap:.6rem;align-items:center}
+.adminOpsEndpoint code,.adminOpsEvent code{overflow-wrap:anywhere;font-size:.8rem;color:#315d47}
+.adminOpsEndpoint p,.adminOpsProvider p{margin:0;color:#68736b;font-size:.82rem}
+.opsStatus{display:inline-flex;align-items:center;width:max-content;max-width:100%;padding:.25rem .55rem;border-radius:999px;background:#eef1ed;color:#59625b;font-size:.68rem;font-weight:750;letter-spacing:.035em;text-transform:uppercase;white-space:normal}
+.opsStatus-configured,.opsStatus-processed{background:#e8f2eb;color:#315d47}
+.opsStatus-not_configured,.opsStatus-disabled,.opsStatus-review_required,.opsStatus-unverified{background:#fff2d8;color:#89501d}
+.adminOpsProviderList{display:grid;gap:.65rem}
+.adminOpsProvider{grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.adminOpsProvider>div{display:grid;gap:.15rem}.adminOpsProvider>div span{font-size:.8rem;color:#68736b}
+.adminOpsProvider p{grid-column:1/-1}
+.adminOpsEvents{display:grid;gap:.8rem}
+.adminOpsTotal{border:1px solid #dce4dc;border-radius:999px;padding:.45rem .75rem;background:#fff;white-space:nowrap;font-size:.8rem;color:#68736b}
+.adminOpsFilters{display:flex;gap:.75rem;flex-wrap:wrap}
+.adminOpsFilters label{display:grid;gap:.3rem;min-width:180px;font-size:.82rem;font-weight:700}
+.adminOpsFilters select{min-width:0}
+.adminOpsEventList{display:grid;gap:.55rem}
+.adminOpsEvent{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:1rem;background:#fff}
+.adminOpsEventMain{display:grid;gap:.3rem;min-width:0}
+.adminOpsEventTitle{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
+.adminOpsEventMain>span,.adminOpsEventMain small{color:#68736b;font-size:.8rem}
+.adminOpsEventMain small{overflow-wrap:anywhere}
+.opsReviewReason{margin:0;color:#89501d;font-size:.82rem}
+.adminOpsPagination{display:flex;justify-content:space-between;align-items:center;gap:1rem;color:#68736b;font-size:.85rem}
+.adminOpsPagination>div{display:flex;gap:.5rem}
+@media(max-width:900px){.adminOpsMetrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.adminOperationsHeader,.adminOpsEvents>header,.adminOpsEvent{align-items:stretch;flex-direction:column}.adminOpsEndpointGrid{grid-template-columns:1fr}.adminOpsProvider{grid-template-columns:1fr}.adminOpsProvider p{grid-column:auto}.adminOpsPagination{align-items:flex-start;flex-direction:column}}

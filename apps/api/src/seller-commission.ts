@@ -5,6 +5,7 @@ import { effectiveStorePlan } from './store-plan-domain.js';
 
 type CommissionDb = Prisma.TransactionClient;
 type Policy = CommissionTerms & { id: string; version: number; currency: string; reason: string; storeId: string | null; planVersionId: string | null };
+const netItemBase = (item: { unitPriceMinor: number; quantity: number; discountMinor?: number }) => Math.max(0, item.unitPriceMinor * item.quantity - (item.discountMinor ?? 0));
 
 export async function applicableSellerCommissionPolicy(db: CommissionDb, storeId: string, currency: string, now = new Date()): Promise<Policy | null> {
   const activeWhere = {
@@ -66,7 +67,7 @@ export async function accrueSellerCommissionsForPaidOrder(db: CommissionDb, pare
     if (!sellerOrder.sellerId || sellerOrder.status === 'CANCELLED' || !sellerOrder.commissionSnapshotJson) continue;
     const terms = snapshotTerms(sellerOrder.commissionSnapshotJson);
     if (!terms) throw new Error('Commission snapshot is invalid; order requires finance review.');
-    const eligibleItems = sellerOrder.items.map(item => ({ id: item.id, eligibleBaseMinor: item.unitPriceMinor * item.quantity }));
+    const eligibleItems = sellerOrder.items.map(item => ({ id: item.id, eligibleBaseMinor: netItemBase(item) }));
     const baseTotal = eligibleItems.reduce((sum, item) => sum + item.eligibleBaseMinor, 0);
     if (!Number.isSafeInteger(baseTotal) || baseTotal < 0) throw new Error('Commission eligible base is outside the supported amount range.');
     const amount = calculateCommissionMinor(terms, baseTotal);
@@ -196,14 +197,14 @@ export async function allocatePartialRefund(db: CommissionDb, input: {
   const allocationJson: { orderItemId: string; refundMinor: number }[] = [];
   for (const allocation of input.allocations) {
     const item = items.find(candidate => candidate.id === allocation.orderItemId)!;
-    const itemBase = item.unitPriceMinor * item.quantity;
+    const itemBase = netItemBase(item);
     const priorReviews = await db.sellerCommissionReviewEvent.findMany({ where: { parentOrderId: input.parentOrderId, status: 'POSTED', id: { not: review.id } }, select: { allocationJson: true } });
     const priorRefunded = priorReviews.flatMap(row => Array.isArray(row.allocationJson) ? row.allocationJson as unknown as { orderItemId: string; refundMinor: number }[] : []).filter(row => row.orderItemId === item.id).reduce((sum, row) => sum + row.refundMinor, 0);
     if (priorRefunded + allocation.refundMinor > itemBase) throw Object.assign(new Error('Refund allocation exceeds the remaining item value.'), { statusCode: 409 });
     const accrual = await db.sellerCommissionLedgerEntry.findFirst({ where: { orderItemId: item.id, entryType: 'ACCRUAL' } });
     const terms = item.sellerOrder.commissionSnapshotJson ? snapshotTerms(item.sellerOrder.commissionSnapshotJson) : null;
     if (!terms) throw Object.assign(new Error('The order has no valid commission policy snapshot; manual finance review is required.'), { statusCode: 409, code: 'COMMISSION_POLICY_SNAPSHOT_MISSING' });
-    const eligibleItems = item.sellerOrder.items.map(orderItem => ({ id: orderItem.id, eligibleBaseMinor: orderItem.unitPriceMinor * orderItem.quantity }));
+    const eligibleItems = item.sellerOrder.items.map(orderItem => ({ id: orderItem.id, eligibleBaseMinor: netItemBase(orderItem) }));
     const sellerOrderBase = eligibleItems.reduce((sum, eligibleItem) => sum + eligibleItem.eligibleBaseMinor, 0);
     if (!Number.isSafeInteger(sellerOrderBase) || sellerOrderBase < 0) throw Object.assign(new Error('The saved commission base is outside the supported amount range.'), { statusCode: 409, code: 'COMMISSION_BASE_INVALID' });
     const expectedCommission = allocateCommission(calculateCommissionMinor(terms, sellerOrderBase), eligibleItems).find(row => row.id === item.id)?.amountMinor;

@@ -186,6 +186,53 @@ test('member homepage cart summary refreshes with the shared cart-change event',
   expect(removed.status(), await removed.text()).toBe(204);
 });
 
+test('header and buyer dashboard cart counts stay in sync across navigation and another tab', async ({ page }) => {
+  const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const email = `dashboard-cart-sync-${suffix}@example.test`;
+  const registered = await page.request.post('/api/auth/register', {
+    data: { email, name: 'Dashboard Cart Sync Test', password }
+  });
+  expect(registered.status(), await registered.text()).toBe(201);
+
+  const productsResponse = await page.request.get('/api/products');
+  expect(productsResponse.ok(), await productsResponse.text()).toBeTruthy();
+  const products = (await productsResponse.json() as { items: { id: string; name: string; availableStock: number }[] }).items;
+  const product = products.find(item => item.name === 'Demo Canvas Tote' && item.availableStock > 1);
+  expect(product, 'the disposable seed should include the approved USD demo tote').toBeTruthy();
+
+  await page.goto('/');
+  const productCard = page.locator('article.productCard').filter({ has: page.getByRole('heading', { name: product!.name, exact: true }) });
+  await productCard.getByRole('button', { name: 'Add to cart' }).click();
+  await expect(page.locator('.cartButton b')).toHaveText('1');
+
+  await page.goto('/dashboard');
+  await expect(page.getByRole('heading', { name: 'Buyer dashboard' })).toBeVisible();
+  await expect(page.getByText('1 items in cart', { exact: true })).toBeVisible();
+  await expect(page.locator('.cartButton b')).toHaveText('1');
+
+  const secondTab = await page.context().newPage();
+  try {
+    await secondTab.goto('/dashboard?tab=cart');
+    await expect(secondTab.getByRole('heading', { name: 'Buyer dashboard' })).toBeVisible();
+    await secondTab.getByRole('button', { name: 'Increase Demo Canvas Tote' }).click();
+    await expect(secondTab.locator('.cartButton b')).toHaveText('2');
+
+    await page.bringToFront();
+    await expect(page.locator('.cartButton b')).toHaveText('2');
+    await expect(page.getByText('2 items in cart', { exact: true })).toBeVisible();
+
+    await secondTab.bringToFront();
+    await secondTab.getByRole('button', { name: 'Remove', exact: true }).click();
+    await expect(secondTab.locator('.cartButton b')).toHaveText('0');
+
+    await page.bringToFront();
+    await expect(page.locator('.cartButton b')).toHaveText('0');
+    await expect(page.getByText('0 items in cart', { exact: true })).toBeVisible();
+  } finally {
+    await secondTab.close();
+  }
+});
+
 test('admin remains on the separate admin surface and cannot use a buyer/seller dashboard switch', async ({ page }) => {
   await login(page, 'admin.local@example.test');
   const access = await page.request.get('/api/dashboard/access');

@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 
 type PlanData = {
+  adminOverride?: boolean;
   store: { name: string; slug: string };
   plan: { key: string; name: string; status: string; version: number; versionStatus: string };
   assignment: { status: string; source: string; effectiveFrom: string | null; effectiveUntil: string | null };
   pricing: { description: string; currency: string; monthlyPriceMinor: number; annualPriceMinor: number; annualDiscountPercent: number | null; defaultInterval: string; termIntervals: number | null; expirationBehavior: string; cancellationPolicy: string; freeTrialDays: number; introPriceMinor: number | null; introDurationDays: number | null; effectiveFrom: string | null; effectiveUntil: string | null };
-  entitlements: { productLimit: number; storeLimit: number; vendorLimit: number; staffSeatLimit: number; allowedThemes: string[]; customDomainEligible: boolean; paymentConnectors: string[]; mobileTemplates: string[]; blogPostLimit: number; contentPageLimit: number; mediaStorageLimitBytes: number; scheduledPublishingEnabled: boolean; advancedContentSeoEnabled: boolean; storeBusterEnabled: boolean; storeBusterCampaignLimit: number; storeBusterMonthlyBudgetMinor: number; emailMarketingEnabled: boolean; emailSubscriberLimit: number; emailMonthlySendLimit: number; affiliateToolsEnabled: boolean };
+  entitlements: { productLimit: number; storeLimit: number; vendorLimit: number; staffSeatLimit: number; allowedThemes: string[]; customDomainEligible: boolean; paymentConnectors: string[]; sellerManagedPaymentsEnabled: boolean; sellerManagedCarrierAccountsEnabled: boolean; dropshippingEnabled: boolean; mobileTemplates: string[]; blogPostLimit: number; contentPageLimit: number; mediaStorageLimitBytes: number; scheduledPublishingEnabled: boolean; advancedContentSeoEnabled: boolean; storeBusterEnabled: boolean; storeBusterCampaignLimit: number; storeBusterMonthlyBudgetMinor: number; emailMarketingEnabled: boolean; emailSubscriberLimit: number; emailMonthlySendLimit: number; affiliateToolsEnabled: boolean };
   usage: { products: number; stores: number; vendors: number; staffSeats: number; blogPosts: number; contentPages: number; mediaStorageBytes: number };
   notes: { connectors: string; customDomain: string; mobileTemplates: string };
 };
@@ -88,7 +89,8 @@ export function SellerStorePlan() {
   return <section className="page sellerPlanPage">
     <p className="eyebrow">Seller tools</p>
     <h1>Plan &amp; Billing</h1>
-    <p className="muted">Review your Store plan, entitlements, usage, and available plans. Any checkout shown here is a Stripe test-mode sandbox, never live billing.</p>
+    <p className="muted">{data.adminOverride ? 'The official platform Store receives all premium plan features without a subscription or billing.' : 'Review your Store plan, entitlements, usage, and available plans. Any checkout shown here is a Stripe test-mode sandbox, never live billing.'}</p>
+    {data.adminOverride && <p className="notice" role="status">Administrator override active: all supported premium Store entitlements are enabled. External providers still require credentials, onboarding, and platform approval.</p>}
     {actionError && <div className="notice" role="alert">{actionError}</div>}
     {actionMessage && <p className="muted" role="status">{actionMessage}</p>}
     <article className="card cardBody sellerPlanSummary">
@@ -113,6 +115,9 @@ export function SellerStorePlan() {
         <div><dt>Responsive storefront templates</dt><dd>{data.entitlements.mobileTemplates.join(', ')}</dd></div>
         <div><dt>Custom-domain eligibility</dt><dd>{data.entitlements.customDomainEligible ? 'Eligible' : 'Not included'}</dd></div>
         <div><dt>Payment connector eligibility</dt><dd>{data.entitlements.paymentConnectors.length ? data.entitlements.paymentConnectors.join(', ') : 'None'}</dd></div>
+        <div><dt>Seller-owned payment accounts</dt><dd>{data.entitlements.sellerManagedPaymentsEnabled ? 'Eligible on this plan; provider onboarding and approval still required' : 'Marketplace-managed payments only'}</dd></div>
+        <div><dt>Seller-owned carrier accounts</dt><dd>{data.entitlements.sellerManagedCarrierAccountsEnabled ? 'Eligible on this plan; carrier integration still required' : 'Marketplace-managed shipping only'}</dd></div>
+        <div><dt>Dropshipping suppliers</dt><dd>{data.entitlements.dropshippingEnabled ? 'Included; supplier account and API access required' : 'Not enabled for this plan'}</dd></div>
         <div><dt>Blog and page publishing</dt><dd>Included on every plan · {data.entitlements.blogPostLimit} posts · {data.entitlements.contentPageLimit} pages</dd></div>
         <div><dt>Scheduled publishing</dt><dd>{data.entitlements.scheduledPublishingEnabled ? 'Included' : 'Not enabled for this plan'}</dd></div>
         <div><dt>Advanced content SEO</dt><dd>{data.entitlements.advancedContentSeoEnabled ? 'Included' : 'Not enabled for this plan'}</dd></div>

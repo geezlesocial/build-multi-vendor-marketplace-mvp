@@ -6,7 +6,7 @@ import { audit, currentUser, prisma, requireAuth, requireRole } from './security
 import { env } from './config.js';
 import { generatedReferralCode, referralTokenHash, safeInternalPath, signedReferralToken, verifySignedReferralToken, escapeHtmlAttribute } from './growth-domain.js';
 import { reverseAffiliateForOrder } from './affiliate-ledger.js';
-import { asStorePlanEntitlements, effectiveStorePlan } from './store-plan-domain.js';
+import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
 
 const run = (handler: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: (error?: unknown) => void) => Promise.resolve(handler(req, res)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
@@ -17,7 +17,7 @@ async function assertStoreAffiliateEligible(storeId: string) {
   // Stores without a record retain the legacy platform affiliate behavior.
   if (!participation) return;
   const plan = await effectiveStorePlan(prisma, storeId);
-  if (!participation.enabled || !asStorePlanEntitlements(plan.version).affiliateToolsEnabled) {
+  if (!participation.enabled || !(await storeEntitlements(prisma, storeId, plan.version)).affiliateToolsEnabled) {
     const error = Object.assign(new Error('This Store is not currently eligible for affiliate promotion.'), { statusCode: 409, code: 'STORE_AFFILIATE_NOT_AVAILABLE' });
     throw error;
   }
@@ -243,26 +243,58 @@ export function registerGrowthRoutes(app: Express) {
   }));
 
   app.get('/api/campaigns/active', run(async (req, res) => {
-    const placement = z.string().trim().max(80).parse(req.query.placement ?? 'home');
-    res.json(await prisma.marketingCampaign.findMany({ where: { status: 'PUBLISHED', placements: { has: placement }, OR: [{ startsAt: null }, { startsAt: { lte: new Date() } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }] }] }, orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }], take: 20 }));
+    const placement = z.string().trim().min(1).max(80).parse(req.query.placement ?? 'home');
+    const now = new Date();
+    res.json(await prisma.marketingCampaign.findMany({ where: { placements: { has: placement }, OR: [{ status: 'PUBLISHED', OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { status: 'SCHEDULED', startsAt: { lte: now } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now } }] }] }, orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }], take: 20 }));
   }));
   app.get('/api/admin/campaigns', requireAuth, requireRole(Role.ADMIN, Role.CONTENT_EDITOR), run(async (_req, res) => res.json(await prisma.marketingCampaign.findMany({ orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }], take: 100 }))));
   app.post('/api/admin/campaigns', requireAuth, requireRole(Role.ADMIN, Role.CONTENT_EDITOR), run(async (req, res) => {
     const user = res.locals.user as { id: string };
-    const input = z.object({ name: z.string().trim().min(2).max(160), placements: z.array(z.string().trim().min(1).max(80)).min(1).max(20), contentJson: z.record(z.string(), z.unknown()), priority: z.number().int().min(-1000).max(1000).default(0), startsAt: z.string().datetime().optional(), endsAt: z.string().datetime().optional() }).parse(req.body);
+    const input = z.object({ name: z.string().trim().min(2).max(160), placements: z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{0,79}$/i)).min(1).max(20), contentJson: z.record(z.string(), z.unknown()), priority: z.number().int().min(-1000).max(1000).default(0), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional(), reason: z.string().trim().min(5).max(500) }).parse(req.body);
     const serialized = JSON.stringify(input.contentJson);
-    if (/<\/?script|javascript:|on[a-z]+\s*=/i.test(serialized)) return res.status(400).json({ error: 'Executable campaign content is not allowed' });
-    const campaign = await prisma.marketingCampaign.create({ data: { name: input.name, placements: input.placements, contentJson: input.contentJson as Prisma.InputJsonValue, priority: input.priority, startsAt: input.startsAt ? new Date(input.startsAt) : null, endsAt: input.endsAt ? new Date(input.endsAt) : null, createdById: user.id } });
-    await audit(user.id, 'MARKETING_CAMPAIGN_CREATED', 'MarketingCampaign', campaign.id);
+    if (serialized.length > 16_000 || /<\/?script|javascript:|on[a-z]+\s*=/i.test(serialized)) return res.status(400).json({ error: 'Campaign content is too large or contains executable content' });
+    const startsAt = input.startsAt ? new Date(input.startsAt) : null;
+    const endsAt = input.endsAt ? new Date(input.endsAt) : null;
+    if (startsAt && endsAt && endsAt <= startsAt) return res.status(400).json({ error: 'Campaign end must be later than its start' });
+    if (typeof input.contentJson.ctaPath === 'string') {
+      try { safeInternalPath(input.contentJson.ctaPath); } catch { return res.status(400).json({ error: 'Campaign links must use a safe internal path' }); }
+    }
+    const campaign = await prisma.$transaction(async tx => {
+      const created = await tx.marketingCampaign.create({ data: { name: input.name, placements: [...new Set(input.placements)], contentJson: input.contentJson as Prisma.InputJsonValue, priority: input.priority, startsAt, endsAt, createdById: user.id } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'MARKETING_CAMPAIGN_CREATED', entity: 'MarketingCampaign', entityId: created.id, metadata: { reason: input.reason, placements: created.placements, priority: created.priority } } });
+      return created;
+    });
     res.status(201).json(campaign);
   }));
   app.patch('/api/admin/campaigns/:id', requireAuth, requireRole(Role.ADMIN, Role.CONTENT_EDITOR), run(async (req, res) => {
     const user = res.locals.user as { id: string };
-    const input = z.object({ name: z.string().trim().min(2).max(160).optional(), placements: z.array(z.string().trim().min(1).max(80)).min(1).max(20).optional(), contentJson: z.record(z.string(), z.unknown()).optional(), status: z.enum(['DRAFT', 'SCHEDULED', 'PUBLISHED', 'PAUSED', 'ARCHIVED']).optional(), priority: z.number().int().min(-1000).max(1000).optional(), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional() }).parse(req.body);
-    if (input.contentJson && /<\/?script|javascript:|on[a-z]+\s*=/i.test(JSON.stringify(input.contentJson))) return res.status(400).json({ error: 'Executable campaign content is not allowed' });
-    const campaign = await prisma.marketingCampaign.update({ where: { id: param(req.params.id) }, data: { ...input, contentJson: input.contentJson as Prisma.InputJsonValue | undefined, startsAt: input.startsAt === undefined ? undefined : input.startsAt ? new Date(input.startsAt) : null, endsAt: input.endsAt === undefined ? undefined : input.endsAt ? new Date(input.endsAt) : null } });
-    await audit(user.id, 'MARKETING_CAMPAIGN_UPDATED', 'MarketingCampaign', campaign.id, { status: campaign.status });
-    res.json(campaign);
+    const input = z.object({ name: z.string().trim().min(2).max(160).optional(), placements: z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{0,79}$/i)).min(1).max(20).optional(), contentJson: z.record(z.string(), z.unknown()).optional(), status: z.enum(['DRAFT', 'SCHEDULED', 'PUBLISHED', 'PAUSED', 'ARCHIVED']).optional(), priority: z.number().int().min(-1000).max(1000).optional(), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional(), reason: z.string().trim().min(5).max(500) }).parse(req.body);
+    if (input.contentJson) {
+      const serialized = JSON.stringify(input.contentJson);
+      if (serialized.length > 16_000 || /<\/?script|javascript:|on[a-z]+\s*=/i.test(serialized)) return res.status(400).json({ error: 'Campaign content is too large or contains executable content' });
+      if (typeof input.contentJson.ctaPath === 'string') {
+        try { safeInternalPath(input.contentJson.ctaPath); } catch { return res.status(400).json({ error: 'Campaign links must use a safe internal path' }); }
+      }
+    }
+    const result = await prisma.$transaction(async tx => {
+      const existing = await tx.marketingCampaign.findUnique({ where: { id: param(req.params.id) } });
+      if (!existing) return { error: 'Campaign not found' as const };
+      if (existing.status === 'ARCHIVED') return { error: 'Archived campaigns are read-only' as const };
+      const startsAt = input.startsAt === undefined ? existing.startsAt : input.startsAt ? new Date(input.startsAt) : null;
+      const endsAt = input.endsAt === undefined ? existing.endsAt : input.endsAt ? new Date(input.endsAt) : null;
+      const status = input.status ?? existing.status;
+      if (startsAt && endsAt && endsAt <= startsAt) return { error: 'Campaign end must be later than its start' as const };
+      const now = new Date();
+      if (status === 'SCHEDULED' && !startsAt) return { error: 'Scheduled campaigns require a start time' as const };
+      if (status === 'SCHEDULED' && startsAt && startsAt <= now && (existing.status !== 'SCHEDULED' || input.startsAt !== undefined)) return { error: 'New schedules require a future start time' as const };
+      if (status === 'PUBLISHED' && ((startsAt && startsAt > now) || (endsAt && endsAt <= now))) return { error: 'Campaign is outside its publishing window; schedule it or adjust its dates' as const };
+      const { reason, ...fields } = input;
+      const updated = await tx.marketingCampaign.update({ where: { id: existing.id }, data: { ...fields, placements: input.placements ? [...new Set(input.placements)] : undefined, contentJson: input.contentJson as Prisma.InputJsonValue | undefined, startsAt, endsAt } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'MARKETING_CAMPAIGN_UPDATED', entity: 'MarketingCampaign', entityId: updated.id, metadata: { reason, previousStatus: existing.status, status: updated.status } } });
+      return { campaign: updated } as const;
+    });
+    if ('error' in result) return res.status(result.error === 'Campaign not found' ? 404 : 400).json({ error: result.error });
+    res.json(result.campaign);
   }));
   app.get('/api/admin/affiliate-rules', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => res.json(await prisma.affiliateCommissionRule.findMany({ orderBy: { effectiveFrom: 'desc' }, take: 100 }))));
   app.post('/api/admin/affiliate-rules', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {

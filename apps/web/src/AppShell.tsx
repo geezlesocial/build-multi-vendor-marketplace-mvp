@@ -15,7 +15,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, status, error, refreshUser, setUser } = useSession();
   const [accountOpen, setAccountOpen] = useState(false);
   const [cartCount, setCartCount] = useState(0);
-  const [publicBranding, setPublicBranding] = useState<{ platformName: string; shortName: string; logoMediaId: string | null; alternateLogoMediaId: string | null; faviconMediaId: string | null; defaultAvatarMediaId: string | null } | null>(null);
+  const [publicBranding, setPublicBranding] = useState<{ platformName: string; shortName: string; tagline?: string; logoMediaId: string | null; alternateLogoMediaId: string | null; faviconMediaId: string | null; defaultAvatarMediaId: string | null } | null>(null);
   const accountRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,17 +35,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) { setCartCount(0); return undefined; }
     let active = true;
+    let latestRequest = 0;
     const refreshCartCount = async () => {
+      const requestId = ++latestRequest;
       try {
         const response = await fetch('/api/cart', { credentials: 'include' });
         if (!response.ok) return;
         const cart = await response.json() as { items?: { quantity: number }[] };
-        if (active) setCartCount((cart.items ?? []).reduce((sum, item) => sum + item.quantity, 0));
+        if (active && requestId === latestRequest) setCartCount((cart.items ?? []).reduce((sum, item) => sum + item.quantity, 0));
       } catch { /* The cart page reports its own loading and error state. */ }
     };
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshCartCount(); };
     void refreshCartCount();
     window.addEventListener('marketplace:cart-changed', refreshCartCount);
-    return () => { active = false; window.removeEventListener('marketplace:cart-changed', refreshCartCount); };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      active = false;
+      window.removeEventListener('marketplace:cart-changed', refreshCartCount);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [user?.id]);
 
   useEffect(() => {
@@ -70,12 +80,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (status === 'error') return <div className="app"><header className="topbar"><a className="brand" href="/">Market Lane<span>independent marketplace</span></a></header><main className="shellLoading"><h1>Marketplace unavailable</h1><p className="notice" role="alert">{error}</p><button className="primary" onClick={() => void refreshUser()}>Try again</button></main></div>;
 
   const dashboardHref = user?.role === 'ADMIN' ? '/admin/platform' : '/dashboard';
-  const platformName = publicBranding?.platformName ?? 'Market Lane';
-  const platformShortName = publicBranding?.shortName ?? 'Market Lane';
+  const platformName = publicBranding?.platformName?.trim() || publicBranding?.shortName?.trim() || 'Market Lane';
+  const platformShortName = publicBranding?.shortName?.trim() || platformName;
+  const platformTagline = publicBranding?.tagline?.trim() || 'independent marketplace';
   const platformLogo = publicBranding?.logoMediaId ?? publicBranding?.alternateLogoMediaId;
   return <div className="app">
     <header className="topbar">
-      <a className="brand" href="/">{platformLogo && <img className="platformBrandLogo" src={`/content-media/${encodeURIComponent(platformLogo)}`} alt="" onError={event => { event.currentTarget.hidden = true; }} />}<span className="platformBrandText">{platformShortName}<small>{platformName === platformShortName ? 'independent marketplace' : platformName}</small></span></a>
+      <a className="brand" href="/">{platformLogo && <img className="platformBrandLogo" src={`/content-media/${encodeURIComponent(platformLogo)}`} alt={`${platformName} logo`} onError={event => { event.currentTarget.hidden = true; }} />}<span className="platformBrandText"><span className="platformBrandName">{platformShortName}</span><small>{platformTagline}</small></span></a>
       <nav className="primaryNav" aria-label="Main navigation">
         <a className="navPill" href="/">Shop</a>
         <a className="navPill cartButton" href="/checkout">Cart <b aria-label={`${cartCount} items in cart`}>{user ? cartCount : 0}</b></a>
@@ -102,6 +113,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>}
       </nav>
     </header>
+    {user && !user.emailVerifiedAt && <div className="notice emailVerificationBanner" role="status">Verify <strong>{user.email}</strong> to review products and qualify for account rewards. <a href="/settings#profile">Open account settings</a></div>}
     <main className="shellMain">{children}</main>
     <footer>{platformName} · Platform payments are collected by the owner; automated seller payouts are not included.</footer>
   </div>;

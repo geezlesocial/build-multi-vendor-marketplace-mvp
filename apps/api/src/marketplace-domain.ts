@@ -10,6 +10,13 @@ export const accountPreferencesSchema = z.object({
   displayCurrency: z.string().trim().length(3).transform(value => value.toUpperCase()).optional()
 }).strict();
 
+export const supportedMarketplaceLanguages = ['en', 'fil'] as const;
+
+export function enabledMarketplaceLanguages(languages: readonly string[] | null | undefined) {
+  const enabled = new Set(languages ?? []);
+  return supportedMarketplaceLanguages.filter(language => language === 'en' || enabled.has(language));
+}
+
 export function normalizeMarketplaceSearch(value: unknown) {
   return marketplaceSearchSchema.parse(value);
 }
@@ -18,6 +25,7 @@ export function publicSearchLabel(type: 'product' | 'store') {
   return type === 'product' ? 'Product' : 'Store';
 }
 
-export function displayCurrencyAvailable(currency: string, baseCurrency: string, configuredCurrencies: string[]) {
-  return configuredCurrencies.includes(currency.toUpperCase()) && currency.toUpperCase() === baseCurrency.toUpperCase();
+export function displayCurrencyAvailable(currency: string, configuredCurrencies: string[]) {
+  const normalized = currency.trim().toUpperCase();
+  return configuredCurrencies.some(configured => configured.toUpperCase() === normalized);
 }
