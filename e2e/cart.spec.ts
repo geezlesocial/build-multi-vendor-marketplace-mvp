@@ -152,6 +152,8 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
   await expect(deliveryService).toBeVisible();
   await expect(page.locator('.summary .total strong')).toHaveText('$29.00');
   await expect(deliveryService).toHaveValue('local-demo-shipping-service');
+  const paymentMethod = page.getByRole('combobox', { name: 'Payment method' });
+  await expect(paymentMethod.locator('option[value="COD"]')).toHaveCount(1);
   await page.getByRole('button', { name: 'Place order' }).click();
 
   const confirmation = page.locator('.orderConfirmation');
@@ -166,7 +168,10 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
   await expect(summaryTotal).toHaveText((await confirmationTotal.textContent())!.trim());
   await expect(page.locator('.summary')).toContainText('Standard local delivery');
   await expect(page.locator('.summary')).toContainText('$5.00');
-  await expect(page.getByText('Your cart is empty.')).toBeVisible();
+  const emptiedCartResponse = await page.request.get('/api/cart');
+  expect(emptiedCartResponse.ok(), await emptiedCartResponse.text()).toBeTruthy();
+  expect((await emptiedCartResponse.json() as { items: unknown[] }).items).toHaveLength(0);
   await expect(page.getByText('Added to cart')).not.toBeVisible();
   await expect(page.getByRole('link', { name: /Cart/ })).toContainText('0');
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });

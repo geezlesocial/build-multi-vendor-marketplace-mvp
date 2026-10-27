@@ -48,10 +48,13 @@ test('admin can use the supplier module on the official Store without a paid pla
 
   const dropshipping = await page.request.get('/api/seller/dropshipping');
   expect(dropshipping.ok(), await dropshipping.text()).toBeTruthy();
-  await expect(dropshipping.json()).resolves.toMatchObject({
-    entitlement: { enabled: true, adminOverride: true, requiresSubscription: false },
-    providers: [expect.objectContaining({ code: 'CJ_DROPSHIPPING', apiReady: true })]
-  });
+  const dropshippingBody = await dropshipping.json() as { entitlement: { enabled: boolean; adminOverride: boolean; requiresSubscription: boolean }; providers: { code: string; apiReady: boolean; status?: string }[] };
+  expect(dropshippingBody.entitlement).toMatchObject({ enabled: true, adminOverride: true, requiresSubscription: false });
+  expect(dropshippingBody.providers).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'CJ_DROPSHIPPING', apiReady: true }),
+    expect.objectContaining({ code: 'ALIEXPRESS', apiReady: false, status: 'APPROVAL_REQUIRED' }),
+    expect.objectContaining({ code: 'ALIBABA_COM', apiReady: false, status: 'APPROVAL_REQUIRED' })
+  ]));
 
   await page.goto('/admin/platform?section=platform-store');
   await expect(page.getByRole('heading', { name: 'Official platform Store' })).toBeVisible();

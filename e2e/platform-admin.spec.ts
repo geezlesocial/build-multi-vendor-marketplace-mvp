@@ -1,10 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
+import { PaymentMethod, PaymentStatus, PrismaClient } from '@prisma/client';
+import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
 const adminEmail = 'admin.local@example.test';
 const sellerEmail = 'seller.local@example.test';
 const buyerEmail = 'buyer.local@example.test';
 const e2eBaseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${process.env.E2E_WEB_PORT ?? 5173}`;
+const e2eDatabaseUrl = process.env.E2E_DATABASE_URL;
+if (!e2eDatabaseUrl) throw new Error('E2E_DATABASE_URL is required; payout tests must use the guarded disposable database.');
+validateE2EDatabaseURL(e2eDatabaseUrl);
+const prisma = new PrismaClient({ datasources: { db: { url: e2eDatabaseUrl } } });
 
 async function login(page: Page, email: string) {
   const response = await page.request.post('/api/auth/login', { data: { email, password } });
@@ -16,6 +22,8 @@ async function csrfHeaders(page: Page) {
   expect(csrf).toBeTruthy();
   return { 'x-csrf-token': csrf! };
 }
+
+test.afterAll(async () => prisma.$disconnect());
 
 test('admin can save/publish branding and manage taxonomy while public users cannot', async ({ page }) => {
   await login(page, adminEmail);
@@ -114,12 +122,28 @@ test('manual seller payout flow stays separate from checkout and requires admin 
   expect(JSON.parse(earlyCollectionBody) as { code: string }).toMatchObject({ code: 'COD_DELIVERY_REQUIRED' });
   const orders = await page.request.get('/api/admin/orders');
   const order = (await orders.json() as { id: string; sellerOrders: { id: string; sellerId: string }[] }[]).find(item => item.id === orderId)!;
-  const fulfilled = await sellerPage.request.post(`/api/sellers/${sellerId}/orders/${order.sellerOrders[0].id}/status`, { data: { status: 'FULFILLED' }, headers: await csrfHeaders(sellerPage) });
-  expect(fulfilled.status()).toBe(200);
+  const shippingUrl = `/api/sellers/${sellerId}/orders/${order.sellerOrders[0].id}/shipping`;
+  for (const status of ['SHIPPED', 'DELIVERED'] as const) {
+    const shipment = await sellerPage.request.patch(shippingUrl, { data: { status, carrier: 'Synthetic E2E Courier', trackingNumber: `E2E-${order.sellerOrders[0].id}`, trackingUrl: `https://tracking.example.test/${order.sellerOrders[0].id}`, note: `Synthetic ${status.toLowerCase()} confirmation` }, headers: await csrfHeaders(sellerPage) });
+    expect(shipment.status(), await shipment.text()).toBe(200);
+  }
   const collected = await page.request.post(`/api/orders/${orderId}/cod-collect`, { data: {}, headers: await csrfHeaders(page) });
   expect(collected.status(), await collected.text()).toBe(200);
+
+  const codLedgerAttempt = await page.request.post(`/api/admin/payout-ledger/reconcile-seller-order/${order.sellerOrders[0].id}`, { data: {}, headers: await csrfHeaders(page) });
+  expect(codLedgerAttempt.status()).toBe(409);
+  expect((await codLedgerAttempt.json() as { error: string }).error).toContain('COD and POS are not platform-held funds');
+  expect(await prisma.sellerPayoutLedgerEntry.count({ where: { sellerOrderId: order.sellerOrders[0].id } })).toBe(0);
+
+  // This is an isolated database fixture for the positive payout branch: COD
+  // was first proven ineligible above, then the payment row is set to a
+  // synthetic, already-settled Stripe state without contacting any provider.
+  await prisma.payment.update({ where: { parentId: orderId }, data: { method: PaymentMethod.STRIPE, status: PaymentStatus.PAID, providerRef: `e2e-settled-${orderId}`, paidAt: new Date() } });
+  const receipt = await buyerPage.request.post(`/api/orders/${orderId}/shipments/${order.sellerOrders[0].id}/confirm-received`, { data: {}, headers: await csrfHeaders(buyerPage) });
+  expect(receipt.ok(), await receipt.text()).toBeTruthy();
+
   const ledger = await page.request.post(`/api/admin/payout-ledger/reconcile-seller-order/${order.sellerOrders[0].id}`, { data: {}, headers: await csrfHeaders(page) });
-  expect(ledger.status()).toBe(201);
+  expect(ledger.status(), await ledger.text()).toBe(201);
   const request = await sellerPage.request.post('/api/seller/payouts/request', { data: { payoutMethodId: methodBody.id }, headers: await csrfHeaders(sellerPage) });
   expect(request.status()).toBe(201);
   const payoutId = (await request.json() as { id: string }).id;

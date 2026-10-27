@@ -95,8 +95,9 @@ test.beforeAll(async () => {
   store = { id: user.seller.store.id, slug: user.seller.store.slug };
   const createdProduct = await prisma.product.create({
     data: {
-      sellerId: user.seller.id,
-      categoryId,
+      seller: { connect: { id: user.seller.id } },
+      productType: { connect: { slug: 'physical-product' } },
+      category: { connect: { id: categoryId } },
       name: 'Growth Test Product',
       slug: `growth-product-${randomUUID().slice(0, 10)}`,
       description: 'Approved, in-stock product for isolated Store Buster tests.',
@@ -152,7 +153,7 @@ test('plan-gated growth tools stay scoped, organic, and unavailable for delivery
   try {
     const settings = await admin.request.patch('/api/admin/store-buster/settings', {
       headers: await csrfHeaders(admin),
-      data: { enabled: true, sponsoredEnabled: false, moderationRequired: true, maxMonthlyBudgetMinor: 0, maxCampaignsPerStore: 5, pricePerClickMinor: 0, reason: 'Enable organic isolated test recommendations' }
+      data: { enabled: true, sponsoredEnabled: false, moderationRequired: true, maxMonthlyBudgetMinor: 0, maxCampaignsPerStore: 5, pricePerClickMinor: 0, pricePer100ViewsMinor: 0, minimumCampaignUsdMinor: 1000, maxCampaignDurationDays: 30, reason: 'Enable organic isolated test recommendations' }
     });
     expect(settings.status(), await settings.text()).toBe(200);
 

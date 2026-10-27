@@ -37,12 +37,13 @@ async function createSellerFixture(label: string) {
   const store = await prisma.store.create({ data: { sellerId: seller.id, name: `Shipping Store ${label} ${suffix}`, slug: `shipping-store-${label}-${suffix}` } });
   await prisma.storeCurrencyOffer.create({ data: { storeId: store.id, currency: 'USD', displayEnabled: true, checkoutEnabled: true } });
   const product = await prisma.product.create({ data: {
-    sellerId: seller.id, name: `Shipping Product ${label} ${suffix}`, slug: `shipping-product-${label}-${suffix}`,
+    seller: { connect: { id: seller.id } }, productType: { connect: { slug: 'physical-product' } },
+    name: `Shipping Product ${label} ${suffix}`, slug: `shipping-product-${label}-${suffix}`,
     description: 'Synthetic shipping regression fixture', priceMinor: 3500, status: ProductStatus.APPROVED,
     inventory: { create: { quantity: 8 } }
   } });
   const service = await prisma.sellerShippingService.create({ data: {
-    sellerId: seller.id, name: `Courier ${label} ${suffix}`, enabled: true, feeMinor: 800, currency: 'USD',
+    sellerId: seller.id, name: `Courier ${label} ${suffix}`, enabled: true, supportsCod: true, feeMinor: 800, currency: 'USD',
     estimatedMinDays: 2, estimatedMaxDays: 4,
     zones: { create: { countryCode: 'US', regionKey: '', regionLabel: null, cityKey: '', cityLabel: null } }
   } });
@@ -83,7 +84,7 @@ test('seller shipping is tenant-scoped, permissioned, audited, and visible to ad
     await fixtureOwner.page.getByLabel('Courier or service name').fill('Browser delivery');
     await fixtureOwner.page.getByLabel('Shipping fee in minor units (USD)').fill('275');
     await fixtureOwner.page.getByRole('button', { name: 'Save shipping service' }).click();
-    await expect(fixtureOwner.page.getByRole('status')).toContainText('Shipping service saved.');
+    await expect(fixtureOwner.page.getByRole('status').filter({ hasText: 'Shipping service saved.' })).toBeVisible();
     await expect(fixtureOwner.page.getByRole('heading', { name: 'Browser delivery', exact: true })).toBeVisible();
 
     const invalidZone = await owner.page.request.post('/api/seller/shipping/services', { data: {
@@ -222,7 +223,9 @@ test('multi-vendor checkout applies product shipping discounts, persists immutab
     await page.getByRole('button', { name: 'Place order' }).click();
     const confirmation = page.locator('.orderConfirmation');
     await expect(confirmation).toContainText('$69.00');
-    await expect(page.getByText('Your cart is empty.')).toBeVisible();
+    const cartAfterCheckout = await page.request.get('/api/cart');
+    expect(cartAfterCheckout.ok()).toBeTruthy();
+    expect((await cartAfterCheckout.json() as { items: unknown[] }).items).toHaveLength(0);
     const reference = (await confirmation.locator('dl div').filter({ hasText: 'Order reference' }).locator('dd').textContent())!.trim();
     const order = await prisma.parentOrder.findUniqueOrThrow({ where: { orderNumber: reference }, include: { sellerOrders: { include: { items: true } } } });
     expect(order.totalMinor).toBe(6900);

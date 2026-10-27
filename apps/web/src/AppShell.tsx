@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSession } from './session.js';
 
+const CART_SYNC_STORAGE_KEY = 'marketplace:cart-sync';
+
 function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]?.toLocaleUpperCase() ?? '').join('') || '?';
 }
@@ -46,13 +48,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       } catch { /* The cart page reports its own loading and error state. */ }
     };
     const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshCartCount(); };
+    const broadcastCartChange = () => {
+      try { localStorage.setItem(CART_SYNC_STORAGE_KEY, `${Date.now()}-${Math.random().toString(36).slice(2)}`); }
+      catch { /* Cross-tab synchronization is best-effort when browser storage is unavailable. */ }
+    };
+    const refreshFromAnotherTab = (event: StorageEvent) => {
+      if (event.key === CART_SYNC_STORAGE_KEY) void refreshCartCount();
+    };
     void refreshCartCount();
     window.addEventListener('marketplace:cart-changed', refreshCartCount);
+    window.addEventListener('marketplace:cart-changed', broadcastCartChange);
+    window.addEventListener('storage', refreshFromAnotherTab);
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       active = false;
       window.removeEventListener('marketplace:cart-changed', refreshCartCount);
+      window.removeEventListener('marketplace:cart-changed', broadcastCartChange);
+      window.removeEventListener('storage', refreshFromAnotherTab);
       window.removeEventListener('focus', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };

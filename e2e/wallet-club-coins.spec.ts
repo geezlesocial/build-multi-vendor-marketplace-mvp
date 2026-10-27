@@ -48,6 +48,6 @@ test('only an administrator can view wallet policy controls', async ({ page, bro
   expect((await summary.json()).gates.moneyMovementHardDisabled).toBe(true);
   await adminPage.goto('/admin/wallet');
   await expect(adminPage.getByRole('heading', { name: 'Wallet administration' })).toBeVisible();
-  await expect(adminPage.getByText('The server hard-disable prevents real-money movement even if an admin switch is changed.')).toBeVisible();
+  await expect(adminPage.getByText('Real-money wallet movement is hard-disabled by server configuration.')).toBeVisible();
   await adminContext.close();
 });

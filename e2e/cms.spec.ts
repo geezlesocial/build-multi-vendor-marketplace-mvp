@@ -27,7 +27,7 @@ test('admin publishes a crawlable blog post with initial HTML metadata', async (
   await page.getByLabel('Slug').fill(slug);
   await page.getByLabel('Excerpt').fill('A published CMS browser verification article.');
   await page.getByRole('button', { name: 'Save draft' }).click();
-  await expect(page.getByRole('status')).toContainText('Draft saved');
+  await expect(page.locator('p[role="status"]').filter({ hasText: 'Draft saved' })).toBeVisible();
 
   const row = page.locator('.row').filter({ hasText: slug });
   await expect(row).toContainText('DRAFT');
@@ -52,7 +52,7 @@ test('content editor can save drafts but cannot change indexing/navigation; medi
   await page.getByLabel('Slug').fill(slug);
   await page.getByLabel('Excerpt').fill('Editor-authored draft content.');
   await page.getByRole('button', { name: 'Save draft' }).click();
-  await expect(page.getByRole('status')).toContainText('Draft saved');
+  await expect(page.locator('p[role="status"]').filter({ hasText: 'Draft saved' })).toBeVisible();
 
   const createPage = await page.request.post('/api/admin/content/pages', {
     data: { title: 'Editor page', slug: `${slug}-page`, body: [{ type: 'paragraph', text: 'Editor page body.' }] },
