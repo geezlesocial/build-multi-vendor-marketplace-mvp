@@ -63,7 +63,7 @@ test('settings cards and controls are balanced on desktop', async ({ page }) => 
   expect(passwordButtonBox).not.toBeNull();
   expect(passwordButtonBox!.width).toBeGreaterThanOrEqual(170);
 
-  const toggle = notificationsCard.locator('.settingRow button');
+  const toggle = notificationsCard.locator('.settingRow button').first();
   const toggleBox = await toggle.boundingBox();
   const notificationLink = page.getByRole('link', { name: 'Open buyer or seller dashboard' });
   const linkBox = await notificationLink.boundingBox();

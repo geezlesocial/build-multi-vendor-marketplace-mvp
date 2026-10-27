@@ -55,12 +55,22 @@ test('account preferences persist without allowing unconfigured currency convers
   }
 });
 
-test('admin availability is protected and exposes only approved base-currency policy', async ({ page }) => {
+test('admin availability is protected and exposes only approved, rate-backed display currencies', async ({ page }) => {
   await login(page, 'admin.local@example.test');
   const response = await page.request.get('/api/admin/platform/availability');
   expect(response.ok()).toBeTruthy();
   const body = await response.json() as { baseCurrency: string; availableDisplayCurrencies: string[]; fxRatesConfigured: boolean };
   expect(body.baseCurrency).toBeTruthy();
-  expect(body.availableDisplayCurrencies).toEqual([body.baseCurrency]);
-  expect(body.fxRatesConfigured).toBe(false);
+  expect(body.availableDisplayCurrencies).toContain(body.baseCurrency);
+  expect(new Set(body.availableDisplayCurrencies).size).toBe(body.availableDisplayCurrencies.length);
+  expect(body.fxRatesConfigured).toBe(body.availableDisplayCurrencies.some(code => code !== body.baseCurrency));
+
+  const catalogResponse = await page.request.get('/api/currencies');
+  expect(catalogResponse.ok()).toBeTruthy();
+  const catalog = await catalogResponse.json() as { currencies: { code: string; active: boolean; displayEnabled: boolean }[] };
+  for (const code of body.availableDisplayCurrencies) {
+    const entry = catalog.currencies.find(currency => currency.code === code);
+    expect(entry, `Currency ${code} must exist in the public currency catalog`).toBeTruthy();
+    expect(entry).toMatchObject({ active: true, displayEnabled: true });
+  }
 });

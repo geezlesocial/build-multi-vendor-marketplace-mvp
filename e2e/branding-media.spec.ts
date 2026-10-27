@@ -17,7 +17,7 @@ async function csrfHeaders(page: Page) {
   return { 'x-csrf-token': csrf! };
 }
 
-test('platform branding upload controls crop locally and preserve the live image when managed storage is unavailable', async ({ page }) => {
+test('platform branding upload keeps a local quarantined image private until scanning is available', async ({ page }) => {
   await login(page, adminEmail);
   const beforeDraft = await page.request.get('/api/admin/platform/branding');
   expect(beforeDraft.ok()).toBeTruthy();
@@ -33,8 +33,8 @@ test('platform branding upload controls crop locally and preserve the live image
   await expect(logoGroup.getByLabel('Horizontal crop position')).toBeVisible();
   await expect(logoGroup.getByLabel('Vertical crop position')).toBeVisible();
   await logoGroup.getByRole('button', { name: 'Upload primary logo replacement' }).click();
-  await expect(logoGroup.getByRole('alert')).toContainText('Managed shared storage is unavailable');
-  await expect(logoGroup.getByRole('alert')).toContainText('current published branding image remains active');
+  await expect(logoGroup.getByRole('status')).toContainText('Image uploaded to private quarantine');
+  await expect(logoGroup.getByText(/replacement\.webp: private, awaiting scan/)).toBeVisible();
 
   const invalidSvg = page.getByLabel('Choose favicon image');
   await invalidSvg.setInputFiles({ name: 'unsafe.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') });
@@ -145,13 +145,13 @@ test('browser flow saves a quarantined branding draft, blocks publication, and r
   releaseDelayedBrandingRead?.();
   releaseDelayedBrandingRead = null;
   await expect(page.getByLabel('Tagline')).toHaveValue('Edited while server refresh is in flight');
-  await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+  await expect(page.getByText('Platform branding draft saved. Newer edits remain unsaved in the editor.', { exact: true })).toBeVisible();
   expect(lastSavedLogo).toBe(candidateId);
   let dialogMessage = '';
   page.once('dialog', async dialog => { dialogMessage = dialog.message(); await dialog.accept(); });
-  await page.getByRole('button', { name: 'Publish approved branding' }).click();
+  await page.getByRole('button', { name: 'Save and publish branding' }).click();
   await expect.poll(() => dialogMessage).toContain('Only approved images will be made public');
-  await expect(page.getByText('Branding or theme media must be approved before publishing', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Branding draft was saved, but publishing failed: Branding or theme media must be approved before publishing/)).toBeVisible();
   expect(published.logoMediaId).toBe(previousId);
 
   await logoGroup.getByRole('button', { name: 'Remove from draft' }).click();
@@ -161,10 +161,10 @@ test('browser flow saves a quarantined branding draft, blocks publication, and r
   const saveRemovalResponse = await saveRemovalResponsePromise;
   expect(saveRemovalResponse.status()).toBe(200);
   expect((await saveRemovalResponse.json()).draftJson.logoMediaId).toBeNull();
-  await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+  await expect(page.getByText('Platform branding draft saved and verified from the server.', { exact: true })).toBeVisible();
   expect(lastSavedLogo).toBeNull();
   page.once('dialog', async dialog => { await dialog.accept(); });
-  await page.getByRole('button', { name: 'Publish approved branding' }).click();
+  await page.getByRole('button', { name: 'Save and publish branding' }).click();
   await expect.poll(() => published.logoMediaId).toBeNull();
 });
 
@@ -239,7 +239,7 @@ test('seller can stage and publish a Store favicon only after approval, then rem
   await page.getByRole('button', { name: 'Publish', exact: true }).click();
   const blockedPublishResponse = await blockedPublishResponsePromise;
   expect(blockedPublishResponse.status()).toBe(409);
-  await expect(page.getByText('Branding or theme media must be approved before publishing', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Store appearance draft was saved, but publishing failed: Branding or theme media must be approved before publishing/)).toBeVisible();
   expect(published?.faviconMediaId).not.toBe(candidateId);
 
   scannerApproved = true;

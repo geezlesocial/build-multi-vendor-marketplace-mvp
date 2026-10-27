@@ -27,8 +27,8 @@ async function fixtureSeller(label: string, templateHash: string, suffix: string
   const seller = await prisma.seller.create({ data: { userId: user.id, status: SellerStatus.APPROVED } });
   const store = await prisma.store.create({ data: { sellerId: seller.id, name: `Currency Store ${label} ${suffix}`, slug: `currency-store-${label}-${suffix}` } });
   await prisma.storeCurrencyOffer.create({ data: { storeId: store.id, currency: 'USD', displayEnabled: true, checkoutEnabled: true } });
-  const product = await prisma.product.create({ data: { sellerId: seller.id, name: `Currency Product ${label} ${suffix}`, slug: `currency-product-${label}-${suffix}`, description: 'Synthetic currency and commission fixture', priceMinor: 3500, currency: 'USD', status: ProductStatus.APPROVED, inventory: { create: { quantity: 4 } } } });
-  await prisma.sellerShippingService.create({ data: { sellerId: seller.id, name: `Local delivery ${label}`, feeMinor: 500, currency: 'USD', enabled: true, zones: { create: { countryCode: 'US', regionKey: '', regionLabel: null, cityKey: '', cityLabel: null } } } });
+  const product = await prisma.product.create({ data: { seller: { connect: { id: seller.id } }, productType: { connect: { slug: 'physical-product' } }, name: `Currency Product ${label} ${suffix}`, slug: `currency-product-${label}-${suffix}`, description: 'Synthetic currency and commission fixture', priceMinor: 3500, currency: 'USD', status: ProductStatus.APPROVED, inventory: { create: { quantity: 4 } } } });
+  await prisma.sellerShippingService.create({ data: { sellerId: seller.id, name: `Local delivery ${label}`, feeMinor: 500, currency: 'USD', enabled: true, supportsCod: true, zones: { create: { countryCode: 'US', regionKey: '', regionLabel: null, cityKey: '', cityLabel: null } } } });
   await prisma.storeCurrencyOffer.create({ data: { storeId: store.id, currency: 'JPY', displayEnabled: true, checkoutEnabled: false } });
   return { user, seller, store, product };
 }
@@ -183,8 +183,11 @@ test('store display estimates, checkout currency, COD eligibility and commission
 
     for (let index = 0; index < sellers.length; index += 1) {
       const sellerOrder = order.sellerOrders.find(row => row.sellerId === sellers[index]!.seller.id)!;
-      const fulfilled = await sellerAccounts[index]!.page.request.post(`/api/sellers/${sellers[index]!.seller.id}/orders/${sellerOrder.id}/status`, { data: { status: 'FULFILLED' }, headers: await csrf(sellerAccounts[index]!.page) });
-      expect(fulfilled.ok(), await fulfilled.text()).toBeTruthy();
+      const shipmentUrl = `/api/sellers/${sellers[index]!.seller.id}/orders/${sellerOrder.id}/shipping`;
+      for (const status of ['SHIPPED', 'DELIVERED'] as const) {
+        const shipment = await sellerAccounts[index]!.page.request.patch(shipmentUrl, { data: { status, carrier: 'Synthetic E2E Courier', trackingNumber: `E2E-${sellerOrder.id}`, trackingUrl: `https://tracking.example.test/${sellerOrder.id}`, note: `Synthetic ${status.toLowerCase()} confirmation` }, headers: await csrf(sellerAccounts[index]!.page) });
+        expect(shipment.ok(), await shipment.text()).toBeTruthy();
+      }
     }
     const collected = await admin.page.request.post(`/api/orders/${order.id}/cod-collect`, { data: {}, headers: await csrf(admin.page) });
     expect(collected.ok(), await collected.text()).toBeTruthy();
@@ -331,7 +334,7 @@ test('seller currency settings are scoped, audited, and serialize manual-rate ve
     await yenOffer.getByRole('checkbox').check();
     await owner.page.getByLabel('Reason for settings change').fill('Offer JPY display estimate in isolated test');
     await owner.page.getByRole('button', { name: 'Save currency settings' }).click();
-    await expect(owner.page.getByRole('status')).toContainText('Store currency settings saved and audited.');
+    await expect(owner.page.locator('p[role="status"]').filter({ hasText: 'Store currency settings saved and audited.' })).toBeVisible();
     const savedOffer = await prisma.storeCurrencyOffer.findUniqueOrThrow({ where: { storeId_currency: { storeId: fixture.store.id, currency: 'JPY' } } });
     expect(savedOffer).toMatchObject({ displayEnabled: true, checkoutEnabled: false });
     const publicCurrencies = await owner.page.request.get(`/api/stores/${fixture.store.slug}/currencies`);

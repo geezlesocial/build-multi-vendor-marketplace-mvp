@@ -158,7 +158,7 @@ test('admin creates, versions, activates, assigns, and retires a plan without re
   await page.getByRole('button', { name: 'Create draft plan' }).click();
   const createResponse = await createResponsePromise;
   expect(createResponse.status(), await createResponse.text()).toBe(201);
-  await expect(page.getByRole('status')).toContainText('Plan saved as a draft version.');
+  await expect(page.getByRole('status').filter({ hasText: 'Plan saved as a draft version.' })).toBeVisible();
 
   const planList = await page.request.get('/api/admin/store-plans');
   const plans = await planList.json() as { id: string; key: string; versions: { id: string; version: number; status: string }[] }[];
@@ -202,7 +202,7 @@ test('admin creates, versions, activates, assigns, and retires a plan without re
   await page.getByRole('button', { name: 'Save new draft version' }).click();
   const editResponse = await editResponsePromise;
   expect(editResponse.status(), await editResponse.text()).toBe(200);
-  await expect(page.getByRole('status')).toContainText('Plan saved as a draft version.');
+  await expect(page.getByRole('status').filter({ hasText: 'Plan saved as a draft version.' })).toBeVisible();
   const afterEdit = await page.request.get('/api/admin/store-plans');
   const versions = (await afterEdit.json() as { key: string; versions: { id: string; version: number; status: string }[] }[]).find(item => item.key === key)!.versions;
   const versionTwo = versions.find(version => version.version === 2)!;

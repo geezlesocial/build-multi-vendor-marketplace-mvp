@@ -29,7 +29,8 @@ test('admin integrations are grouped, role-protected, reference-only, audited, a
   await expect(page.getByRole('heading', { name: 'Control center' })).toBeVisible();
   const navigation = page.getByRole('navigation', { name: 'Platform administration sections' });
   await expect(navigation.getByRole('heading', { name: 'Marketplace' })).toBeVisible();
-  await expect(navigation.getByText('Planned', { exact: true }).first()).toBeVisible();
+  await expect(navigation.getByRole('button', { name: 'Provider configurations', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(navigation.getByRole('button', { name: 'Live shopping', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Provider configurations', exact: true })).toBeVisible();
   await expect(page.getByText(/Stripe test-mode Store billing is disabled by default/)).toBeVisible();
   const integrationStatus = await page.request.get('/api/admin/integrations');
