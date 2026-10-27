@@ -28,6 +28,7 @@
     "livekit-server-sdk": "^2.19.2",
     "multi-vendor-marketplace-mvp": "file:../..",
     "nodemailer": "^10.2.1",
+    "openid-client": "^6.8.8",
     "sharp": "^0.35.5",
     "stripe": "^18.5.0",
     "zod": "^4.1.5"

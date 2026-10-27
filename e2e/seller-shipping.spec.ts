@@ -32,7 +32,7 @@ async function close(accounts: Array<{ context: BrowserContext }>) {
 async function createSellerFixture(label: string) {
   const suffix = randomUUID().slice(0, 8);
   const template = await prisma.user.findUniqueOrThrow({ where: { email: 'seller.local@example.test' }, select: { passwordHash: true } });
-  const user = await prisma.user.create({ data: { email: `shipping-${label}-${suffix}@example.test`, name: `Shipping ${label} ${suffix}`, role: Role.SELLER, passwordHash: template.passwordHash } });
+  const user = await prisma.user.create({ data: { email: `shipping-${label}-${suffix}@example.test`, name: `Shipping ${label} ${suffix}`, role: Role.SELLER, passwordHash: template.passwordHash, onboardingCompletedAt: new Date() } });
   const seller = await prisma.seller.create({ data: { userId: user.id, status: SellerStatus.APPROVED } });
   const store = await prisma.store.create({ data: { sellerId: seller.id, name: `Shipping Store ${label} ${suffix}`, slug: `shipping-store-${label}-${suffix}` } });
   await prisma.storeCurrencyOffer.create({ data: { storeId: store.id, currency: 'USD', displayEnabled: true, checkoutEnabled: true } });
@@ -60,7 +60,7 @@ test('seller shipping is tenant-scoped, permissioned, audited, and visible to ad
   const fixture = await createSellerFixture('permissions');
   const fixtureOwner = await openAccount(browser, fixture.user.email);
   const staffTemplate = await prisma.user.findUniqueOrThrow({ where: { email: 'buyer.local@example.test' }, select: { passwordHash: true } });
-  const staffUser = await prisma.user.create({ data: { email: `shipping-staff-${fixture.suffix}@example.test`, name: 'Shipping Staff', role: Role.CASHIER, passwordHash: staffTemplate.passwordHash } });
+  const staffUser = await prisma.user.create({ data: { email: `shipping-staff-${fixture.suffix}@example.test`, name: 'Shipping Staff', role: Role.CASHIER, passwordHash: staffTemplate.passwordHash, onboardingCompletedAt: new Date() } });
   await prisma.sellerStaff.create({ data: { sellerId: fixture.seller.id, userId: staffUser.id, canManageShipping: false } });
   const staff = await openAccount(browser, staffUser.email);
   const accounts = [owner, admin, buyer, fixtureOwner, staff];

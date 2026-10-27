@@ -87,6 +87,7 @@ test.beforeAll(async () => {
       name: 'Isolated Growth Seller',
       role: Role.SELLER,
       passwordHash,
+      onboardingCompletedAt: new Date(),
       seller: { create: { status: SellerStatus.APPROVED, store: { create: { name: 'Growth Test Store', slug: `growth-test-${randomUUID().slice(0, 10)}` } } } }
     },
     include: { seller: { include: { store: true } } }

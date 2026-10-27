@@ -60,12 +60,13 @@ Provider sandbox tests require the corresponding environment variables in `.env`
 
 ## Environment variable names
 
-`NODE_ENV`, `API_PORT`, `WEB_ORIGIN`, `DATABASE_URL`, `SESSION_COOKIE_NAME`, `SESSION_TTL_DAYS`, `PASSWORD_PEPPER`, `PAYOUT_ENCRYPTION_KEY`, `DROPSHIPPING_ENCRYPTION_KEY`, `CURRENCY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL`, `PAYPAL_WEBHOOK_ID`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `UPLOAD_DIR`, `LIVE_SHOPPING_AVAILABLE`, `SITE_URL`, `CONTENT_STORAGE_DIR`, `CONTENT_SCAN_REQUIRED`, `CONTENT_MAX_IMAGE_BYTES`, `CONTENT_MAX_VIDEO_BYTES`, `CONTENT_MAX_DOCUMENT_BYTES`, `AFFILIATE_DEFAULT_BASIS_POINTS`, `AFFILIATE_SIGNING_SECRET`, `STORE_EMAIL_DELIVERY_AVAILABLE`, `STORE_EMAIL_SMTP_HOST`, `STORE_EMAIL_SMTP_PORT`, `STORE_EMAIL_SMTP_SECURE`, `STORE_EMAIL_SMTP_REQUIRE_TLS`, `STORE_EMAIL_SMTP_USER`, `STORE_EMAIL_SMTP_PASSWORD`, `STORE_EMAIL_FROM`, `STORE_EMAIL_REPLY_TO`, `STORE_EMAIL_TOKEN_SECRET`.
+`NODE_ENV`, `API_PORT`, `WEB_ORIGIN`, `DATABASE_URL`, `SESSION_COOKIE_NAME`, `SESSION_TTL_DAYS`, `PASSWORD_PEPPER`, `SOCIAL_LOGIN_ENCRYPTION_KEY`, `PAYOUT_ENCRYPTION_KEY`, `DROPSHIPPING_ENCRYPTION_KEY`, `CURRENCY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL`, `PAYPAL_WEBHOOK_ID`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `UPLOAD_DIR`, `LIVE_SHOPPING_AVAILABLE`, `SITE_URL`, `CONTENT_STORAGE_DIR`, `CONTENT_SCAN_REQUIRED`, `CONTENT_MAX_IMAGE_BYTES`, `CONTENT_MAX_VIDEO_BYTES`, `CONTENT_MAX_DOCUMENT_BYTES`, `AFFILIATE_DEFAULT_BASIS_POINTS`, `AFFILIATE_SIGNING_SECRET`, `STORE_EMAIL_DELIVERY_AVAILABLE`, `STORE_EMAIL_SMTP_HOST`, `STORE_EMAIL_SMTP_PORT`, `STORE_EMAIL_SMTP_SECURE`, `STORE_EMAIL_SMTP_REQUIRE_TLS`, `STORE_EMAIL_SMTP_USER`, `STORE_EMAIL_SMTP_PASSWORD`, `STORE_EMAIL_FROM`, `STORE_EMAIL_REPLY_TO`, `STORE_EMAIL_TOKEN_SECRET`.
 
 ## Key routes
 
 - `GET /api/products`, `GET /api/products/:id`, `GET /api/categories`
 - `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
+- `GET /api/onboarding`, `POST/DELETE /api/onboarding/stores/:storeId/follow`, `POST /api/onboarding/complete`, `GET /api/admin/onboarding/readiness`
 - `GET /api/cart`, `POST /api/cart/items`, `PATCH /api/cart/items/:productId`
 - `POST /api/orders/checkout`, `POST /api/orders/:id/paypal-capture`, `GET /api/orders`
 - `GET/POST/PATCH /api/seller/shipping/services`, `POST /api/seller/shipping/discounts`, `POST /api/shipping/quote`, `GET /api/admin/shipping`
@@ -83,6 +84,8 @@ See `docs/PAYMENTS.md` before connecting a provider. See `docs/PRODUCTION_LAUNCH
 See `docs/LIVE_SHOPPING.md` before enabling live shopping.
 See `docs/SELLER_SHIPPING.md` for zone matching, discount precedence, immutable order snapshots, and carrier-integration limits.
 See `docs/DROPSHIPPING.md` for supplier onboarding, plan gating, encrypted credentials, and importer limitations.
+See `docs/SOCIAL_LOGIN_SETUP.md` for admin-managed Google, LinkedIn, Facebook, and X sign-in, the Scrolith OIDC limitation, callback setup, and account-page customization.
+See `docs/MEMBER_ONBOARDING.md` for the new-member flow, eligibility and currency policy, legacy-account backfill, and onboarding endpoints.
 
 ## Growth modules
 

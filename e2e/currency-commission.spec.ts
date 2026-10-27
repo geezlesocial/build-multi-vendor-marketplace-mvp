@@ -23,7 +23,7 @@ async function openAccount(browser: Browser, email: string): Promise<{ context: 
   const context = await browser.newContext(); const page = await context.newPage(); await login(page, email); return { context, page };
 }
 async function fixtureSeller(label: string, templateHash: string, suffix: string) {
-  const user = await prisma.user.create({ data: { email: `currency-${label}-${suffix}@example.test`, name: `Currency ${label} ${suffix}`, role: Role.SELLER, passwordHash: templateHash } });
+  const user = await prisma.user.create({ data: { email: `currency-${label}-${suffix}@example.test`, name: `Currency ${label} ${suffix}`, role: Role.SELLER, passwordHash: templateHash, onboardingCompletedAt: new Date() } });
   const seller = await prisma.seller.create({ data: { userId: user.id, status: SellerStatus.APPROVED } });
   const store = await prisma.store.create({ data: { sellerId: seller.id, name: `Currency Store ${label} ${suffix}`, slug: `currency-store-${label}-${suffix}` } });
   await prisma.storeCurrencyOffer.create({ data: { storeId: store.id, currency: 'USD', displayEnabled: true, checkoutEnabled: true } });
@@ -38,7 +38,7 @@ test.afterAll(async () => { await prisma.$disconnect(); });
 test('admin commission policy creation serializes versions and persists each audit record', async ({ browser }) => {
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const sellerTemplate = await prisma.user.findUniqueOrThrow({ where: { email: 'seller.local@example.test' }, select: { passwordHash: true } });
-  const user = await prisma.user.create({ data: { email: `commission-lock-seller-${suffix}@example.test`, name: `Commission Lock Seller ${suffix}`, role: Role.SELLER, passwordHash: sellerTemplate.passwordHash } });
+  const user = await prisma.user.create({ data: { email: `commission-lock-seller-${suffix}@example.test`, name: `Commission Lock Seller ${suffix}`, role: Role.SELLER, passwordHash: sellerTemplate.passwordHash, onboardingCompletedAt: new Date() } });
   const seller = await prisma.seller.create({ data: { userId: user.id, status: SellerStatus.APPROVED } });
   const store = await prisma.store.create({ data: { sellerId: seller.id, name: `Commission Lock Store ${suffix}`, slug: `commission-lock-store-${suffix}` } });
   const admin = await openAccount(browser, 'admin.local@example.test');
@@ -82,7 +82,7 @@ test('store display estimates, checkout currency, COD eligibility and commission
   const sellerTemplate = await prisma.user.findUniqueOrThrow({ where: { email: 'seller.local@example.test' }, select: { passwordHash: true } });
   const buyerTemplate = await prisma.user.findUniqueOrThrow({ where: { email: 'buyer.local@example.test' }, select: { passwordHash: true } });
   const sellers = [await fixtureSeller('one', sellerTemplate.passwordHash, suffix), await fixtureSeller('two', sellerTemplate.passwordHash, suffix)];
-  const buyer = await prisma.user.create({ data: { email: `currency-buyer-${suffix}@example.test`, name: 'Currency Test Buyer', role: Role.BUYER, passwordHash: buyerTemplate.passwordHash } });
+  const buyer = await prisma.user.create({ data: { email: `currency-buyer-${suffix}@example.test`, name: 'Currency Test Buyer', role: Role.BUYER, passwordHash: buyerTemplate.passwordHash, onboardingCompletedAt: new Date() } });
   const rate = await prisma.exchangeRateSnapshot.create({ data: { baseCurrency: 'USD', quoteCurrency: 'JPY', rate: '150', provider: `e2e-${suffix}`, sourceDate: new Date(new Date().toISOString().slice(0, 10)), fetchedAt: new Date() } });
   expect(rate.provider).toContain('e2e-');
   const admin = await openAccount(browser, 'admin.local@example.test');
@@ -286,8 +286,8 @@ test('seller currency settings are scoped, audited, and serialize manual-rate ve
   const buyerTemplate = await prisma.user.findUniqueOrThrow({ where: { email: 'buyer.local@example.test' }, select: { passwordHash: true } });
   const fixture = await fixtureSeller('settings', sellerTemplate.passwordHash, suffix);
   const otherFixture = await fixtureSeller('other', sellerTemplate.passwordHash, suffix);
-  const deniedStaffUser = await prisma.user.create({ data: { email: `currency-staff-denied-${suffix}@example.test`, name: `Currency Staff Denied ${suffix}`, role: Role.CASHIER, passwordHash: buyerTemplate.passwordHash } });
-  const allowedStaffUser = await prisma.user.create({ data: { email: `currency-staff-allowed-${suffix}@example.test`, name: `Currency Staff Allowed ${suffix}`, role: Role.CASHIER, passwordHash: buyerTemplate.passwordHash } });
+  const deniedStaffUser = await prisma.user.create({ data: { email: `currency-staff-denied-${suffix}@example.test`, name: `Currency Staff Denied ${suffix}`, role: Role.CASHIER, passwordHash: buyerTemplate.passwordHash, onboardingCompletedAt: new Date() } });
+  const allowedStaffUser = await prisma.user.create({ data: { email: `currency-staff-allowed-${suffix}@example.test`, name: `Currency Staff Allowed ${suffix}`, role: Role.CASHIER, passwordHash: buyerTemplate.passwordHash, onboardingCompletedAt: new Date() } });
   await prisma.sellerStaff.createMany({ data: [
     { sellerId: fixture.seller.id, userId: deniedStaffUser.id, canManageCurrency: false },
     { sellerId: fixture.seller.id, userId: allowedStaffUser.id, canManageCurrency: true }
@@ -357,7 +357,7 @@ test('mixed Store listing currencies cannot be combined into an unsupported chec
   const sellerTemplate = await prisma.user.findUniqueOrThrow({ where: { email: 'seller.local@example.test' }, select: { passwordHash: true } });
   const buyerTemplate = await prisma.user.findUniqueOrThrow({ where: { email: 'buyer.local@example.test' }, select: { passwordHash: true } });
   const store = await fixtureSeller('mixed-currency', sellerTemplate.passwordHash, suffix);
-  const buyer = await prisma.user.create({ data: { email: `mixed-currency-buyer-${suffix}@example.test`, name: 'Mixed Currency Buyer', role: Role.BUYER, passwordHash: buyerTemplate.passwordHash } });
+  const buyer = await prisma.user.create({ data: { email: `mixed-currency-buyer-${suffix}@example.test`, name: 'Mixed Currency Buyer', role: Role.BUYER, passwordHash: buyerTemplate.passwordHash, onboardingCompletedAt: new Date() } });
   const account = await openAccount(browser, buyer.email);
   const headers = await csrf(account.page);
   try {

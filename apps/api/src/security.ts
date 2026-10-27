@@ -26,7 +26,7 @@ export async function createSession(userId: string, res: Response) {
   res.cookie('marketplace_csrf', csrf, { httpOnly: false, secure: env.NODE_ENV === 'production', sameSite: 'lax', expires: expiresAt, path: '/' });
 }
 
-export type AuthUser = { id: string; email: string; name: string; role: Role; emailVerifiedAt?: Date | null; sellerId?: string; avatarUrl?: string };
+export type AuthUser = { id: string; email: string; name: string; role: Role; emailVerifiedAt?: Date | null; onboardingCompletedAt?: Date | null; sellerId?: string; avatarUrl?: string };
 
 export async function currentUser(req: Request): Promise<AuthUser | null> {
   const token = req.cookies?.[env.SESSION_COOKIE_NAME] as string | undefined;
@@ -44,12 +44,23 @@ export async function currentUser(req: Request): Promise<AuthUser | null> {
   const sellerId = session.user.role === Role.ADMIN
     ? platformSeller?.sellerId
     : session.user.seller?.id ?? session.user.staffMemberships[0]?.sellerId;
-  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, emailVerifiedAt: session.user.emailVerifiedAt, ...(sellerId ? { sellerId } : {}), ...(session.user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) };
+  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, emailVerifiedAt: session.user.emailVerifiedAt, onboardingCompletedAt: session.user.onboardingCompletedAt, ...(sellerId ? { sellerId } : {}), ...(session.user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) };
+}
+
+function allowedBeforeOnboarding(req: Request) {
+  if (req.method === 'GET' && req.path === '/api/onboarding') return true;
+  if (req.method === 'POST' && req.path === '/api/onboarding/complete') return true;
+  if ((req.method === 'POST' || req.method === 'DELETE') && /^\/api\/onboarding\/stores\/[^/]+\/follow$/.test(req.path)) return true;
+  if (req.method === 'POST' && req.path === '/api/auth/logout') return true;
+  if (req.method === 'POST' && req.path === '/api/auth/email-verification/resend') return true;
+  if (req.method === 'GET' && req.path === '/api/account/avatar') return true;
+  return false;
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   currentUser(req).then(user => {
     if (!user) return res.status(401).json({ error: 'Authentication required' });
+    if (!user.onboardingCompletedAt && !allowedBeforeOnboarding(req)) return res.status(428).json({ error: 'Complete account onboarding before using this feature.', code: 'ONBOARDING_REQUIRED', redirectTo: '/onboarding' });
     res.locals.user = user;
     next();
   }).catch(next);

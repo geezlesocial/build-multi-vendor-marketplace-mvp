@@ -15,6 +15,37 @@ enum Role {
   CONTENT_EDITOR
 }
 
+enum ReferralSource {
+  FRIEND
+  GOOGLE
+  FACEBOOK
+  TWITTER_X
+  LINKEDIN
+  SCROLITH
+  AI_RECOMMENDATION
+  OTHER
+}
+
+enum SocialLoginProvider {
+  GOOGLE
+  LINKEDIN
+  FACEBOOK
+  X
+  SCROLITH
+}
+
+enum AuthPageLayout {
+  CENTERED
+  SPLIT
+  EDITORIAL
+}
+
+enum AuthPageMotion {
+  NONE
+  FADE
+  SLIDE
+}
+
 enum SellerStatus {
   PENDING
   APPROVED
@@ -618,10 +649,14 @@ model User {
   emailVerificationTokenHash String? @unique
   emailVerificationExpiresAt DateTime?
   emailVerificationSentAt DateTime?
+  onboardingCompletedAt DateTime?
+  referralSource ReferralSource?
+  referralOther String? @db.VarChar(120)
   avatarMediaId String?     @unique
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   sessions     Session[]
+  socialIdentities SocialLoginIdentity[]
   seller       Seller?
   auditLogs    AuditLog[]
   posSessions  POSSession[]
@@ -678,6 +713,8 @@ model User {
   storePlanAssignmentsMade StorePlanAssignment[] @relation("StorePlanAssignmentAdmin")
   storePlanSubscriptionsRequested StoreSubscription[] @relation("StoreSubscriptionRequester")
   providerConfigurationsCreated ProviderConfiguration[] @relation("ProviderConfigurationCreator")
+  socialLoginConfigurationsUpdated SocialLoginProviderConfiguration[] @relation("SocialLoginConfigurationUpdater")
+  authPageCustomizationsUpdated AuthPageCustomization[] @relation("AuthPageCustomizationUpdater")
   providerConfigurationsUpdated ProviderConfiguration[] @relation("ProviderConfigurationUpdater")
   shippingCarriersCreated ShippingCarrierProvider[] @relation("ShippingCarrierCreator")
   shippingCarriersUpdated ShippingCarrierProvider[] @relation("ShippingCarrierUpdater")
@@ -698,6 +735,7 @@ model User {
   moderatedProductReviews          ProductReview[] @relation("ProductReviewModerator")
   liveAttendances                  LiveSessionAttendance[]
   liveSessionReactions             LiveSessionReaction[]
+  storeFollows                     StoreFollow[]
 
   @@index([role, accountStatus, createdAt])
 }
@@ -826,6 +864,62 @@ model Session {
   @@index([userId, expiresAt])
 }
 
+model SocialLoginProviderConfiguration {
+  id                    String               @id @default(cuid())
+  provider              SocialLoginProvider  @unique
+  enabled               Boolean              @default(false)
+  clientId              String?
+  clientSecretCiphertext String?
+  issuerUrl             String?
+  logoUrl               String?
+  updatedById           String
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  updatedBy             User                 @relation("SocialLoginConfigurationUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
+}
+
+model SocialLoginIdentity {
+  id        String              @id @default(cuid())
+  provider  SocialLoginProvider
+  subject   String
+  userId    String
+  email     String?
+  createdAt DateTime            @default(now())
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId, createdAt])
+}
+
+model OAuthLoginAttempt {
+  id          String              @id @default(cuid())
+  provider    SocialLoginProvider
+  stateHash   String              @unique
+  codeVerifier String
+  nonce       String?
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime            @default(now())
+
+  @@index([expiresAt, consumedAt])
+}
+
+model AuthPageCustomization {
+  id             String         @id @default("default")
+  signInHeading  String         @default("Sign in") @db.VarChar(100)
+  signInText     String         @default("Welcome back. Sign in to continue.") @db.VarChar(240)
+  signUpHeading  String         @default("Create account") @db.VarChar(100)
+  signUpText     String         @default("Join the marketplace and discover independent stores.") @db.VarChar(240)
+  logoMediaId    String?        @unique
+  layout         AuthPageLayout @default(CENTERED)
+  motion         AuthPageMotion @default(FADE)
+  accentColor    String         @default("#315d47") @db.VarChar(7)
+  updatedById    String?
+  updatedAt      DateTime       @updatedAt
+  updatedBy      User?          @relation("AuthPageCustomizationUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  logoMedia      MediaAsset?    @relation("AuthPageLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
+}
+
 model Seller {
   id        String       @id @default(cuid())
   userId    String       @unique
@@ -889,6 +983,18 @@ model Store {
   sellerCommissionPolicies SellerCommissionPolicyVersion[]
   dropshippingConnections StoreDropshippingConnection[]
   supplierProductImports SupplierProductImport[]
+  follows StoreFollow[]
+}
+
+model StoreFollow {
+  userId    String
+  storeId   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@id([userId, storeId])
+  @@index([storeId, createdAt])
 }
 
 model StoreDropshippingConnection {
@@ -2523,6 +2629,7 @@ model MediaAsset {
   productImages ProductImage[]
   productMedia     ProductMedia[]
   storeBusterAdCreatives StoreBusterCampaignCreative[]
+  authPageLogo AuthPageCustomization? @relation("AuthPageLogo")
 
   @@index([scanStatus, kind, createdAt])
   @@index([storeId, uploadStatus, createdAt])

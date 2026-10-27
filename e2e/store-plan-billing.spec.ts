@@ -39,7 +39,7 @@ async function createIsolatedSeller() {
   const passwordHash = await bcrypt.hash(`${isolatedSellerPassword}${pepper}`, 4);
   const user = await prisma.user.create({
     data: {
-      email, name: 'Billing Isolation Seller', role: Role.SELLER, passwordHash,
+      email, name: 'Billing Isolation Seller', role: Role.SELLER, passwordHash, onboardingCompletedAt: new Date(),
       seller: { create: { status: SellerStatus.APPROVED, store: { create: { name: 'Billing Isolation Store', slug: `billing-isolation-${randomUUID().slice(0, 8)}` } } } }
     }, include: { seller: { include: { store: true } } }
   });

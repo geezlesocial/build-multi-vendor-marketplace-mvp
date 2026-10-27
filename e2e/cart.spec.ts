@@ -1,8 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
+import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+
+const databaseUrl = process.env.E2E_DATABASE_URL;
+if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for cart browser tests.');
+const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
 const buyerEmail = 'buyer.local@example.test';
+
+test.afterAll(async () => { await prisma.$disconnect(); });
 
 async function login(page: Page) {
   const response = await page.request.post('/api/auth/login', { data: { email: buyerEmail, password } });
@@ -56,6 +63,8 @@ test('buyer can add to cart from a product detail page and the header count refr
     password
   } });
   expect(registration.status(), await registration.text()).toBe(201);
+  const registeredUser = (await registration.json() as { user: { id: string } }).user;
+  await prisma.user.update({ where: { id: registeredUser.id }, data: { onboardingCompletedAt: new Date() } });
 
   const catalog = await page.request.get('/api/products?q=Demo%20Canvas%20Tote');
   expect(catalog.ok(), await catalog.text()).toBeTruthy();

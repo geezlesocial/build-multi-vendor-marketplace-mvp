@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
+import { PrismaClient } from '@prisma/client';
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
+const databaseUrl = process.env.E2E_DATABASE_URL;
+if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for dashboard browser tests.');
+const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+test.afterAll(async () => { await prisma.$disconnect(); });
 
 async function login(page: Page, email: string) {
   const response = await page.request.post('/api/auth/login', { data: { email, password } });
@@ -164,6 +169,8 @@ test('member homepage cart summary refreshes with the shared cart-change event',
     data: { email, name: 'Dashboard Cart Test Member', password }
   });
   expect(registered.status(), await registered.text()).toBe(201);
+  const registeredUser = (await registered.json() as { user: { id: string } }).user;
+  await prisma.user.update({ where: { id: registeredUser.id }, data: { onboardingCompletedAt: new Date() } });
   const productsResponse = await page.request.get('/api/products');
   expect(productsResponse.ok(), await productsResponse.text()).toBeTruthy();
   const products = (await productsResponse.json() as { items: { id: string; name: string; availableStock: number }[] }).items;
@@ -193,6 +200,8 @@ test('header and buyer dashboard cart counts stay in sync across navigation and 
     data: { email, name: 'Dashboard Cart Sync Test', password }
   });
   expect(registered.status(), await registered.text()).toBe(201);
+  const registeredUser = (await registered.json() as { user: { id: string } }).user;
+  await prisma.user.update({ where: { id: registeredUser.id }, data: { onboardingCompletedAt: new Date() } });
 
   const productsResponse = await page.request.get('/api/products');
   expect(productsResponse.ok(), await productsResponse.text()).toBeTruthy();

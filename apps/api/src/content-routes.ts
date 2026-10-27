@@ -83,7 +83,7 @@ async function publicMediaAsset(id: string) {
   if (!asset || asset.scanStatus !== MediaScanStatus.APPROVED) return null;
   if (asset.uploadStatus !== 'COMPLETE') return null;
   const publishedNow = { status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
-  const [posts, pages, storePosts, storePages, branding, stores, products, productAttachments, sponsoredCreative] = await Promise.all([
+  const [posts, pages, storePosts, storePages, branding, stores, products, productAttachments, sponsoredCreative, authPage] = await Promise.all([
     prisma.blogPost.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
     prisma.contentPage.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, ogImageId: true } }),
     prisma.blogPost.findMany({ where: { ...publishedNow, store: { seller: { status: 'APPROVED' } } }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
@@ -92,9 +92,10 @@ async function publicMediaAsset(id: string) {
     prisma.store.findMany({ where: { seller: { status: 'APPROVED' }, themePublishedJson: { not: Prisma.JsonNull } }, select: { logoMediaId: true, bannerMediaId: true, themePublishedJson: true } }),
     prisma.productImage.findMany({ where: { mediaAssetId: id, product: { status: 'APPROVED', OR: [{ sellerId: null }, { seller: { status: 'APPROVED' } }] } }, select: { id: true } }),
     prisma.productMedia.findMany({ where: { mediaAssetId: id, product: { status: 'APPROVED', OR: [{ sellerId: null }, { seller: { status: 'APPROVED' } }] } }, select: { id: true } }),
-    prisma.storeBusterCampaignCreative.findFirst({ where: { mediaAssetId: id, campaign: { sponsored: true, status: 'APPROVED', OR: [{ startsAt: null }, { startsAt: { lte: now() } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now() } }] }], store: { seller: { status: 'APPROVED' } } } }, select: { id: true } })
+    prisma.storeBusterCampaignCreative.findFirst({ where: { mediaAssetId: id, campaign: { sponsored: true, status: 'APPROVED', OR: [{ startsAt: null }, { startsAt: { lte: now() } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now() } }] }], store: { seller: { status: 'APPROVED' } } } }, select: { id: true } }),
+    prisma.authPageCustomization.findUnique({ where: { id: 'default' }, select: { logoMediaId: true } })
   ]);
-  const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative);
+  const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative) || authPage?.logoMediaId === id;
   return referencedInPublishedContent ? asset : null;
 }
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSession } from './session.js';
+import { Onboarding } from './Onboarding.js';
 
 const CART_SYNC_STORAGE_KEY = 'marketplace:cart-sync';
 
@@ -80,6 +81,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeOnEscape); };
   }, [accountOpen]);
 
+  useEffect(() => {
+    if (user?.onboardingCompletedAt && window.location.pathname === '/onboarding') window.location.replace('/');
+    if (status === 'ready' && !user && window.location.pathname === '/onboarding') window.location.replace('/?auth=login&returnTo=%2Fonboarding');
+    if (user && !user.onboardingCompletedAt && window.location.pathname !== '/onboarding' && window.location.pathname !== '/email/verify') window.location.replace('/onboarding');
+  }, [status, user?.id, user?.onboardingCompletedAt]);
+
   const signOut = async () => {
     const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
     const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', headers: csrf ? { 'x-csrf-token': csrf } : {} });
@@ -91,6 +98,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (status === 'loading') return <div className="app"><header className="topbar"><a className="brand" href="/">Market Lane<span>independent marketplace</span></a><span className="sessionLoading" role="status">Checking your account…</span></header><main className="shellLoading" aria-busy="true"><p className="eyebrow">Market Lane</p><h1>Preparing your marketplace</h1><p className="muted">Your account and public catalog are loading.</p></main></div>;
   if (status === 'error') return <div className="app"><header className="topbar"><a className="brand" href="/">Market Lane<span>independent marketplace</span></a></header><main className="shellLoading"><h1>Marketplace unavailable</h1><p className="notice" role="alert">{error}</p><button className="primary" onClick={() => void refreshUser()}>Try again</button></main></div>;
+
+  if (user && !user.onboardingCompletedAt && window.location.pathname !== '/email/verify') return <div className="app onboardingAppShell"><main className="onboardingGate"><Onboarding /></main></div>;
 
   const dashboardHref = user?.role === 'ADMIN' ? '/admin/platform' : '/dashboard';
   const platformName = publicBranding?.platformName?.trim() || publicBranding?.shortName?.trim() || 'Market Lane';

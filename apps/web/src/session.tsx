@@ -6,6 +6,7 @@ export type SessionUser = {
   name: string;
   role: 'BUYER' | 'SELLER' | 'CASHIER' | 'ADMIN' | 'CONTENT_EDITOR';
   emailVerifiedAt?: string | null;
+  onboardingCompletedAt?: string | null;
   sellerId?: string;
   avatarUrl?: string;
 };

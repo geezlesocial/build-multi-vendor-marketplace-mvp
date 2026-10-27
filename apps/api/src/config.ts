@@ -11,6 +11,8 @@ const envSchema = z.object({
   SESSION_COOKIE_NAME: z.string().default('marketplace_session'),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(14),
   PASSWORD_PEPPER: z.string().min(16),
+  // Keep this key stable across restarts and deployments; changing it makes saved provider secrets unreadable.
+  SOCIAL_LOGIN_ENCRYPTION_KEY: z.string().min(32).optional(),
   CURRENCY: z.string().length(3).default('USD'),
   FX_REFERENCE_FETCH_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   FX_REFERENCE_API_BASE_URL: z.string().url().default('https://api.frankfurter.dev/v2'),

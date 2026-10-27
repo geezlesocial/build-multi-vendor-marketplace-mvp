@@ -1,9 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
+import { PrismaClient } from '@prisma/client';
+
+const databaseUrl = process.env.E2E_DATABASE_URL;
+if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for profile browser tests.');
+const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
 const password = 'Profile-E2E-Only-Password-42!';
 const validPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAYAAAAMJL+VAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAJUlEQVQ4jWPwKI/6T0vMMGqBx2gQeYymIo/RjFY+WlSUD/LSFAAuzCQu+qkxfwAAAABJRU5ErkJggg==', 'base64');
 const invalidSvg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>window.__unsafe=true</script></svg>');
 function uniqueEmail(label: string) { return `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@example.test`; }
+test.afterAll(async () => { await prisma.$disconnect(); });
 
 async function login(page: Page, email: string, localPassword = 'LocalDemoOnly-ChangeMe-123!') {
   const response = await page.request.post('/api/auth/login', { data: { email, password: localPassword } });
@@ -14,7 +20,9 @@ async function register(page: Page, name = 'Avatar Test Member') {
   const email = uniqueEmail('profile');
   const response = await page.request.post('/api/auth/register', { data: { email, name, password } });
   expect(response.status(), await response.text()).toBe(201);
-  return { email, user: (await response.json()).user as { id: string; name: string } };
+  const user = (await response.json()).user as { id: string; name: string };
+  await prisma.user.update({ where: { id: user.id }, data: { onboardingCompletedAt: new Date() } });
+  return { email, user };
 }
 
 async function csrfHeaders(page: Page) {
@@ -54,7 +62,7 @@ test('guest sees guest navigation only after the session check, and sign-in fiel
   await page.goto('/?auth=login');
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await expect(page.getByLabel('Email')).toHaveValue('');
-  await expect(page.getByLabel('Password')).toHaveValue('');
+  await expect(page.getByRole('textbox', { name: 'Password', exact: true })).toHaveValue('');
 });
 
 test('buyer homepage and account menu are distinct, role-limited, keyboard and outside-click accessible', async ({ page }) => {

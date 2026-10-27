@@ -64,11 +64,13 @@ import { createAccountVerificationChallenge, deliverAccountVerification, registe
 import { registerProductReviewRoutes } from './product-review-routes.js';
 import { registerLiveAttendanceRoutes } from './live-attendance-routes.js';
 import { registerLiveEngagementRoutes } from './live-engagement-routes.js';
+import { registerSocialAuthRoutes } from './social-auth-routes.js';
+import { registerOnboardingRoutes } from './onboarding-routes.js';
 import { handleSponsoredPaypalEvent, handleSponsoredStripeEvent } from './store-buster-sponsored.js';
 
 const app = express();
 app.disable('x-powered-by');
-app.use(helmet({ contentSecurityPolicy: { directives: { imgSrc: ["'self'", 'data:', 'https://*.cjdropshipping.com', 'https://*.aliyuncs.com'], mediaSrc: ["'self'", 'https:'] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { imgSrc: ["'self'", 'data:', 'https:', 'https://*.cjdropshipping.com', 'https://*.aliyuncs.com'], mediaSrc: ["'self'", 'https:'] } } }));
 app.use(cors({ origin: env.WEB_ORIGIN, credentials: true }));
 app.use(cookieParser());
 app.use((req, res, next) => {
@@ -125,6 +127,8 @@ registerAccountVerificationRoutes(app);
 registerProductReviewRoutes(app);
 registerLiveAttendanceRoutes(app);
 registerLiveEngagementRoutes(app);
+registerSocialAuthRoutes(app);
+registerOnboardingRoutes(app);
 registerLiveProviderConfigurationRoutes(app);
 if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => console.error(error instanceof Error ? error.message : 'Content scheduler failed')), 60_000);
 if (process.env.NODE_ENV !== 'test') setInterval(() => expireDueStoreSubscriptions(prisma).catch(() => console.error('Store subscription expiry scheduler failed')), 60_000);
@@ -145,7 +149,7 @@ app.post('/api/auth/register', credentialLimiter, asyncRoute(async (req, res) =>
   const challenge = await createAccountVerificationChallenge(user.id);
   const delivery = await deliverAccountVerification(challenge);
   await createSession(user.id, res);
-  res.status(201).json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.emailVerifiedAt }), verificationEmailSent: delivery.sent });
+  res.status(201).json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.emailVerifiedAt, onboardingCompletedAt: user.onboardingCompletedAt }), verificationEmailSent: delivery.sent });
 }));
 app.post('/api/auth/login', credentialLimiter, asyncRoute(async (req, res) => {
   const input = parse(loginSchema, req.body);
@@ -154,7 +158,7 @@ app.post('/api/auth/login', credentialLimiter, asyncRoute(async (req, res) => {
   const account = await prisma.$queryRaw<{ accountStatus: string }[]>`SELECT "accountStatus" FROM "User" WHERE "id" = ${user.id}`;
   if (account[0]?.accountStatus !== 'ACTIVE') return res.status(403).json({ error: 'This account is not currently available. Contact platform support.' });
   await createSession(user.id, res);
-  res.json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.emailVerifiedAt, ...(user.seller ? { sellerId: user.seller.id } : {}), ...(user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) }) });
+  res.json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.emailVerifiedAt, onboardingCompletedAt: user.onboardingCompletedAt, ...(user.seller ? { sellerId: user.seller.id } : {}), ...(user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) }) });
 }));
 app.post('/api/auth/logout', requireAuth, asyncRoute(async (req, res) => { const token = req.cookies?.[env.SESSION_COOKIE_NAME] as string | undefined; if (token) await prisma.session.deleteMany({ where: { tokenHash: (await import('node:crypto')).createHash('sha256').update(token).digest('hex') } }); res.clearCookie(env.SESSION_COOKIE_NAME); res.clearCookie('marketplace_csrf'); res.status(204).send(); }));
 app.get('/api/auth/me', asyncRoute(async (req, res) => { const user = await currentUser(req); res.json({ user: user ? safeUser(user) : null }); }));

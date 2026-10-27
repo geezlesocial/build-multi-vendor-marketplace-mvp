@@ -49,11 +49,37 @@ export async function latestDisplayRate(baseCurrency: string, quoteCurrency: str
 
 export async function availableGlobalDisplayCurrencies() {
   const entries = await prisma.currencyCatalogEntry.findMany({ where: { active: true, displayEnabled: true }, orderBy: [{ region: 'asc' }, { name: 'asc' }] });
+  const quoteCurrencies = entries.map(entry => entry.code).filter(code => code !== env.CURRENCY);
+  const now = new Date();
+  const [manualRates, snapshots] = quoteCurrencies.length ? await Promise.all([
+    prisma.manualExchangeRateVersion.findMany({
+      where: {
+        storeId: null,
+        baseCurrency: env.CURRENCY,
+        quoteCurrency: { in: quoteCurrencies },
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }]
+      },
+      orderBy: [{ version: 'desc' }, { effectiveFrom: 'desc' }],
+      select: { quoteCurrency: true }
+    }),
+    prisma.exchangeRateSnapshot.findMany({
+      where: { baseCurrency: env.CURRENCY, quoteCurrency: { in: quoteCurrencies } },
+      orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }],
+      select: { quoteCurrency: true, fetchedAt: true, sourceDate: true }
+    })
+  ]) : [[], []];
+  const manualQuotes = new Set(manualRates.map(rate => rate.quoteCurrency));
+  const latestSnapshots = new Map<string, (typeof snapshots)[number]>();
+  for (const snapshot of snapshots) {
+    if (!latestSnapshots.has(snapshot.quoteCurrency)) latestSnapshots.set(snapshot.quoteCurrency, snapshot);
+  }
   const allowed: string[] = [];
   for (const entry of entries) {
     if (entry.code === env.CURRENCY) { allowed.push(entry.code); continue; }
-    const rate = await latestDisplayRate(env.CURRENCY, entry.code);
-    if (rate && rate.freshness !== 'stale') allowed.push(entry.code);
+    if (manualQuotes.has(entry.code)) { allowed.push(entry.code); continue; }
+    const snapshot = latestSnapshots.get(entry.code);
+    if (snapshot && isRateFresh(snapshot.fetchedAt, now, env.FX_REFERENCE_MAX_AGE_HOURS * 60 * 60 * 1000, snapshot.sourceDate)) allowed.push(entry.code);
   }
   if (!allowed.includes(env.CURRENCY)) allowed.unshift(env.CURRENCY);
   return allowed;

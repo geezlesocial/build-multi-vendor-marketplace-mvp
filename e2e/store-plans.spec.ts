@@ -117,6 +117,7 @@ async function seedOtherStore() {
       name: 'Isolated Plan Seller',
       role: Role.SELLER,
       passwordHash,
+      onboardingCompletedAt: new Date(),
       seller: { create: { status: SellerStatus.APPROVED, store: { create: { name: 'Isolated Plan Store', slug: `isolated-plan-${randomUUID().slice(0, 8)}` } } } }
     },
     include: { seller: { include: { store: true } } }
@@ -275,7 +276,7 @@ test('product quotas, theme entitlements, and staff-seat limits are enforced at 
     expect(await deniedTheme.json()).toMatchObject({ code: 'PLAN_ENTITLEMENT_REQUIRED', entitlement: 'themePreset', upgradeRequired: true });
 
     const seller = await prisma.seller.findFirst({ where: { user: { email: sellerEmail } } });
-    const staffUser = await prisma.user.create({ data: { email: `seat-limit-${randomUUID().slice(0, 8)}@example.test`, name: 'Disposable Seat User', role: Role.BUYER, passwordHash: 'unused-test-only-hash' } });
+    const staffUser = await prisma.user.create({ data: { email: `seat-limit-${randomUUID().slice(0, 8)}@example.test`, name: 'Disposable Seat User', role: Role.BUYER, passwordHash: 'unused-test-only-hash', onboardingCompletedAt: new Date() } });
     await expect(prisma.sellerStaff.create({ data: { sellerId: seller!.id, userId: staffUser.id } })).rejects.toThrow(/staff seat limit/i);
   } finally {
     await sellerContext.close();

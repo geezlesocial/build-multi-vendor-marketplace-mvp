@@ -15,6 +15,8 @@ import { AdminOperations } from './AdminOperations.js';
 import { AdminPromotions } from './AdminPromotions.js';
 import { AdminProductReviews } from './AdminProductReviews.js';
 import { AdminLiveShopping } from './LiveShopping.js';
+import { AdminSocialAuth } from './AdminSocialAuth.js';
+import { AdminOnboardingReadiness } from './AdminOnboardingReadiness.js';
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
@@ -36,7 +38,7 @@ const adminNavigation = [
   { group: 'Plans and billing', items: [{ id: 'plans', label: 'Store plans' }] },
   { group: 'Payments', items: [{ id: 'methods', label: 'Payment methods' }, { id: 'transactions', label: 'Transactions' }, { id: 'commissions', label: 'Seller commissions' }, { id: 'payouts', label: 'Seller payouts' }, { id: 'refunds', label: 'Refunds & disputes' }] },
   { group: 'Growth', items: [{ id: 'affiliate', label: 'Affiliate program' }, { id: 'store-growth', label: 'Store Buster & email' }, { id: 'promotions', label: 'Promotions & ads' }, { id: 'coins', label: 'Club Coins' }] },
-  { group: 'Members and security', items: [{ id: 'members', label: 'Members & security' }] },
+  { group: 'Members and security', items: [{ id: 'members', label: 'Members & security' }, { id: 'auth', label: 'Sign-in & social login' }, { id: 'onboarding', label: 'Onboarding readiness' }] },
   { group: 'Support and messaging', items: [{ id: 'support', label: 'Support & messaging' }] },
   { group: 'Integrations & APIs', items: [{ id: 'providers', label: 'Provider configurations' }, { id: 'webhooks', label: 'Webhooks & API status' }] },
   { group: 'Platform settings', items: [{ id: 'branding', label: 'Branding' }, { id: 'settings', label: 'Policies' }, { id: 'availability', label: 'Availability & localization' }, { id: 'currencies', label: 'Currency catalog & FX' }] },
@@ -47,7 +49,7 @@ const defaultBranding: Branding = { platformName: 'Market Lane', shortName: 'Mar
 
 export function PlatformAdmin() {
   const requestedSection = new URLSearchParams(window.location.search).get('section');
-  const supportedSections = ['overview', 'orders', 'taxonomy', 'reviews', 'vendors', 'platform-store', 'shipping', 'live-shopping', 'plans', 'methods', 'transactions', 'commissions', 'payouts', 'refunds', 'affiliate', 'store-growth', 'promotions', 'coins', 'members', 'support', 'providers', 'webhooks', 'branding', 'settings', 'availability', 'currencies', 'audit'];
+  const supportedSections = ['overview', 'orders', 'taxonomy', 'reviews', 'vendors', 'platform-store', 'shipping', 'live-shopping', 'plans', 'methods', 'transactions', 'commissions', 'payouts', 'refunds', 'affiliate', 'store-growth', 'promotions', 'coins', 'members', 'auth', 'onboarding', 'support', 'providers', 'webhooks', 'branding', 'settings', 'availability', 'currencies', 'audit'];
   const [tab, setTab] = useState(requestedSection && supportedSections.includes(requestedSection) ? requestedSection : requestedSection === 'integrations' ? 'providers' : 'overview');
   const [initialLoadState, setInitialLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [branding, setBranding] = useState<Branding>(defaultBranding);
@@ -144,6 +146,8 @@ export function PlatformAdmin() {
     {tab === 'live-shopping' && <AdminLiveShopping />}
     {tab === 'support' && <SupportDesk mode="admin" />}
     {tab === 'members' && <AdminMembers />}
+    {tab === 'auth' && <AdminSocialAuth />}
+    {tab === 'onboarding' && <AdminOnboardingReadiness />}
     {tab === 'audit' && <section><h2>Audit log</h2><p className="muted">Recent privileged actions. Sensitive metadata and credential references are intentionally omitted from this view.</p>{auditEntries.length ? <div className="table">{auditEntries.map(entry => <div className="row adminAuditRow" key={entry.id}><strong>{entry.action}</strong><span>{entry.entity}</span><span>{entry.actor?.name || entry.actor?.email || 'System'}</span><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time></div>)}</div> : <div className="empty">No audit entries yet.</div>}</section>}
     {tab === 'branding' && <div className="brandingEditor"><h2>Platform branding</h2><p className="muted">Changes are saved as a draft first. Publish makes them public. Uploaded assets stay private until approved by scanning; a pending or rejected image cannot replace the current public identity.</p>
       <div className="two">

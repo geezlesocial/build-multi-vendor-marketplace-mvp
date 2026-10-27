@@ -55,8 +55,8 @@ function App() {
   useEffect(() => { if (user) void loadCart().catch(e => setMessage(e.message)); else setCart({ items: [] }); }, [user?.id]);
   const cartTotal = useMemo(() => cart.items.reduce((sum, item) => sum + itemPrice(item) * item.quantity, 0), [cart]);
   const add = async (productId: string) => { if (!user) { setView('login'); setMessage('Sign in to add items to your cart.'); return; } try { await api('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId, quantity: 1 }) }); setMessage('Added to cart'); await loadCart(); } catch (e) { setMessage((e as Error).message); } };
-  const login = async (form: FormData) => { try { const result = await api<{ user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) }); setUser(result.user); setCart(normalizeCart(await api<{ items: CartApiItem[] }>('/api/cart'))); setView('home'); setMessage(''); } catch (e) { setMessage((e as Error).message); } };
-  const register = async (form: FormData) => { try { const result = await api<{ user: User }>('/api/auth/register', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) }); setUser(result.user); setCart({ items: [] }); setView('home'); setMessage(''); } catch (e) { setMessage((e as Error).message); } };
+  const login = async (form: FormData) => { try { const result = await api<{ user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) }); setUser(result.user); if (!result.user.onboardingCompletedAt) { window.location.assign('/onboarding'); return; } setCart(normalizeCart(await api<{ items: CartApiItem[] }>('/api/cart'))); setView('home'); setMessage(''); } catch (e) { setMessage((e as Error).message); } };
+  const register = async (form: FormData) => { try { const result = await api<{ user: User }>('/api/auth/register', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) }); setUser(result.user); setCart({ items: [] }); window.location.assign(result.user.onboardingCompletedAt ? '/' : '/onboarding'); } catch (e) { setMessage((e as Error).message); } };
 
   return <>
     {message && <div className="notice shellNotice" role="status" aria-live="polite">{message}<button aria-label="Dismiss message" onClick={() => setMessage('')}>×</button></div>}
@@ -70,7 +70,58 @@ function App() {
 
 function Home({ products, query, setQuery, add, settings }: { products: Product[]; query: string; setQuery: (v: string) => void; add: (id: string) => void; settings: Settings }) { return <section className="page"><div className="hero"><p className="eyebrow">A calmer way to shop local</p><h1>Find good things from independent sellers.</h1><p>Browse approved products, compare stores, and check out securely with the payment methods the marketplace currently supports.</p><div className="heroPills"><span>Server-validated stock</span><span>Clear order status</span><span>COD available when enabled</span></div></div><div className="toolbar"><label className="search"><span>Search</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search products" /></label><span className="muted">{settings.multiVendorEnabled ? 'Multi-vendor mode is on' : 'Platform products only'}</span></div><div className="grid">{products.map(p => <article className="card" key={p.id}><div className="productMark">{p.name.slice(0, 1)}</div><div className="cardBody"><p className="eyebrow">{p.category?.name ?? 'Featured'} · {p.seller?.store?.name ?? 'Platform store'}</p><h2>{p.name}</h2><p>{p.description}</p><div className="cardBottom"><strong>{money(p.salePriceMinor ?? p.priceMinor, p.currency)}</strong><button onClick={() => add(p.id)} disabled={p.availableStock < 1}>Add to cart</button></div>{p.salePriceMinor != null && <small><del>{money(p.priceMinor, p.currency)}</del> · Sale price</small>}<small>{p.availableStock} in stock</small></div></article>)}</div>{products.length === 0 && <div className="empty">No approved products match that search.</div>}</section>; }
 
-function Login({ onSubmit, onRegister }: { onSubmit: (data: FormData) => void; onRegister: (data: FormData) => void }) { const [registerMode, setRegisterMode] = useState(new URLSearchParams(window.location.search).get('auth') === 'register'); return <section className="narrow"><p className="eyebrow">Account access</p><h1>{registerMode ? 'Create account' : 'Sign in'}</h1><form onSubmit={e => { e.preventDefault(); (registerMode ? onRegister : onSubmit)(new FormData(e.currentTarget)); }}>{registerMode && <label>Name<input name="name" autoComplete="name" required minLength={2} maxLength={100} /></label>}<label>Email<input name="email" type="email" autoComplete="email" placeholder="you@example.com" required /></label><label>Password<input name="password" type="password" autoComplete={registerMode ? 'new-password' : 'current-password'} placeholder={registerMode ? 'Choose a password' : 'Enter your password'} required minLength={10} /></label>{registerMode && <p className="muted">New accounts start as buyers. Seller access remains subject to the existing approval flow.</p>}<button className="primary">{registerMode ? 'Create account' : 'Sign in'}</button></form><button type="button" onClick={() => setRegisterMode(value => !value)}>{registerMode ? 'Already have an account? Sign in' : 'Need an account? Create one'}</button>{!registerMode && <p className="muted">Local demo accounts are documented in the README. Change all demo credentials before any staging use.</p>}</section>; }
+type SocialProvider = { id: string; label: string; logoUrl: string | null };
+type AuthPresentation = { signInHeading: string; signInText: string; signUpHeading: string; signUpText: string; logoUrl: string | null; layout: 'CENTERED' | 'SPLIT' | 'EDITORIAL'; motion: 'NONE' | 'FADE' | 'SLIDE'; accentColor: string };
+const defaultAuthPresentation: AuthPresentation = { signInHeading: 'Sign in', signInText: 'Welcome back. Sign in to continue.', signUpHeading: 'Create account', signUpText: 'Join the marketplace and discover independent stores.', logoUrl: null, layout: 'CENTERED', motion: 'FADE', accentColor: '#315d47' };
+const socialProviderGlyph: Record<string, string> = { GOOGLE: 'G', LINKEDIN: 'in', FACEBOOK: 'f', X: '𝕏', SCROLITH: 'S' };
+const socialErrorText: Record<string, string> = { provider_disabled: 'That sign-in option is not available right now.', provider_error: 'The identity provider could not complete sign-in. Please try again.', email_required: 'This provider did not return an email address. Enable email access for its app, then try again.', email_conflict: 'An account already uses this email. Sign in with that account first; social account linking is not available yet.', account_unavailable: 'This account is not currently available. Contact platform support.', try_again: 'That sign-in attempt expired or could not be verified. Please start again.' };
+
+function Login({ onSubmit, onRegister }: { onSubmit: (data: FormData) => void; onRegister: (data: FormData) => void }) {
+  const [registerMode, setRegisterMode] = useState(new URLSearchParams(window.location.search).get('auth') === 'register');
+  const [showPassword, setShowPassword] = useState(false);
+  const [providers, setProviders] = useState<SocialProvider[]>([]);
+  const [presentation, setPresentation] = useState(defaultAuthPresentation);
+  const [socialMessage, setSocialMessage] = useState('');
+  useEffect(() => {
+    void Promise.all([
+      api<{ providers: SocialProvider[] }>('/api/auth/social/providers').then(result => setProviders(result.providers)),
+      api<AuthPresentation>('/api/auth/presentation').then(setPresentation)
+    ]).catch(() => undefined);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('social') === 'connected') setSocialMessage('You are signed in with your social account.');
+    else if (params.get('social') === 'error') setSocialMessage(socialErrorText[params.get('social_error') ?? ''] ?? socialErrorText.try_again);
+  }, []);
+  const accent = { '--auth-accent': presentation.accentColor } as React.CSSProperties;
+  const heading = registerMode ? presentation.signUpHeading : presentation.signInHeading;
+  const description = registerMode ? presentation.signUpText : presentation.signInText;
+  return <section className={`authPage authLayout-${presentation.layout.toLowerCase()} authMotion-${presentation.motion.toLowerCase()}`} style={accent}>
+    {presentation.layout === 'SPLIT' && <aside className="authVisual" aria-hidden="true"><span className="authVisualOrb" /><p>Independent stores.<br />A marketplace built around you.</p></aside>}
+    <div className="authPanel">
+      {presentation.logoUrl && <img className="authLogo" src={presentation.logoUrl} alt="Marketplace logo" />}
+      <p className="eyebrow">Account access</p><h1>{heading}</h1>{description && <p className="authDescription">{description}</p>}
+      {socialMessage && <p className={new URLSearchParams(window.location.search).get('social') === 'error' ? 'notice' : 'authSuccess'} role="status">{socialMessage}</p>}
+      <form onSubmit={event => { event.preventDefault(); (registerMode ? onRegister : onSubmit)(new FormData(event.currentTarget)); }}>
+        {registerMode && <label>Name<input name="name" autoComplete="name" required minLength={2} maxLength={100} /></label>}
+        <label>Email<input name="email" type="email" autoComplete="email" placeholder="you@example.com" required /></label>
+        <label htmlFor="auth-password">Password</label>
+        <div className="authPasswordField">
+          <input id="auth-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete={registerMode ? 'new-password' : 'current-password'} placeholder={registerMode ? 'Choose a password' : 'Enter your password'} required minLength={registerMode ? 10 : 1} maxLength={128} />
+          <button className="authPasswordToggle" type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} title={showPassword ? 'Hide password' : 'Show password'}>
+            {showPassword ? 'Hide' : 'Show'}
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              {showPassword ? <><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 002.8 2.8" /><path d="M9.9 5.2A11.3 11.3 0 0112 5c6.4 0 10 7 10 7a15.6 15.6 0 01-4 4.8" /><path d="M6.6 6.6C3.6 8.4 2 12 2 12s3.6 7 10 7a10.8 10.8 0 003.2-.5" /></> : <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>}
+            </svg>
+          </button>
+        </div>
+        {registerMode && <p className="muted">New accounts start as buyers. Seller access remains subject to the existing approval flow.</p>}
+        <button className="primary">{registerMode ? 'Create account' : 'Sign in'}</button>
+      </form>
+      <button className="authModeToggle" type="button" onClick={() => { setRegisterMode(value => { const next = !value; const url = new URL(window.location.href); url.searchParams.set('auth', next ? 'register' : 'login'); window.history.replaceState({}, '', url); return next; }); setShowPassword(false); }}>{registerMode ? 'Already have an account? Sign in' : 'Need an account? Create one'}</button>
+      {providers.length > 0 && <div className="authSocial"><div className="authDivider"><span>Or continue with</span></div><div className="authSocialGrid">{providers.map(provider => <a className="authSocialButton" key={provider.id} href={`/api/auth/social/${provider.id.toLowerCase()}/start`}><span className={`authProviderGlyph authProvider-${provider.id.toLowerCase()}`}>{provider.logoUrl ? <img src={provider.logoUrl} alt="" /> : socialProviderGlyph[provider.id] ?? provider.label.slice(0, 1)}</span><span>Continue with {provider.label}</span></a>)}</div></div>}
+      {!registerMode && <p className="muted authDemoHint">Local demo accounts are documented in the README. Change all demo credentials before any staging use.</p>}
+    </div>
+  </section>;
+}
 
 type ShippingChoice = { serviceId: string; serviceName: string; feeMinor: number; discountMinor: number; shippingMinor: number; currency: string; estimatedMinDays: number | null; estimatedMaxDays: number | null; supportsCod: boolean; discount: { name: string; type: string; amountMinor: number } | null };
 type ShippingQuote = { currency: string; itemSubtotalMinor: number; shippingTotalMinor: number; totalMinor: number; quoteToken: string | null; shipments: { sellerId: string; storeName: string; options: ShippingChoice[]; selected: ShippingChoice }[] };
