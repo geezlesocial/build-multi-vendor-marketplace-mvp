@@ -428,7 +428,7 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
     if (!freshCart?.items.length) throw Object.assign(new Error('Cart changed; refresh and try again'), { statusCode: 409, code: 'SHIPPING_CART_STALE' });
     const lockedChargeCurrency = await tx.$queryRaw<{ code: string }[]>`SELECT "code" FROM "CurrencyCatalogEntry" WHERE "code" = ${env.CURRENCY} AND "active" = TRUE AND "checkoutEnabled" = TRUE FOR SHARE`;
     if (!lockedChargeCurrency.length) throw Object.assign(new Error(`Checkout in ${env.CURRENCY} is unavailable because the platform currency capability is disabled. Your cart is preserved.`), { statusCode: 409, code: 'CHECKOUT_CURRENCY_UNAVAILABLE' });
-    const lockedPaymentMethod = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "PaymentMethodSettings" WHERE "method" = ${method} AND "enabled" = TRUE FOR SHARE`;
+    const lockedPaymentMethod = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "PaymentMethodSettings" WHERE "method" = ${method}::"PaymentMethod" AND "enabled" = TRUE FOR SHARE`;
     if (!lockedPaymentMethod.length) throw Object.assign(new Error(`${method} was disabled before checkout completed. Your cart is preserved.`), { statusCode: 409, code: 'PAYMENT_METHOD_DISABLED' });
     const storeIds = [...new Set(freshCart.items.map(item => item.product.seller?.store?.id).filter((id): id is string => Boolean(id)))].sort();
     for (const storeId of storeIds) {

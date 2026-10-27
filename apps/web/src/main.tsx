@@ -129,6 +129,7 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
   const updateAddress = (key: 'line1' | 'city' | 'region' | 'postalCode' | 'country', value: string) => { setForm(current => ({ ...current, [key]: value })); setShippingQuote(null); setSelectedServices({}); };
 
   useEffect(() => {
+    if (confirmation || cart.items.length === 0) return;
     if (form.method === 'COD' && (!codMethodEnabled || !codEligible) && nonCodMethods.length) {
       setForm(current => current.method === 'COD' ? { ...current, method: nonCodMethods[0]!.method } : current);
     } else if (form.method === 'COD' && !codEligible && !nonCodMethods.length) {
@@ -136,7 +137,7 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
     } else if (codEligible && result === codUnavailableMessage) {
       setResult('');
     }
-  }, [form.method, codMethodEnabled, codEligible, nonCodMethods, result, codUnavailableMessage]);
+  }, [confirmation, cart.items.length, form.method, codMethodEnabled, codEligible, nonCodMethods, result, codUnavailableMessage]);
 
   const cartKey = cart.items.map(item => `${item.product.id}:${item.variant?.id ?? ''}:${item.quantity}`).sort().join('|');
   useEffect(() => { setAppliedDiscount(null); setDiscountInput(''); }, [cartKey]);

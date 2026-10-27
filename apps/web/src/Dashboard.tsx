@@ -23,6 +23,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 type Workspace = 'buyer' | 'seller';
 type WorkspaceTabs = { buyer: string; seller: string };
+const CART_SYNC_STORAGE_KEY = 'marketplace:cart-sync';
 const allowedTabs: Record<Workspace, string[]> = {
   buyer: ['overview', 'orders', 'cart', 'favorites', 'messages', 'notifications', 'profile', 'addresses', 'affiliate', 'live'],
   seller: ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'ads', 'messages', 'store', 'currency', 'commission', 'payouts', 'pos', 'live']
@@ -100,12 +101,17 @@ export function Dashboard() {
       });
     };
     const refreshWhenVisible = () => { if (document.visibilityState === 'visible') refreshCart(); };
+    const refreshFromAnotherTab = (event: StorageEvent) => {
+      if (event.key === CART_SYNC_STORAGE_KEY) refreshCart();
+    };
     window.addEventListener('marketplace:cart-changed', refreshCart);
+    window.addEventListener('storage', refreshFromAnotherTab);
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       active = false;
       window.removeEventListener('marketplace:cart-changed', refreshCart);
+      window.removeEventListener('storage', refreshFromAnotherTab);
       window.removeEventListener('focus', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
