@@ -19,7 +19,8 @@ a:not(.primary):hover,a:visited:not(.primary):hover{color:#234832}
    section its own readable layout instead of inheriting the generic flex row. */
 .settingsPage{width:min(1160px,calc(100% - 2rem));min-width:0;padding:clamp(2rem,5vw,3.5rem) 0 4rem}
 .settingsPage h1,.settingsPage h2,.settingsPage p{overflow-wrap:anywhere}
-.settingsPage>.profileSettings{width:100%;min-width:0}
+.settingsPage>.profileSettings{width:100%;min-width:0;grid-template-columns:minmax(0,1fr)}
+.profileIdentity{min-width:0}
 .settingsGrid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:1rem}
 .settingsGrid>.settingsCard{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;justify-content:stretch;gap:1rem;min-width:0;padding:clamp(1rem,2.3vw,1.5rem)}
 .settingsCard h2{margin:0;font-size:clamp(1.15rem,2vw,1.4rem)}
