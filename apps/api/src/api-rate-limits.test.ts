@@ -40,6 +40,7 @@ describe('API rate-limit policy', () => {
     expect(AUTH_CREDENTIAL_LIMIT_WINDOW_MS).toBe(15 * 60 * 1000);
     expect(API_REQUEST_LIMIT).toBe(300);
     expect(API_REQUEST_LIMIT_WINDOW_MS).toBe(60 * 1000);
+    expect(E2E_API_REQUEST_LIMIT).toBe(3000);
     expect(resolveApiRateLimitOptions({ NODE_ENV: 'development' })).toEqual({});
   });
 
