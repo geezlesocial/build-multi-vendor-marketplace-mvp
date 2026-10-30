@@ -134,7 +134,7 @@ test('new signup is guided through persistent onboarding before entering the mem
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   const login = await page.request.post('/api/auth/login', { data: { email, password } });
   expect(login.ok(), await login.text()).toBeTruthy();
-  await page.goto('/onboarding');
+  await page.goto('/onboarding', { waitUntil: 'commit' });
   await expect(page).toHaveURL('/');
   await expect(page.getByRole('heading', { name: 'Good to see you, New' })).toBeVisible();
 });

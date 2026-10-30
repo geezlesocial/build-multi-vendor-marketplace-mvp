@@ -2,23 +2,27 @@ import { Prisma, SellerCommissionEntryType } from '@prisma/client';
 import { env } from './config.js';
 import { calculateCommissionMinor, allocateCommission, type CommissionTerms } from './currency-domain.js';
 import { effectiveStorePlan } from './store-plan-domain.js';
+import { freeStoreCommissionApplies } from './seller-commission-policy-domain.js';
 
 type CommissionDb = Prisma.TransactionClient;
-type Policy = CommissionTerms & { id: string; version: number; currency: string; reason: string; storeId: string | null; planVersionId: string | null };
+type Policy = CommissionTerms & { id: string; version: number; currency: string; reason: string; storeId: string | null; planVersionId: string | null; freeStoreScopeKey: string | null };
 const netItemBase = (item: { unitPriceMinor: number; quantity: number; discountMinor?: number }) => Math.max(0, item.unitPriceMinor * item.quantity - (item.discountMinor ?? 0));
 
 export async function applicableSellerCommissionPolicy(db: CommissionDb, storeId: string, currency: string, now = new Date()): Promise<Policy | null> {
-  const activeWhere = {
-    status: 'ACTIVE' as const,
-    currency,
-    effectiveFrom: { lte: now },
-    OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }]
-  };
-  const storePolicy = await db.sellerCommissionPolicyVersion.findFirst({ where: { ...activeWhere, storeId }, orderBy: { version: 'desc' } });
-  if (storePolicy) return storePolicy;
+  void currency; // Percentage commission is calculated in the order's own currency.
+  const store = await db.store.findUnique({ where: { id: storeId }, select: { isPlatformStore: true } });
+  if (!store) return null;
   const plan = await effectiveStorePlan(db, storeId, now);
-  if (!plan.version) return null;
-  return db.sellerCommissionPolicyVersion.findFirst({ where: { ...activeWhere, planVersionId: plan.version.id }, orderBy: { version: 'desc' } });
+  if (!freeStoreCommissionApplies(store.isPlatformStore, plan.version)) return null;
+  return db.sellerCommissionPolicyVersion.findFirst({
+    where: {
+      freeStoreScopeKey: 'FREE_STORES',
+      status: 'ACTIVE',
+      effectiveFrom: { lte: now },
+      OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }]
+    },
+    orderBy: { version: 'desc' }
+  });
 }
 
 export function makeCommissionSnapshot(policy: Policy | null, currency: string, now = new Date()) {
@@ -28,7 +32,7 @@ export function makeCommissionSnapshot(policy: Policy | null, currency: string, 
   };
   return {
     version: 1, policyVersionId: policy.id, policyVersion: policy.version,
-    source: policy.storeId ? 'STORE' : 'PLAN', type: policy.type, fixedMinor: policy.fixedMinor,
+    source: policy.freeStoreScopeKey ? 'FREE_STORES' : policy.storeId ? 'LEGACY_STORE' : 'LEGACY_PLAN', type: policy.type, fixedMinor: policy.fixedMinor,
     basisPoints: policy.basisPoints, minimumMinor: policy.minimumMinor, capMinor: policy.capMinor,
     currency, capturedAt: now.toISOString(), reason: policy.reason
   };
@@ -150,26 +154,32 @@ export async function allocatePartialRefund(db: CommissionDb, input: {
   if (!review) throw Object.assign(new Error('Refund review event not found or already resolved.'), { statusCode: 404 });
   const payment = await db.payment.findUnique({ where: { parentId: input.parentOrderId }, select: { method: true, status: true, paidAt: true } });
   const order = await db.parentOrder.findUnique({ where: { id: input.parentOrderId }, select: { currency: true, totalMinor: true } });
-  const provider = review.provider === 'STRIPE' || review.provider === 'PAYPAL' ? review.provider : null;
+  const provider = review.provider === 'STRIPE' || review.provider === 'PAYPAL' || review.provider === 'PAYMONGO' || review.provider === 'PAYSTACK' ? review.provider : null;
   const supportedEventTypes = provider === 'STRIPE'
     ? ['charge.refunded', 'charge.dispute.created']
     : provider === 'PAYPAL'
       ? ['PAYMENT.CAPTURE.REFUNDED', 'CUSTOMER.DISPUTE.CREATED']
-      : [];
+      : provider === 'PAYMONGO'
+        ? ['refund.succeeded', 'dispute.created']
+        : provider === 'PAYSTACK'
+          ? ['refund.processed', 'charge.dispute.create']
+          : [];
   const sourceEvent = provider && review.providerEventId && supportedEventTypes.length
     ? await db.processedWebhookEvent.findFirst({
       where: {
         provider, eventId: review.providerEventId, parentOrderId: input.parentOrderId,
         reviewReason: null, eventType: { in: supportedEventTypes }
       },
-      select: { eventType: true, amountMinor: true, currency: true, providerTotalMinor: true }
+      select: { eventType: true, amountMinor: true, currency: true, normalizedAmountMinor: true, normalizedCurrency: true, providerTotalMinor: true }
     })
     : null;
+  const sourceAmountMinor = sourceEvent?.normalizedAmountMinor ?? sourceEvent?.amountMinor;
+  const sourceCurrency = sourceEvent?.normalizedCurrency ?? sourceEvent?.currency;
   const sourceAmountMatches = sourceEvent?.eventType === 'charge.refunded'
-    ? sourceEvent.amountMinor != null && sourceEvent.amountMinor >= review.amountMinor && sourceEvent.providerTotalMinor === order?.totalMinor
-    : sourceEvent?.amountMinor === review.amountMinor;
+    ? sourceAmountMinor != null && sourceAmountMinor >= review.amountMinor && (sourceEvent.normalizedAmountMinor !== null || sourceEvent.providerTotalMinor === order?.totalMinor)
+    : sourceAmountMinor === review.amountMinor;
   if (!sourceEvent?.eventType || !provider || payment?.method !== provider || !order
-    || sourceEvent.currency !== review.currency || review.currency !== order.currency || !sourceAmountMatches) {
+    || sourceCurrency !== review.currency || review.currency !== order.currency || !sourceAmountMatches) {
     throw Object.assign(new Error('The verified provider event for this refund review is unavailable or does not match the order.'), { statusCode: 409, code: 'COMMISSION_REFUND_EVENT_MISSING' });
   }
   // A partial dispute can put a captured payment in DISPUTED while a separate

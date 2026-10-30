@@ -8,6 +8,7 @@ const e2eWebPort = Number(process.env.E2E_WEB_PORT ?? 5173);
 const e2eApiPort = Number(process.env.E2E_API_PORT ?? 4000);
 const e2eBaseURL = process.env.E2E_BASE_URL ?? `http://${e2eHost}:${e2eWebPort}`;
 const e2eContentStorageDir = process.env.E2E_CONTENT_STORAGE_DIR ?? path.join(os.tmpdir(), `marketplace-e2e-content-${process.pid}`);
+process.env.E2E_CONTENT_STORAGE_DIR = e2eContentStorageDir;
 validateE2EBaseURL(e2eBaseURL);
 const e2eDatabaseURL = process.env.E2E_DATABASE_URL;
 validateE2EDatabaseURL(e2eDatabaseURL);
@@ -28,6 +29,9 @@ const webServerEnv = {
   PAYPAL_CLIENT_SECRET: '',
   PAYPAL_WEBHOOK_ID: '',
   PAYPAL_BASE_URL: 'https://api-m.sandbox.paypal.com',
+  PAYMONGO_SECRET_KEY: '',
+  PAYMONGO_WEBHOOK_SECRET: '',
+  PAYSTACK_SECRET_KEY: '',
   MONEY_MOVEMENT_HARD_DISABLED: 'true',
   WALLET_FUNDING_SANDBOX_MODE: 'false',
   WALLET_FUNDING_PROVIDER_READY: 'false',
@@ -43,7 +47,9 @@ const webServerEnv = {
   // Playwright runner's test mode from disabling its HTTP webServer process.
   NODE_ENV: 'development',
   // Keep E2E behavior explicit and safe when no scanner policy is supplied.
-  CONTENT_SCAN_REQUIRED: process.env.CONTENT_SCAN_REQUIRED ?? 'true'
+  CONTENT_SCAN_REQUIRED: process.env.CONTENT_SCAN_REQUIRED ?? 'true',
+  // Keep browser tests deterministic and isolated from a developer's local ClamAV service.
+  CONTENT_SCANNER_AVAILABLE: 'false'
 };
 
 export default defineConfig({

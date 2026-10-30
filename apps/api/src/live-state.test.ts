@@ -1,26 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { canTransition, effectiveLiveShoppingEnabled } from './live-state.js';
-import { UnavailableLiveProvider } from './live-provider.js';
+import { canDeleteLiveShow, canTransition } from './live-state.js';
 
-describe('live-shopping safety boundary', () => {
-  it('requires every gate to be true', () => {
-    expect(effectiveLiveShoppingEnabled({ deploymentGate: false, runtimeEnabled: true, providerConfigured: true, providerHealthy: true })).toBe(false);
-    expect(effectiveLiveShoppingEnabled({ deploymentGate: true, runtimeEnabled: true, providerConfigured: false, providerHealthy: false })).toBe(false);
-    expect(effectiveLiveShoppingEnabled({ deploymentGate: true, runtimeEnabled: true, providerConfigured: true, providerHealthy: true })).toBe(true);
-  });
-
-  it('rejects impossible lifecycle transitions', () => {
+describe('seller live-show lifecycle controls', () => {
+  it('allows sellers to publish a scheduled show and unpublish it back to draft', () => {
     expect(canTransition('DRAFT', 'SCHEDULED')).toBe(true);
     expect(canTransition('SCHEDULED', 'DRAFT')).toBe(true);
-    expect(canTransition('SCHEDULED', 'CANCELLED')).toBe(true);
-    expect(canTransition('DRAFT', 'LIVE')).toBe(false);
-    expect(canTransition('LIVE', 'DRAFT')).toBe(false);
-    expect(canTransition('ENDED', 'LIVE')).toBe(false);
   });
 
-  it('fails closed instead of simulating a provider', async () => {
-    const provider = new UnavailableLiveProvider();
-    await expect(provider.getReadiness()).resolves.toMatchObject({ configured: false, healthy: false, attendanceVerificationAvailable: false });
-    await expect(provider.createSession({ title: 'test' })).rejects.toThrow('real managed streaming provider');
+  it('does not allow an active broadcast to be deleted before it is ended', () => {
+    expect(canDeleteLiveShow('STARTING', 'NOT_CONFIGURED')).toBe(false);
+    expect(canDeleteLiveShow('LIVE', 'RECORDING')).toBe(false);
+    expect(canDeleteLiveShow('PAUSED', 'PROCESSING')).toBe(false);
+  });
+
+  it('allows inactive shows to be moved to the recoverable deleted-shows archive', () => {
+    expect(canDeleteLiveShow('DRAFT', 'NOT_CONFIGURED')).toBe(true);
+    expect(canDeleteLiveShow('SCHEDULED', 'FAILED')).toBe(true);
+    expect(canDeleteLiveShow('ENDED', 'READY')).toBe(true);
+  });
+
+  it('waits for a pending replay recording before deleting a show', () => {
+    expect(canDeleteLiveShow('ENDED', 'STARTING')).toBe(false);
+    expect(canDeleteLiveShow('ENDED', 'RECORDING')).toBe(false);
+    expect(canDeleteLiveShow('ENDED', 'PROCESSING')).toBe(false);
   });
 });

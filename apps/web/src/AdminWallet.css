@@ -1,4 +1,10 @@
 .adminWallet{max-width:1160px}
+.adminWalletMembers{padding:1.25rem;border:1px solid #dce5dd;border-radius:1rem;background:#fff}
+.adminWalletPlatformBalances{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 1rem;margin:.75rem 0;padding:.8rem 1rem;border:1px solid #dce5dd;border-radius:.75rem;background:#f5f8f4}
+.adminWalletPlatformBalances strong{margin-right:.5rem}
+.adminWalletPlatformBalances span{color:#52645a;font-size:.88rem}
+.adminWalletStatusControl{display:grid;grid-template-columns:minmax(8rem,auto) minmax(10rem,15rem);align-items:center;gap:.75rem;margin:.8rem 0}
+.walletIdentity{display:inline-block;padding:.65rem 1rem;border-radius:.65rem;background:#e8f1e9;color:#315d47;font-size:1.25rem;letter-spacing:.08em}
 .adminWalletMetrics{margin:1.25rem 0}
 .adminWalletMetrics .cardBody h2{font-size:1rem}
 .adminWalletMetrics .cardBody>strong{font-size:1.8rem;color:#325a45}
@@ -68,3 +74,4 @@
   .adminCoinRule .profileActions{width:100%}
   .adminCoinRule .profileActions button{flex:1}
 }
+@media(max-width:700px){.adminWalletStatusControl{grid-template-columns:minmax(0,1fr)}.adminWalletMembers{padding:.85rem}.adminWalletPlatformBalances{align-items:flex-start;flex-direction:column}.walletIdentity{font-size:1.05rem}}

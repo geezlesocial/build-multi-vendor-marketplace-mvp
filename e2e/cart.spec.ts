@@ -167,7 +167,7 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
 
   const confirmation = page.locator('.orderConfirmation');
   await expect(confirmation).toBeVisible();
-  await expect(confirmation).toContainText('Order confirmed');
+  await expect(confirmation).toContainText('Order received');
   await expect(confirmation).toContainText(/MV-\d{8}-[A-Z0-9]+/);
   const confirmationTotal = confirmation.locator('dl div').filter({ hasText: 'Total' }).locator('dd');
   await expect(confirmationTotal).toHaveText('$29.00');

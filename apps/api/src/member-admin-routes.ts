@@ -4,10 +4,10 @@ import { Prisma, Role, SellerStatus } from '@prisma/client';
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { canRestoreSellerAfterAccountReactivation, memberStatusChangeFailure, SELLER_ACCOUNT_SUSPENSION_REASON } from './member-security-domain.js';
-import { createUserNotification } from './notification-delivery.js';
+import { createRoleNotifications, createUserNotification } from './notification-delivery.js';
 
 type MemberRow = {
-  id: string; email: string; name: string; role: string; accountStatus: string; createdAt: Date;
+  id: string; email: string; name: string; role: string; accountStatus: string; createdAt: Date; emailVerifiedAt: Date | null;
   sellerId: string | null; sellerStatus: string | null; storeName: string | null;
   activeSessions: number; buyerOrders: number;
 };
@@ -18,7 +18,7 @@ const param = (value: string | string[] | undefined) => Array.isArray(value) ? v
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 const actor = (res: Response) => res.locals.user as Actor;
 const selection = Prisma.sql`
-  SELECT u."id", u."email", u."name", u."role"::text AS "role", u."accountStatus", u."createdAt",
+  SELECT u."id", u."email", u."name", u."role"::text AS "role", u."accountStatus", u."createdAt", u."emailVerifiedAt",
     s."id" AS "sellerId", s."status"::text AS "sellerStatus", st."name" AS "storeName",
     (SELECT COUNT(*)::int FROM "Session" se WHERE se."userId" = u."id" AND se."expiresAt" > CURRENT_TIMESTAMP) AS "activeSessions",
     (SELECT COUNT(*)::int FROM "ParentOrder" po WHERE po."buyerId" = u."id") AS "buyerOrders"
@@ -42,6 +42,35 @@ export function registerMemberAdminRoutes(app: Express) {
       prisma.$queryRaw<{ total: number }[]>(Prisma.sql`SELECT COUNT(*)::int AS "total" FROM "User" u ${where}`)
     ]);
     res.json({ members: members.map(member => ({ ...member, isCurrentAdmin: member.id === admin.id })), page, pageSize, total: totalRows[0]?.total ?? 0 });
+  }));
+
+  app.post('/api/admin/members/:id/verify-email', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const admin = actor(res);
+    const memberId = param(req.params.id);
+    const input = z.object({ reason: z.string().trim().min(8).max(500) }).strict().parse(req.body);
+    const result = await prisma.$transaction(async tx => {
+      const targets = await tx.$queryRaw<{ id: string; email: string; emailVerifiedAt: Date | null }[]>`SELECT "id", "email", "emailVerifiedAt" FROM "User" WHERE "id" = ${memberId} FOR UPDATE`;
+      const target = targets[0];
+      if (!target) throw fail(404, 'Member not found.');
+      if (target.emailVerifiedAt) return { verified: true, alreadyVerified: true, verifiedAt: target.emailVerifiedAt };
+      const verifiedAt = new Date();
+      const updated = await tx.user.updateMany({ where: { id: target.id, emailVerifiedAt: null }, data: {
+        emailVerifiedAt: verifiedAt,
+        emailVerificationTokenHash: null,
+        emailVerificationExpiresAt: null,
+        emailVerificationSentAt: null
+      } });
+      if (updated.count !== 1) throw fail(409, 'Email verification status changed. Refresh the member and try again.');
+      await tx.auditLog.create({ data: { actorId: admin.id, action: 'ADMIN_EMAIL_VERIFICATION_WAIVED', entity: 'User', entityId: target.id, metadata: {
+        email: target.email,
+        verifiedAt: verifiedAt.toISOString(),
+        verificationMethod: 'ADMIN_WAIVER',
+        verificationTokenInvalidated: true,
+        reason: input.reason
+      } } });
+      return { verified: true, alreadyVerified: false, verifiedAt };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    res.json(result);
   }));
 
   app.patch('/api/admin/members/:id/status', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
@@ -81,6 +110,8 @@ export function registerMemberAdminRoutes(app: Express) {
         sellerStatusBefore, sellerReasonBefore, sessionsRevoked: revoked.count
       } } });
       if (input.status === 'ACTIVE') await createUserNotification(tx, { userId: memberId, eventType: 'ACCOUNT_REACTIVATED', title: 'Account access restored', body: 'Your account is active again. Sign in to continue.', link: '/sign-in', payloadJson: { memberId } }, 'account');
+      else await createUserNotification(tx, { userId: memberId, eventType: 'ACCOUNT_SUSPENDED', title: 'Account access suspended', body: `An administrator suspended account access. Reason: ${input.reason}`, link: '/support', payloadJson: { memberId } }, 'account');
+      await createRoleNotifications(tx, Role.ADMIN, { eventType: `MEMBER_ACCOUNT_${input.status}`, title: `Member account ${input.status.toLowerCase()}`, body: `A member account status was changed to ${input.status.toLowerCase()} by an administrator.`, link: '/admin/platform?section=members', payloadJson: { memberId, status: input.status } }, 'account', [admin.id]);
       return { id: memberId, status: input.status, sessionsRevoked: revoked.count };
     }, { isolationLevel: 'ReadCommitted' });
     res.json(result);

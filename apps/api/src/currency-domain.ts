@@ -15,7 +15,7 @@ export const INITIAL_CURRENCY_CODES = [
   'ZAR', 'NGN', 'KES', 'GHS', 'EGP', 'MAD', 'TZS', 'UGX', 'RWF', 'XOF', 'XAF'
 ] as const;
 
-export const RATE_FRESH_FOR_MS = 36 * 60 * 60 * 1000;
+export const RATE_FRESH_FOR_MS = 72 * 60 * 60 * 1000;
 const RATE_MAX = 1_000_000_000_000n;
 
 export function parseRate(value: string | number | bigint) {
@@ -26,6 +26,22 @@ export function parseRate(value: string | number | bigint) {
   const numerator = BigInt(whole!) * denominator + BigInt(fraction || '0');
   if (numerator <= 0n || numerator > RATE_MAX * denominator) throw new Error('Rate is outside the supported positive range.');
   return { numerator, denominator, decimal: input };
+}
+
+/** Derive a reference cross-rate where both legs are quoted against USD. */
+export function deriveUsdPivotRate(baseUsdRate: string, quoteUsdRate: string) {
+  const base = parseRate(baseUsdRate);
+  const quote = parseRate(quoteUsdRate);
+  const scale = 1_000_000_000_000n;
+  const numerator = quote.numerator * base.denominator * scale;
+  const denominator = quote.denominator * base.numerator;
+  const scaled = (numerator * 2n + denominator) / (2n * denominator);
+  if (scaled <= 0n) throw new Error('Derived reference rate is outside the supported precision.');
+  const whole = scaled / scale;
+  const fraction = (scaled % scale).toString().padStart(12, '0').replace(/0+$/, '');
+  const result = fraction ? `${whole}.${fraction}` : whole.toString();
+  parseRate(result);
+  return result;
 }
 
 export function convertMinorExact(amountMinor: bigint, rateValue: string, baseExponent: number, quoteExponent: number) {
@@ -66,6 +82,13 @@ export interface ReferenceRateProvider {
   fetchRates(base: string, quotes: string[]): Promise<ReferenceRate[]>;
 }
 
+export class ReferenceRateFetchError extends Error {
+  constructor(readonly statusCode: number) {
+    super(`Reference-rate source returned HTTP ${statusCode}.`);
+    this.name = 'ReferenceRateFetchError';
+  }
+}
+
 export class FrankfurterRateAdapter implements ReferenceRateProvider {
   readonly provider = 'frankfurter';
   constructor(private readonly endpoint = 'https://api.frankfurter.dev/v2', private readonly fetcher: typeof fetch = fetch) {}
@@ -77,7 +100,7 @@ export class FrankfurterRateAdapter implements ReferenceRateProvider {
     url.searchParams.set('base', base);
     url.searchParams.set('quotes', [...new Set(quotes)].filter(code => code !== base).join(','));
     const response = await this.fetcher(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
-    if (!response.ok) throw new Error(`Reference-rate source returned HTTP ${response.status}.`);
+    if (!response.ok) throw new ReferenceRateFetchError(response.status);
     const payload: unknown = await response.json();
     if (!Array.isArray(payload)) throw new Error('Reference-rate source returned an invalid response.');
     return payload.map(row => {
@@ -93,6 +116,26 @@ export class FrankfurterRateAdapter implements ReferenceRateProvider {
       return { base: rowBase, quote, rate, sourceDate };
     });
   }
+}
+
+/** Keep one provider-unsupported pair from blocking every other catalog rate. */
+export async function fetchReferenceRatesWithUnsupportedFallback(provider: ReferenceRateProvider, base: string, quotes: string[]) {
+  const requested = [...new Set(quotes)].filter(code => code !== base);
+  const fetchBatch = async (batch: string[]): Promise<{ rates: ReferenceRate[]; unavailableCurrencies: string[] }> => {
+    if (!batch.length) return { rates: [], unavailableCurrencies: [] };
+    try {
+      const rates = await provider.fetchRates(base, batch);
+      const returned = new Set(rates.map(rate => rate.quote));
+      return { rates, unavailableCurrencies: batch.filter(code => !returned.has(code)) };
+    } catch (error) {
+      if (!(error instanceof ReferenceRateFetchError) || error.statusCode !== 422) throw error;
+      if (batch.length === 1) return { rates: [], unavailableCurrencies: batch };
+      const middle = Math.ceil(batch.length / 2);
+      const [left, right] = await Promise.all([fetchBatch(batch.slice(0, middle)), fetchBatch(batch.slice(middle))]);
+      return { rates: [...left.rates, ...right.rates], unavailableCurrencies: [...left.unavailableCurrencies, ...right.unavailableCurrencies] };
+    }
+  };
+  return { requested: requested.length, ...(await fetchBatch(requested)) };
 }
 
 export type CommissionTerms = {

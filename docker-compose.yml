@@ -11,5 +11,15 @@ services:
     volumes:
       - marketplace_pgdata:/var/lib/postgresql/data
 
+  clamav:
+    image: clamav/clamav:1.5
+    restart: unless-stopped
+    # clamd speaks unauthenticated, unencrypted TCP; keep it reachable only from this PC.
+    ports:
+      - "127.0.0.1:3310:3310"
+    volumes:
+      - marketplace_clamav_db:/var/lib/clamav
+
 volumes:
   marketplace_pgdata:
+  marketplace_clamav_db:

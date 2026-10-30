@@ -3,14 +3,23 @@ import bcrypt from 'bcryptjs';
 import type { Request, Response, NextFunction } from 'express';
 import { PrismaClient, Role } from '@prisma/client';
 import { env } from './config.js';
+import { hasPlatformPermission, PLATFORM_POSITION_LABELS, requiredPlatformPermission, type PlatformPosition } from './platform-access.js';
 
 export const prisma = new PrismaClient();
 
+function passwordDigest(password: string) {
+  return crypto.createHmac('sha256', env.PASSWORD_PEPPER).update(password, 'utf8').digest('base64url');
+}
+
 export async function hashPassword(password: string) {
-  return bcrypt.hash(`${password}${env.PASSWORD_PEPPER}`, 12);
+  // bcrypt ignores bytes after byte 72. Pre-hashing prevents long passwords and
+  // the pepper from being silently truncated while keeping legacy hashes valid.
+  return `v2$${await bcrypt.hash(passwordDigest(password), 12)}`;
 }
 
 export async function verifyPassword(password: string, passwordHash: string) {
+  if (passwordHash.startsWith('v2$')) return bcrypt.compare(passwordDigest(password), passwordHash.slice(3));
+  // Backward-compatible verification for existing marketplace accounts.
   return bcrypt.compare(`${password}${env.PASSWORD_PEPPER}`, passwordHash);
 }
 
@@ -26,12 +35,19 @@ export async function createSession(userId: string, res: Response) {
   res.cookie('marketplace_csrf', csrf, { httpOnly: false, secure: env.NODE_ENV === 'production', sameSite: 'lax', expires: expiresAt, path: '/' });
 }
 
-export type AuthUser = { id: string; email: string; name: string; role: Role; emailVerifiedAt?: Date | null; onboardingCompletedAt?: Date | null; sellerId?: string; avatarUrl?: string };
+export type AuthUser = { id: string; email: string; name: string; role: Role; emailVerifiedAt?: Date | null; onboardingCompletedAt?: Date | null; sellerId?: string; avatarUrl?: string; platformPermissions?: string[]; platformPosition?: PlatformPosition; platformPositionName?: string };
+
+export async function resolvePlatformPositionName(position: string | undefined) {
+  if (!position) return undefined;
+  const builtInName = PLATFORM_POSITION_LABELS[position as keyof typeof PLATFORM_POSITION_LABELS];
+  if (builtInName) return builtInName;
+  return (await prisma.platformTeamPosition.findUnique({ where: { id: position }, select: { name: true } }))?.name ?? position;
+}
 
 export async function currentUser(req: Request): Promise<AuthUser | null> {
   const token = req.cookies?.[env.SESSION_COOKIE_NAME] as string | undefined;
   if (!token) return null;
-  const session = await prisma.session.findUnique({ where: { tokenHash: tokenHash(token) }, include: { user: { include: { seller: true, staffMemberships: true } } } });
+  const session = await prisma.session.findUnique({ where: { tokenHash: tokenHash(token) }, include: { user: { include: { seller: true, staffMemberships: true, platformCollaborator: true } } } });
   if (!session || session.expiresAt <= new Date()) return null;
   const account = await prisma.$queryRaw<{ accountStatus: string }[]>`SELECT "accountStatus" FROM "User" WHERE "id" = ${session.userId}`;
   if (account[0]?.accountStatus !== 'ACTIVE') {
@@ -44,7 +60,9 @@ export async function currentUser(req: Request): Promise<AuthUser | null> {
   const sellerId = session.user.role === Role.ADMIN
     ? platformSeller?.sellerId
     : session.user.seller?.id ?? session.user.staffMemberships[0]?.sellerId;
-  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, emailVerifiedAt: session.user.emailVerifiedAt, onboardingCompletedAt: session.user.onboardingCompletedAt, ...(sellerId ? { sellerId } : {}), ...(session.user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) };
+  const collaborator = session.user.platformCollaborator;
+  const platformPositionName = session.user.role === Role.PLATFORM_STAFF && collaborator?.enabled ? await resolvePlatformPositionName(collaborator.position) : undefined;
+  return { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role, emailVerifiedAt: session.user.emailVerifiedAt, onboardingCompletedAt: session.user.onboardingCompletedAt, ...(sellerId ? { sellerId } : {}), ...(session.user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}), ...(session.user.role === Role.PLATFORM_STAFF && collaborator?.enabled ? { platformPosition: collaborator.position as PlatformPosition, platformPositionName, platformPermissions: collaborator.permissions } : {}) };
 }
 
 function allowedBeforeOnboarding(req: Request) {
@@ -70,7 +88,17 @@ export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     const user = res.locals.user as AuthUser | undefined;
     const platformAdminSellerAccess = user?.role === Role.ADMIN && Boolean(user.sellerId) && roles.includes(Role.SELLER);
-    if (!user || (!roles.includes(user.role) && !platformAdminSellerAccess)) return res.status(403).json({ error: 'Insufficient permissions' });
+    const staffPermission = user?.role === Role.PLATFORM_STAFF && roles.includes(Role.ADMIN)
+      ? requiredPlatformPermission(req.method, req.path, req.body)
+      : null;
+    const canReadMarketplaceOrPaymentPolicies = user?.role === Role.PLATFORM_STAFF
+      && req.method === 'GET'
+      && req.path === '/api/admin/platform/settings'
+      && (user.platformPermissions ?? []).some(permission => permission === 'MARKETPLACE' || permission === 'PAYMENTS');
+    const platformStaffAccess = user?.role === Role.PLATFORM_STAFF
+      && Boolean(user.emailVerifiedAt)
+      && (canReadMarketplaceOrPaymentPolicies || hasPlatformPermission(user.platformPermissions ?? [], staffPermission));
+    if (!user || (!roles.includes(user.role) && !platformAdminSellerAccess && !platformStaffAccess)) return res.status(403).json({ error: 'Insufficient permissions' });
     next();
   };
 }

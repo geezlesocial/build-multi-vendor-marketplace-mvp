@@ -21,6 +21,11 @@ type CaseRow = {
 
 const activeStatuses = ORDER_RESOLUTION_ACTIVE_STATUSES;
 const finalStatuses = ['RESOLVED', 'REJECTED'];
+const refundEventType: Record<'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK', string> = {
+  STRIPE: 'charge.refunded', PAYPAL: 'PAYMENT.CAPTURE.REFUNDED',
+  PAYMONGO: 'refund.succeeded', PAYSTACK: 'refund.processed'
+};
+const refundProviderTypes = [PaymentMethod.STRIPE, PaymentMethod.PAYPAL, PaymentMethod.PAYMONGO, PaymentMethod.PAYSTACK] as const;
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
 const fail = (statusCode: number, message: string, code?: string) => Object.assign(new Error(message), { statusCode, ...(code ? { code } : {}) });
@@ -171,14 +176,21 @@ export function registerOrderResolutionRoutes(app: Express) {
       LEFT JOIN "Payment" pay ON pay."parentId" = p."id" LEFT JOIN "Seller" s ON s."id" = c."sellerId" LEFT JOIN "Store" st ON st."sellerId" = s."id"
       JOIN "User" buyer ON buyer."id" = c."buyerId" LEFT JOIN "OrderResolutionMessage" m ON m."caseId" = c."id" LEFT JOIN "User" author ON author."id" = m."authorId"
       GROUP BY c."id", p."id", so."id", pay."id", st."id", buyer."id" ORDER BY c."updatedAt" DESC LIMIT 200`;
-    const parentIds = [...new Set(cases.filter(item => item.paymentMethod === 'STRIPE' || item.paymentMethod === 'PAYPAL').map(item => item.parentOrderId))];
+    const parentIds = [...new Set(cases.filter(item => refundProviderTypes.includes(item.paymentMethod as typeof refundProviderTypes[number])).map(item => item.parentOrderId))];
     const events = parentIds.length ? await prisma.processedWebhookEvent.findMany({
-      where: { parentOrderId: { in: parentIds }, identityVerified: true, reviewReason: null, OR: [{ provider: PaymentMethod.STRIPE, eventType: 'charge.refunded' }, { provider: PaymentMethod.PAYPAL, eventType: 'PAYMENT.CAPTURE.REFUNDED' }] },
-      select: { id: true, provider: true, eventId: true, eventType: true, parentOrderId: true, amountMinor: true, currency: true, receivedAt: true }, orderBy: { receivedAt: 'desc' }, take: 500
+      where: { parentOrderId: { in: parentIds }, identityVerified: true, reviewReason: null, OR: [
+        { provider: PaymentMethod.STRIPE, eventType: refundEventType.STRIPE },
+        { provider: PaymentMethod.PAYPAL, eventType: refundEventType.PAYPAL },
+        { provider: PaymentMethod.PAYMONGO, eventType: refundEventType.PAYMONGO },
+        { provider: PaymentMethod.PAYSTACK, eventType: refundEventType.PAYSTACK }
+      ] },
+      select: { id: true, provider: true, eventId: true, eventType: true, parentOrderId: true, amountMinor: true, currency: true, normalizedAmountMinor: true, normalizedCurrency: true, receivedAt: true }, orderBy: { receivedAt: 'desc' }, take: 500
     }) : [];
     const eventsByOrder = new Map<string, typeof events>();
     for (const event of events) if (event.parentOrderId) eventsByOrder.set(event.parentOrderId, [...(eventsByOrder.get(event.parentOrderId) ?? []), event]);
-    res.json(cases.map(item => ({ ...item, providerRefundEvents: eventsByOrder.get(item.parentOrderId) ?? [] })));
+    res.json(cases.map(item => ({ ...item, providerRefundEvents: (eventsByOrder.get(item.parentOrderId) ?? []).map(event => ({
+      ...event, amountMinor: event.normalizedAmountMinor ?? event.amountMinor, currency: event.normalizedCurrency ?? event.currency
+    })) })));
   }));
 
   app.post('/api/admin/order-resolution-cases/:caseId/decision', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
@@ -213,7 +225,7 @@ export function registerOrderResolutionRoutes(app: Express) {
 
   app.post('/api/admin/order-resolution-cases/:caseId/settle-refund', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const user = actor(res);
-    const input = z.object({ provider: z.enum(['STRIPE', 'PAYPAL']).optional(), providerEventId: z.string().trim().min(1).max(255).optional(), manualRefundReference: z.string().trim().min(3).max(200).optional() }).strict().superRefine((value, ctx) => {
+    const input = z.object({ provider: z.enum(['STRIPE', 'PAYPAL', 'PAYMONGO', 'PAYSTACK']).optional(), providerEventId: z.string().trim().min(1).max(255).optional(), manualRefundReference: z.string().trim().min(3).max(200).optional() }).strict().superRefine((value, ctx) => {
       if (Boolean(value.provider) !== Boolean(value.providerEventId)) ctx.addIssue({ code: 'custom', message: 'Select both a payment provider and verified refund event.', path: ['providerEventId'] });
       if (Boolean(value.providerEventId) === Boolean(value.manualRefundReference)) ctx.addIssue({ code: 'custom', message: 'Provide exactly one provider refund event or COD repayment reference.', path: ['manualRefundReference'] });
     }).parse(req.body);
@@ -232,10 +244,11 @@ export function registerOrderResolutionRoutes(app: Express) {
       let providerEventRowId: string | null = null;
       if (event && input.provider && input.providerEventId) {
         if (!refundEventMatchesCase({ paymentMethod: current.paymentMethod, parentOrderId: current.parentOrderId, parentTotalMinor: current.parentTotalMinor, currency: current.currency, approvedAmountMinor: current.approvedAmountMinor, event })) throw fail(409, 'The selected event is not a verified refund for this order, currency, and approved amount.');
-        const verifiedRefunds = await tx.processedWebhookEvent.findMany({ where: { parentOrderId: current.parentOrderId, provider: input.provider as PaymentMethod, identityVerified: true, reviewReason: null, eventType: input.provider === 'STRIPE' ? 'charge.refunded' : 'PAYMENT.CAPTURE.REFUNDED' }, select: { amountMinor: true } });
+        const verifiedRefunds = await tx.processedWebhookEvent.findMany({ where: { parentOrderId: current.parentOrderId, provider: input.provider as PaymentMethod, identityVerified: true, reviewReason: null, eventType: refundEventType[input.provider] }, select: { amountMinor: true, normalizedAmountMinor: true } });
+        const refundAmounts = verifiedRefunds.map(refund => refund.normalizedAmountMinor ?? refund.amountMinor ?? 0);
         const verifiedRefundTotal = input.provider === 'STRIPE'
-          ? Math.max(0, ...verifiedRefunds.map(refund => refund.amountMinor ?? 0))
-          : verifiedRefunds.reduce((total, refund) => total + (refund.amountMinor ?? 0), 0);
+          ? Math.max(0, ...refundAmounts)
+          : refundAmounts.reduce((total, amount) => total + amount, 0);
         const allocatedRows = await tx.$queryRaw<Array<{ amountMinor: bigint | number }>>`SELECT COALESCE(SUM("approvedAmountMinor"), 0) AS "amountMinor" FROM "OrderResolutionCase" WHERE "parentOrderId" = ${current.parentOrderId} AND "status" = 'RESOLVED' AND "providerWebhookEventRowId" IS NOT NULL`;
         const alreadyAllocated = Number(allocatedRows[0]?.amountMinor ?? 0);
         if (!Number.isSafeInteger(verifiedRefundTotal) || !Number.isSafeInteger(alreadyAllocated) || alreadyAllocated + current.approvedAmountMinor > verifiedRefundTotal) throw fail(409, 'Verified provider refunds do not have enough unallocated value to settle this case.');

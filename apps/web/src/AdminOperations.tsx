@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import './AdminOperations.css';
+import { useSession } from './session.js';
 
 type Endpoint = { key: string; label: string; path: string; status: 'CONFIGURED' | 'NOT_CONFIGURED' | 'DISABLED'; note: string };
 type OperationsData = {
@@ -15,7 +16,7 @@ type OperationsData = {
   total: number;
 };
 
-type ProviderFilter = 'ALL' | 'STRIPE' | 'PAYPAL';
+type ProviderFilter = 'ALL' | 'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK';
 type StateFilter = 'ALL' | 'REVIEW_REQUIRED' | 'PROCESSED' | 'UNVERIFIED';
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -34,6 +35,8 @@ const elapsed = (seconds: number) => {
 };
 
 export function AdminOperations() {
+  const { user } = useSession();
+  const canRetryEvents = user?.role === 'ADMIN' || user?.platformPermissions?.includes('PAYMENTS') === true;
   const [data, setData] = useState<OperationsData | null>(null);
   const [provider, setProvider] = useState<ProviderFilter>('ALL');
   const [state, setState] = useState<StateFilter>('ALL');
@@ -121,7 +124,7 @@ export function AdminOperations() {
     <section className="adminOpsEvents" aria-labelledby="webhook-events-heading">
       <header><div><p className="eyebrow">Inbound event ledger</p><h3 id="webhook-events-heading">Payment webhook events</h3><p className="muted">This ledger records events accepted by the marketplace handlers; it is not a provider delivery-attempt log.</p></div><span className="adminOpsTotal">{data.total} events</span></header>
       <div className="adminOpsFilters">
-        <label>Provider<select value={provider} onChange={event => { setProvider(event.target.value as ProviderFilter); setPage(1); }}><option value="ALL">All providers</option><option value="STRIPE">Stripe</option><option value="PAYPAL">PayPal</option></select></label>
+        <label>Provider<select value={provider} onChange={event => { setProvider(event.target.value as ProviderFilter); setPage(1); }}><option value="ALL">All providers</option><option value="STRIPE">Stripe</option><option value="PAYPAL">PayPal</option><option value="PAYMONGO">PayMongo</option><option value="PAYSTACK">Paystack</option></select></label>
         <label>Event state<select value={state} onChange={event => { setState(event.target.value as StateFilter); setPage(1); }}><option value="ALL">All states</option><option value="REVIEW_REQUIRED">Needs review</option><option value="UNVERIFIED">Identity unverified</option><option value="PROCESSED">Processed</option></select></label>
       </div>
       {data.events.length ? <div className="adminOpsEventList">{data.events.map(event => <article className="card adminOpsEvent" key={event.id}>
@@ -132,7 +135,7 @@ export function AdminOperations() {
           <small>Received {dateTime(event.receivedAt)}{event.orderNumber ? ` · Order ${event.orderNumber}` : ''}</small>
           {event.reviewReason && <p className="opsReviewReason">Review reason: {event.reviewReason.replaceAll('_', ' ').toLowerCase()}</p>}
         </div>
-        {event.retryAvailable && <button type="button" disabled={Boolean(busyId)} onClick={() => void retryReconciliation(event)}>{busyId === event.id ? 'Retrying…' : 'Retry reconciliation'}</button>}
+        {event.retryAvailable && canRetryEvents && <button type="button" disabled={Boolean(busyId)} onClick={() => void retryReconciliation(event)}>{busyId === event.id ? 'Retrying…' : 'Retry reconciliation'}</button>}
       </article>)}</div> : <div className="empty">No webhook events match these filters.</div>}
       <div className="adminOpsPagination"><span>Page {data.page} of {pageCount}</span><div><button type="button" disabled={data.page <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>Previous</button><button type="button" disabled={data.page >= pageCount} onClick={() => setPage(value => Math.min(pageCount, value + 1))}>Next</button></div></div>
     </section>

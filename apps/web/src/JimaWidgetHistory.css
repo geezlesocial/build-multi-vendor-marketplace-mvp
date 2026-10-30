@@ -1,0 +1,11 @@
+.jimaHistoryBar{display:flex;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid #e7ede9;font-size:13px}
+.jimaHistoryBar button,.jimaHistoryBar summary{border:0;background:transparent;color:#183e36;text-decoration:underline;cursor:pointer}
+.jimaHistoryList{position:absolute;z-index:1;left:12px;right:12px;top:112px;max-height:180px;overflow:auto;padding:8px;background:white;border:1px solid #dfe8e3;border-radius:10px;box-shadow:0 6px 16px #152a2325}
+.jimaHistoryList>div{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid #edf1ee}
+.jimaHistoryList>div button:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.jimaHistoryList>button{padding:8px 4px;color:#8b3b21}
+.jimaSourceList{display:grid;gap:5px;margin:0 8px 8px;font-size:12px}
+.jimaSourceList>span{font-weight:700;color:#52675e}
+.jimaSourceList a{color:#183e36;text-decoration:underline;overflow-wrap:anywhere}
+.jimaSourceList small{color:#52675e}
+.jimaKnowledgeBody{margin:20px 0 28px;padding:20px;background:#fff;border:1px solid #dfe8e3;border-radius:12px;line-height:1.7;white-space:pre-wrap}

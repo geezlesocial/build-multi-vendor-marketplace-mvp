@@ -4,7 +4,7 @@ An independent React + Express + Prisma marketplace MVP with buyer, seller, cash
 
 ## Scope and financial boundary
 
-The MVP supports Stripe and PayPal sandbox checkout, COD, seller-scoped browser cash POS, and an order-case workflow connecting buyers, sellers, and administrators. Online payments go to the platform owner's merchant accounts. Seller payout administration is a separate, disabled-by-default subsystem; no automatic seller settlement, Stripe Connect transfer, PayPal Payout, escrow, or money transmission is active. Provider refunds are processed outside the app and must be matched to a verified webhook; COD refunds are off-platform. See `docs/PLATFORM_ADMIN_PAYOUTS.md` and `docs/KNOWN_LIMITATIONS.md`.
+The MVP supports Stripe and PayPal sandbox checkout, PayMongo hosted checkout for PHP, Paystack hosted checkout for NGN, COD, seller-scoped browser cash POS, and an order-case workflow connecting buyers, sellers, and administrators. Localized gateway adapters require administrator-enabled currencies, a current conversion quote, server-side credentials, and signed webhooks. Online payments go to the platform owner's merchant accounts. Seller payout administration is a separate, disabled-by-default subsystem; no automatic seller settlement, Stripe Connect transfer, PayPal Payout, escrow, or money transmission is active. Provider refunds are processed through the provider and reconciled from verified webhooks; COD refunds are off-platform. Live payment activation remains fail-closed pending provider verification. See `docs/PAYMENTS.md`, `docs/INTEGRATIONS_AND_PAYMENT_METHODS.md`, `docs/PLATFORM_ADMIN_PAYOUTS.md`, and `docs/KNOWN_LIMITATIONS.md`.
 
 The POS is cash-only browser checkout. It does not integrate card readers, Stripe Terminal, printers, or third-party inventory systems. This project is not a claim of PCI, tax, privacy-law, or other legal compliance.
 
@@ -60,7 +60,7 @@ Provider sandbox tests require the corresponding environment variables in `.env`
 
 ## Environment variable names
 
-`NODE_ENV`, `API_PORT`, `WEB_ORIGIN`, `DATABASE_URL`, `SESSION_COOKIE_NAME`, `SESSION_TTL_DAYS`, `PASSWORD_PEPPER`, `SOCIAL_LOGIN_ENCRYPTION_KEY`, `PAYOUT_ENCRYPTION_KEY`, `DROPSHIPPING_ENCRYPTION_KEY`, `CURRENCY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL`, `PAYPAL_WEBHOOK_ID`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `UPLOAD_DIR`, `LIVE_SHOPPING_AVAILABLE`, `SITE_URL`, `CONTENT_STORAGE_DIR`, `CONTENT_SCAN_REQUIRED`, `CONTENT_MAX_IMAGE_BYTES`, `CONTENT_MAX_VIDEO_BYTES`, `CONTENT_MAX_DOCUMENT_BYTES`, `AFFILIATE_DEFAULT_BASIS_POINTS`, `AFFILIATE_SIGNING_SECRET`, `STORE_EMAIL_DELIVERY_AVAILABLE`, `STORE_EMAIL_SMTP_HOST`, `STORE_EMAIL_SMTP_PORT`, `STORE_EMAIL_SMTP_SECURE`, `STORE_EMAIL_SMTP_REQUIRE_TLS`, `STORE_EMAIL_SMTP_USER`, `STORE_EMAIL_SMTP_PASSWORD`, `STORE_EMAIL_FROM`, `STORE_EMAIL_REPLY_TO`, `STORE_EMAIL_TOKEN_SECRET`.
+`NODE_ENV`, `API_PORT`, `WEB_ORIGIN`, `DATABASE_URL`, `SESSION_COOKIE_NAME`, `SESSION_TTL_DAYS`, `PASSWORD_PEPPER`, `SOCIAL_LOGIN_ENCRYPTION_KEY`, `PAYOUT_ENCRYPTION_KEY`, `DROPSHIPPING_ENCRYPTION_KEY`, `CURRENCY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL`, `PAYPAL_WEBHOOK_ID`, `PAYMONGO_SECRET_KEY`, `PAYMONGO_WEBHOOK_SECRET`, `PAYSTACK_SECRET_KEY`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `UPLOAD_DIR`, `LIVE_SHOPPING_AVAILABLE`, `SITE_URL`, `CONTENT_STORAGE_DIR`, `CONTENT_SCAN_REQUIRED`, `CONTENT_MAX_IMAGE_BYTES`, `CONTENT_MAX_VIDEO_BYTES`, `CONTENT_MAX_DOCUMENT_BYTES`, `AFFILIATE_DEFAULT_BASIS_POINTS`, `AFFILIATE_SIGNING_SECRET`, `STORE_EMAIL_DELIVERY_AVAILABLE`, `STORE_EMAIL_SMTP_HOST`, `STORE_EMAIL_SMTP_PORT`, `STORE_EMAIL_SMTP_SECURE`, `STORE_EMAIL_SMTP_REQUIRE_TLS`, `STORE_EMAIL_SMTP_USER`, `STORE_EMAIL_SMTP_PASSWORD`, `STORE_EMAIL_FROM`, `STORE_EMAIL_REPLY_TO`, `STORE_EMAIL_TOKEN_SECRET`.
 
 ## Key routes
 
@@ -78,7 +78,7 @@ Provider sandbox tests require the corresponding environment variables in `.env`
 - `GET/POST /api/seller/payout-methods`, `GET/POST /api/seller/payouts`, `GET /api/admin/payout-readiness`, `GET /api/admin/payouts`
 - `GET /api/live-shopping/status`, `GET /api/live-sessions`, `GET /api/seller/live-sessions`
 - `GET/POST /api/admin/live-sessions`, `GET/PATCH /api/admin/live-reports`
-- `POST /api/webhooks/stripe`, `POST /api/webhooks/paypal`
+- `POST /api/webhooks/stripe`, `POST /api/webhooks/paypal`, `POST /api/webhooks/paymongo`, `POST /api/webhooks/paystack`
 
 See `docs/PAYMENTS.md` before connecting a provider. See `docs/PRODUCTION_LAUNCH_CHECKLIST.md` before any staging or launch decision.
 See `docs/LIVE_SHOPPING.md` before enabling live shopping.

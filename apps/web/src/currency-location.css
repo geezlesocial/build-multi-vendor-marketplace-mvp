@@ -20,3 +20,123 @@
 .adminCurrencyCommission .cardBody{margin:1rem 0}
 @media(max-width:900px){.currencyAdminRow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.addressMapPicker{padding:.75rem}.addressMap{height:300px}.currencyOfferList .checkRow{grid-template-columns:auto minmax(0,1fr)}.currencyOfferList .checkRow small{grid-column:2}.sellerCurrencyPage>.setting,.sellerCommissionPage>.setting,.commissionReview label{grid-template-columns:minmax(0,1fr)}.currencyAdminRow{grid-template-columns:minmax(0,1fr)}}
+
+/* Admin commissions: bounded page shell, independent data panels, and responsive policy tools. */
+.adminCommissionPage{width:min(1240px,calc(100% - 2rem));margin:0 auto;padding:clamp(1.5rem,4vw,3.25rem) 0 4rem;color:#18211d}
+.commissionBackLink{display:inline-block;margin:0 0 1.35rem;color:#315d47;font-weight:650}
+.commissionPageHeader{display:flex;align-items:flex-end;justify-content:space-between;gap:2rem;padding:0 0 1.35rem;border-bottom:1px solid #dce1d9}
+.commissionPageHeader h1{margin:.35rem 0 .55rem;font-size:clamp(2.5rem,5.5vw,4.4rem)}
+.commissionIntro{max-width:52rem;margin:0;color:#657168;font-size:1rem;line-height:1.65}
+.commissionHeaderActions{display:grid;justify-items:end;gap:.75rem;flex:0 0 auto}
+.commissionPageNav{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.4rem;padding:.3rem;border:1px solid #dce4dc;border-radius:999px;background:#fff}
+.commissionPageNav a{padding:.5rem .8rem;border-radius:999px;color:#315d47;font-size:.88rem;font-weight:650;text-decoration:none;white-space:nowrap}
+.commissionPageNav a:hover,.commissionPageNav a[aria-current=page]{background:#e8f1e9}
+.commissionHeaderActions>button{min-height:2.65rem;padding:.55rem .9rem}
+.commissionFinancialNote{margin:1rem 0;padding:.8rem 1rem;border:1px solid #dce5da;border-radius:.8rem;background:#f8faf6;color:#536158;line-height:1.55}
+.commissionFeedback{margin:1rem 0;padding:.8rem 1rem;border:1px solid #cbdccc;border-radius:.75rem;line-height:1.5}
+.commissionFeedbackSuccess{background:#edf6ee;color:#28583f}
+.commissionFeedbackError,.commissionInlineError{border-color:#edcf91;background:#fff5df;color:#644821}
+.commissionMetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8rem;margin:1.25rem 0}
+.commissionMetrics article{display:grid;gap:.2rem;min-width:0;padding:1rem;border:1px solid #dfe7de;border-radius:1rem;background:#fff;box-shadow:0 8px 24px #23452d08}
+.commissionMetrics article>span,.commissionMetrics article>small{color:#68736b;font-size:.82rem}
+.commissionMetrics article>strong{font-size:clamp(1.45rem,3vw,2rem);line-height:1.2;color:#315d47;font-variant-numeric:tabular-nums}
+.commissionMainGrid{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr);align-items:start;gap:1rem;margin:1rem 0 2rem}
+.commissionPanel{min-width:0;padding:clamp(1rem,2.2vw,1.5rem);border:1px solid #dfe7de;border-radius:1.1rem;background:#fff;box-shadow:0 10px 28px #23452d08}
+.commissionPanelHeader,.commissionSectionHeader,.commissionPolicySummary,.commissionReviewHeader{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}
+.commissionPanelHeader h2,.commissionSectionHeader h2{margin:.2rem 0;font-size:clamp(1.25rem,2vw,1.65rem);letter-spacing:-.025em}
+.commissionStatus{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;padding:.38rem .65rem;border:1px solid #d9e4d9;border-radius:999px;background:#f3f7f2;color:#536158;font-size:.73rem;font-weight:750;line-height:1.25;text-align:center}
+.commissionStatusDraft{border-color:#f0d5a4;background:#fff5df;color:#795321}
+.commissionStatusactive{border-color:#b9d7c0;background:#e9f5eb;color:#28583f}
+.commissionStatusdraft{border-color:#f0d5a4;background:#fff5df;color:#795321}
+.commissionStatusretired,.commissionStatussuperseded{background:#f1f3f0;color:#657168}
+.commissionStatusReview{border-color:#f0d5a4;background:#fff5df;color:#795321}
+.commissionPanelIntro{margin:.75rem 0 1rem;color:#657168;font-size:.9rem;line-height:1.6}
+.commissionSubhead{display:flex;align-items:baseline;justify-content:space-between;gap:.75rem;margin:1.2rem 0 .55rem;padding-top:.9rem;border-top:1px solid #edf0ec}
+.commissionSubhead>span,.commissionLedgerRow small{color:#68736b;font-size:.8rem}
+.commissionLedgerList{display:grid;gap:.55rem}
+.commissionLedgerRow{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.8rem;border:1px solid #e7ece6;border-radius:.75rem;background:#fafbf9}
+.commissionLedgerRow>div:first-child{display:grid;gap:.2rem;min-width:0}
+.commissionLedgerAmount{display:grid;gap:.1rem;text-align:right;white-space:nowrap}
+.commissionLedgerAmount>span{color:#68736b;font-size:.77rem}
+.commissionLedgerAmount>strong{font-variant-numeric:tabular-nums}
+.commissionLedgerFoot{display:flex;justify-content:space-between;gap:1rem;margin-top:.8rem;padding:.75rem .1rem 0;border-top:1px solid #edf0ec;color:#536158;font-size:.88rem}
+.commissionEmpty{display:grid;gap:.3rem;padding:1.1rem;border:1px dashed #cbd8cb;border-radius:.8rem;background:#fafbf9;color:#536158;line-height:1.5}
+.commissionEmpty span{color:#68736b;font-size:.88rem}
+.commissionPolicyForm{display:grid;gap:.8rem;margin-top:.9rem}
+.commissionPolicyForm label,.commissionPreviewTool label,.commissionPolicyAction label,.commissionResolveForm label{display:grid;gap:.35rem;min-width:0;font-size:.86rem}
+.commissionPolicyForm small{font-weight:400;line-height:1.45}
+.commissionPolicyForm textarea,.commissionPolicyAction input,.commissionResolveForm input{width:100%;min-width:0;border:1px solid #c6d0c7;border-radius:.65rem;padding:.72rem;background:#fff;color:#18211d;font:inherit;resize:vertical}
+.commissionPolicyForm textarea{min-height:5rem}
+.commissionPolicyForm select,.commissionPolicyForm input{min-width:0}
+.commissionPreviewTool{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.7rem;padding-top:.15rem}
+.commissionPreviewTool button{min-height:2.85rem;padding:.6rem .95rem;white-space:nowrap}
+.commissionPreviewResult{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.85rem 1rem;border:1px solid #cbdccc;border-radius:.75rem;background:#edf6ee;color:#28583f}
+.commissionPreviewResult span{font-size:.86rem}
+.commissionPreviewResult strong{font-size:1.15rem;font-variant-numeric:tabular-nums}
+.commissionCreateButton{min-height:2.9rem}
+.commissionSection{margin:2rem 0}
+.commissionSectionHeader{align-items:flex-end;margin-bottom:.9rem}
+.commissionSectionHeader>div{max-width:54rem}
+.commissionSectionHeader p:not(.eyebrow){margin:.35rem 0 0;color:#657168;font-size:.9rem;line-height:1.55}
+.commissionSectionHeader>span{flex:0 0 auto;padding:.4rem .7rem;border-radius:999px;background:#e8f1e9;color:#315d47;font-size:.8rem;font-weight:700;white-space:nowrap}
+.commissionPolicyList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}
+.commissionPolicyCard{display:grid;align-content:start;gap:.8rem;min-width:0;padding:1rem;border:1px solid #dfe7de;border-radius:1rem;background:#fff;box-shadow:0 8px 24px #23452d08}
+.commissionPolicySummary h3,.commissionReviewHeader h3{margin:.15rem 0 0;font-size:1.15rem;overflow-wrap:anywhere}
+.commissionPolicyFacts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}
+.commissionPolicyFacts>div{display:grid;gap:.15rem;padding:.7rem;border-radius:.7rem;background:#f6f8f5}
+.commissionPolicyFacts span,.commissionPolicyReason,.commissionLegacyNote{color:#68736b;font-size:.82rem}
+.commissionPolicyFacts strong{overflow-wrap:anywhere}
+.commissionPolicyReason{margin:0;line-height:1.5;overflow-wrap:anywhere}
+.commissionLegacyNote{margin:0;padding:.55rem .7rem;border-radius:.55rem;background:#f4f5f2}
+.commissionPolicyAction{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.65rem;padding-top:.75rem;border-top:1px solid #edf0ec}
+.commissionPolicyAction button,.commissionResolveForm button{min-height:2.7rem;padding:.55rem .8rem;white-space:nowrap}
+.commissionReviewList{display:grid;gap:.9rem}
+.commissionReviewCard{display:grid;gap:.85rem;min-width:0;padding:clamp(1rem,2.5vw,1.4rem)}
+.commissionReviewHeader{align-items:center;padding-bottom:.8rem;border-bottom:1px solid #edf0ec}
+.commissionProviderDetails{padding:.65rem .75rem;border:1px solid #e4eae3;border-radius:.7rem;background:#fafbf9}
+.commissionProviderDetails summary{color:#315d47;font-size:.85rem;font-weight:700;cursor:pointer}
+.commissionProviderDetails dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem;margin:.7rem 0 0}
+.commissionProviderDetails dl>div{min-width:0}
+.commissionProviderDetails dt{color:#68736b;font-size:.75rem}
+.commissionProviderDetails dd{margin:.15rem 0 0;overflow-wrap:anywhere}
+.commissionProviderDetails code{font-size:.78rem;overflow-wrap:anywhere}
+.commissionRefundItems{display:grid;gap:.55rem}
+.commissionRefundItems h4{margin:0 0 .1rem;font-size:.95rem}
+.commissionRefundItem{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,190px);align-items:center;gap:.8rem;padding:.7rem;border:1px solid #e6ebe5;border-radius:.7rem;background:#fafbf9}
+.commissionRefundItem>span{display:grid;gap:.15rem;min-width:0}
+.commissionRefundItem small{font-size:.78rem;font-weight:400;line-height:1.45;overflow-wrap:anywhere}
+.commissionRefundItem input{min-width:0;font-variant-numeric:tabular-nums}
+.commissionAllocationTotal{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.75rem .9rem;border:1px solid #ead8b6;border-radius:.7rem;background:#fff8e8;color:#654b24;font-size:.84rem}
+.commissionAllocationTotal.isComplete{border-color:#cbdccc;background:#edf6ee;color:#28583f}
+.commissionAllocationTotal strong{font-size:.95rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+.commissionAllocationTotal strong small{font-weight:500}
+.commissionResolveForm{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.7rem}
+.commissionSafetyNote{display:grid;gap:.2rem;margin:1.5rem 0 0;padding:1rem 1.1rem;border:1px solid #edcf91;border-radius:.8rem;background:#fff5df;color:#60491e;line-height:1.5}
+.commissionSafetyNote span{font-size:.88rem}
+.commissionInlineError{display:flex;align-items:center;justify-content:space-between;gap:.8rem;margin:.7rem 0;padding:.75rem .85rem;border:1px solid #edcf91;border-radius:.7rem;line-height:1.5;overflow-wrap:anywhere}
+.commissionInlineError button{flex:0 0 auto;min-height:2.3rem;padding:.4rem .7rem}
+.commissionLoading{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;min-height:6rem;align-content:center;padding:1rem;border:1px solid #e5ebe4;border-radius:.8rem;background:#fafbf9}
+.commissionLoading span{height:.55rem;border-radius:999px;background:linear-gradient(90deg,#e5ebe4,#f2f5f1,#e5ebe4);background-size:200% 100%;animation:commissionShimmer 1.4s ease-in-out infinite}
+.commissionLoading span:nth-child(2){width:75%}.commissionLoading span:nth-child(3){width:52%}
+.commissionLoading small{grid-column:1/-1;margin-top:.25rem}
+@keyframes commissionShimmer{to{background-position:-200% 0}}
+@media(max-width:980px){.commissionPageHeader{align-items:flex-start;flex-direction:column;gap:1rem}.commissionHeaderActions{width:100%;justify-items:start;grid-template-columns:minmax(0,1fr) auto;align-items:center}.commissionPageNav{justify-content:flex-start}.commissionMetrics{grid-template-columns:repeat(2,minmax(0,1fr))}.commissionMainGrid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:680px){.adminCommissionPage{width:calc(100% - 1.25rem);padding-top:1.5rem}.commissionHeaderActions{grid-template-columns:minmax(0,1fr);justify-items:stretch}.commissionPageNav{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-radius:.8rem}.commissionPageNav a{text-align:center;white-space:normal}.commissionHeaderActions>button{width:100%}.commissionMetrics{gap:.55rem}.commissionMetrics article{padding:.75rem}.commissionSectionHeader{align-items:flex-start;flex-direction:column}.commissionPolicyList{grid-template-columns:minmax(0,1fr)}.commissionPolicyAction,.commissionResolveForm,.commissionPreviewTool{grid-template-columns:minmax(0,1fr)}.commissionPolicyAction button,.commissionResolveForm button,.commissionPreviewTool button{width:100%}.commissionRefundItem{grid-template-columns:minmax(0,1fr)}.commissionRefundItem input{width:100%}.commissionProviderDetails dl{grid-template-columns:minmax(0,1fr)}.commissionLedgerRow{align-items:flex-start;flex-direction:column}.commissionLedgerAmount{text-align:left}.commissionInlineError{align-items:stretch;flex-direction:column}.commissionInlineError button{width:100%}.commissionFeedback{overflow-wrap:anywhere}}
+@media(max-width:420px){.commissionMetrics{grid-template-columns:minmax(0,1fr)}.commissionPanelHeader,.commissionReviewHeader{align-items:flex-start;flex-direction:column}.commissionAllocationTotal{align-items:flex-start;flex-direction:column}}
+@media(prefers-reduced-motion:reduce){.commissionLoading span{animation:none}}
+.commissionDraftTools{display:grid;gap:.7rem;padding:.75rem;border:1px solid #e3e9e2;border-radius:.75rem;background:#fafbf9}
+.commissionDraftTools>summary{color:#315d47;font-size:.88rem;font-weight:750;cursor:pointer}
+.commissionDraftTools>p{margin:0;color:#68736b;font-size:.8rem;line-height:1.45}
+.commissionDraftEditForm{display:grid;gap:.65rem;padding:.75rem;border:1px solid #e1e8e0;border-radius:.65rem;background:#fff}
+.commissionDraftEditForm label,.commissionRemoveDraftForm label{display:grid;gap:.35rem;min-width:0;font-size:.84rem}
+.commissionDraftEditForm textarea,.commissionDraftEditForm input,.commissionRemoveDraftForm input{width:100%;min-width:0;border:1px solid #c6d0c7;border-radius:.6rem;padding:.65rem;background:#fff;color:#18211d;font:inherit;resize:vertical}
+.commissionDraftEditForm textarea{min-height:4.5rem}
+.commissionDraftEditForm small{font-weight:400}
+.commissionDraftEditButtons{display:flex;flex-wrap:wrap;gap:.5rem}
+.commissionDraftEditButtons button{min-height:2.5rem}
+.commissionEditDraftButton{justify-self:start;min-height:2.45rem;padding:.45rem .75rem}
+.commissionRemoveDraftForm{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.6rem;padding-top:.7rem;border-top:1px solid #e8ece7}
+.commissionRemoveDraftForm button{min-height:2.6rem;padding:.5rem .75rem;white-space:nowrap}
+.commissionDangerButton{border-color:#e5b9af;background:#fff7f5;color:#873a2a}
+.commissionDangerButton:hover{border-color:#bf7969;background:#fff0ec}
+@media(max-width:680px){.commissionRemoveDraftForm{grid-template-columns:minmax(0,1fr)}.commissionRemoveDraftForm button{width:100%}.commissionDraftEditButtons{display:grid}.commissionDraftEditButtons button,.commissionEditDraftButton{width:100%}}

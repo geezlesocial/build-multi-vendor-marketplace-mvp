@@ -24,4 +24,14 @@ describe('public live-session serialization', () => {
     expect(publicLiveSession({ id: 'b', playbackRef: 'http://video.example/live.m3u8' })).toMatchObject({ playbackAvailable: false });
     expect(publicLiveSession({ id: 'c', playbackRef: 'https://user:password@video.example/live.m3u8' })).toMatchObject({ playbackAvailable: false });
   });
+
+  it('only exposes replay URLs after a ready recording is explicitly published', () => {
+    const privateReplay = publicLiveSession({ id: 'private', recordingStatus: 'READY', recordingStorageKey: 'private/key.mp4', recordingEgressId: 'internal-egress', replayPublishedAt: null });
+    expect(privateReplay).toMatchObject({ playbackAvailable: false, replayAvailable: false });
+    expect(privateReplay).not.toHaveProperty('recordingStorageKey');
+    expect(privateReplay).not.toHaveProperty('recordingEgressId');
+    const publishedReplay = publicLiveSession({ id: 'published', status: 'ENDED', recordingStatus: 'READY', recordingStorageKey: 'private/key.mp4', replayPublishedAt: new Date() });
+    expect(publishedReplay).toMatchObject({ playbackAvailable: true, replayAvailable: true, replayUrl: '/api/live-sessions/published/replay' });
+    expect(publishedReplay).not.toHaveProperty('recordingStorageKey');
+  });
 });

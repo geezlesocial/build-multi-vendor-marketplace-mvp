@@ -2,9 +2,10 @@ import { AffiliateAdjustmentType, PaymentMethod, PaymentStatus, Prisma } from '@
 import { accrueSellerCommissionsForPaidOrder, createPartialRefundReview, reverseSellerCommissionForOrder } from './seller-commission.js';
 import { reverseAffiliateForOrderInTransaction, settleAffiliateForPaidOrderInTransaction } from './affiliate-ledger.js';
 import { reverseClubCoinsForOrder } from './club-coins-awards.js';
+import { notifyOrderParties } from './order-notifications.js';
 
 type Tx = Prisma.TransactionClient;
-type Provider = 'STRIPE' | 'PAYPAL';
+type Provider = 'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK';
 
 export type VerifiedPaymentEvent = {
   provider: Provider;
@@ -92,16 +93,41 @@ async function auditLegacyWebhook(tx: Tx, prior: PersistedEventIdentity | null, 
 const stripeCaptureTypes = new Set(['checkout.session.completed', 'checkout.session.async_payment_succeeded']);
 const captureTypes: Record<Provider, Set<string>> = {
   STRIPE: stripeCaptureTypes,
-  PAYPAL: new Set(['PAYMENT.CAPTURE.COMPLETED', 'CHECKOUT.ORDER.COMPLETED'])
+  PAYPAL: new Set(['PAYMENT.CAPTURE.COMPLETED', 'CHECKOUT.ORDER.COMPLETED']),
+  PAYMONGO: new Set(['checkout_session.payment.paid']),
+  PAYSTACK: new Set(['charge.success'])
 };
 const refundTypes: Record<Provider, Set<string>> = {
   STRIPE: new Set(['charge.refunded']),
-  PAYPAL: new Set(['PAYMENT.CAPTURE.REFUNDED'])
+  PAYPAL: new Set(['PAYMENT.CAPTURE.REFUNDED']),
+  PAYMONGO: new Set(['refund.succeeded']),
+  PAYSTACK: new Set(['refund.processed'])
 };
 const disputeTypes: Record<Provider, Set<string>> = {
   STRIPE: new Set(['charge.dispute.created']),
-  PAYPAL: new Set(['CUSTOMER.DISPUTE.CREATED'])
+  PAYPAL: new Set(['CUSTOMER.DISPUTE.CREATED']),
+  PAYMONGO: new Set(['dispute.created']),
+  PAYSTACK: new Set(['charge.dispute.create'])
 };
+
+type ChargeSnapshot = { chargeCurrency: string; chargeAmountMinor: number; baseCurrency: string; baseAmountMinor: number };
+function chargeSnapshot(attempts: { provider: PaymentMethod; metadata: Prisma.JsonValue | null }[], provider: PaymentMethod): ChargeSnapshot | null {
+  const attempt = [...attempts].reverse().find(item => item.provider === provider);
+  const value = attempt?.metadata;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  if (data.purpose !== 'BUYER_CHECKOUT' || typeof data.chargeCurrency !== 'string' || !Number.isSafeInteger(data.chargeAmountMinor) || typeof data.baseCurrency !== 'string' || !Number.isSafeInteger(data.baseAmountMinor)) return null;
+  return { chargeCurrency: data.chargeCurrency.toUpperCase(), chargeAmountMinor: data.chargeAmountMinor as number, baseCurrency: data.baseCurrency.toUpperCase(), baseAmountMinor: data.baseAmountMinor as number };
+}
+
+function providerAmountToBase(amountMinor: number, snapshot: ChargeSnapshot | null, fallbackTotalMinor: number) {
+  if (!snapshot || snapshot.chargeAmountMinor <= 0 || snapshot.baseAmountMinor <= 0 || amountMinor <= 0) return amountMinor;
+  if (amountMinor >= snapshot.chargeAmountMinor) return snapshot.baseAmountMinor;
+  const numerator = BigInt(amountMinor) * BigInt(snapshot.baseAmountMinor);
+  const denominator = BigInt(snapshot.chargeAmountMinor);
+  const rounded = (numerator * 2n + denominator) / (denominator * 2n);
+  return Math.max(1, Math.min(fallbackTotalMinor, Number(rounded)));
+}
 
 async function lockProviderReference(tx: Tx, provider: Provider, reference: string) {
   // Capture and refund/dispute deliveries for one provider object must serialize
@@ -178,6 +204,8 @@ async function applyAdjustment(tx: Tx, event: VerifiedPaymentEvent, parentOrderI
   const isRefund = refundTypes[event.provider].has(event.eventType);
   const isDispute = disputeTypes[event.provider].has(event.eventType);
   if (!isRefund && !isDispute) return null;
+  const payment = await tx.payment.findUniqueOrThrow({ where: { parentId: parentOrderId }, include: { attempts: true, parent: { select: { totalMinor: true, currency: true } } } });
+  const snapshot = chargeSnapshot(payment.attempts, provider);
 
   let delta = source.amountMinor ?? 0;
   let cumulativeRefund = delta;
@@ -193,16 +221,28 @@ async function applyAdjustment(tx: Tx, event: VerifiedPaymentEvent, parentOrderI
   if (!amountIsValid(delta)) return null;
 
   let previouslyRefunded = 0;
-  if (isRefund && event.provider === 'PAYPAL') {
+  let previouslyRefundedBase = 0;
+  if (isRefund && event.provider !== 'STRIPE') {
     const prior = await tx.processedWebhookEvent.findMany({
-      where: { provider, parentOrderId, eventType: 'PAYMENT.CAPTURE.REFUNDED', reviewReason: null, eventId: { not: event.eventId } },
-      select: { amountMinor: true }
+      where: { provider, parentOrderId, eventType: { in: [...refundTypes[event.provider]] }, reviewReason: null, eventId: { not: event.eventId } },
+      select: { amountMinor: true, normalizedAmountMinor: true }
     });
     previouslyRefunded = prior.reduce((sum, row) => sum + (row.amountMinor ?? 0), 0);
+    previouslyRefundedBase = prior.reduce((sum, row) => sum + (row.normalizedAmountMinor ?? providerAmountToBase(row.amountMinor ?? 0, snapshot, payment.parent.totalMinor)), 0);
   }
+  const orderTotal = payment.parent.totalMinor;
+  const providerTotal = snapshot?.chargeAmountMinor ?? orderTotal;
   const full = isRefund
-    ? event.provider === 'STRIPE' ? cumulativeRefund >= source.providerTotalMinor! : previouslyRefunded + delta >= (await tx.parentOrder.findUniqueOrThrow({ where: { id: parentOrderId }, select: { totalMinor: true } })).totalMinor
-    : delta >= (await tx.parentOrder.findUniqueOrThrow({ where: { id: parentOrderId }, select: { totalMinor: true } })).totalMinor;
+    ? event.provider === 'STRIPE' ? cumulativeRefund >= (source.providerTotalMinor ?? providerTotal) : previouslyRefunded + delta >= providerTotal
+    : delta >= providerTotal;
+  if (isRefund && event.provider !== 'STRIPE') {
+    const cumulativeBase = providerAmountToBase(Math.min(providerTotal, previouslyRefunded + delta), snapshot, orderTotal);
+    delta = Math.max(0, cumulativeBase - previouslyRefundedBase);
+    await tx.processedWebhookEvent.update({ where: { id: source.id }, data: { normalizedAmountMinor: delta, normalizedCurrency: snapshot?.baseCurrency ?? payment.parent.currency } });
+    if (delta === 0) return null;
+  } else {
+    delta = providerAmountToBase(delta, snapshot, orderTotal);
+  }
   if (full) {
     const reason = isDispute ? 'Verified full chargeback superseded pending refund allocations.' : 'Verified full refund superseded pending refund allocations.';
     await reverseSellerCommissionForOrder(tx, parentOrderId, event.eventId, isDispute ? 'Verified full chargeback.' : 'Verified full refund.');
@@ -211,7 +251,7 @@ async function applyAdjustment(tx: Tx, event: VerifiedPaymentEvent, parentOrderI
       actorId: null,
       action: isDispute ? 'SELLER_COMMISSION_FULL_CHARGEBACK_RECONCILED' : 'SELLER_COMMISSION_FULL_REFUND_RECONCILED',
       entity: 'ParentOrder', entityId: parentOrderId,
-      metadata: { provider: event.provider, providerEventId: event.eventId, amountMinor: delta, currency: event.currency?.toUpperCase() ?? null }
+      metadata: { provider: event.provider, providerEventId: event.eventId, amountMinor: delta, currency: payment.parent.currency, providerAmountMinor: source.amountMinor, providerCurrency: event.currency?.toUpperCase() ?? null }
     } });
     if (isRefund) {
       await tx.payment.updateMany({ where: { parentId: parentOrderId, status: { in: [PaymentStatus.PAID, PaymentStatus.DISPUTED] } }, data: { status: PaymentStatus.REFUNDED } });
@@ -222,7 +262,7 @@ async function applyAdjustment(tx: Tx, event: VerifiedPaymentEvent, parentOrderI
     const reason = isDispute ? 'Verified partial chargeback requires item allocation.' : 'Verified partial refund requires item allocation.';
     const created = await createPartialRefundReview(tx, {
       parentOrderId, provider: event.provider, providerEventId: event.eventId,
-      amountMinor: delta, currency: (event.currency ?? '').toUpperCase(), reason
+      amountMinor: delta, currency: payment.parent.currency, reason
     });
     if (created) {
       const review = await tx.sellerCommissionReviewEvent.findUniqueOrThrow({ where: { provider_providerEventId: { provider: event.provider, providerEventId: event.eventId } }, select: { id: true } });
@@ -230,7 +270,7 @@ async function applyAdjustment(tx: Tx, event: VerifiedPaymentEvent, parentOrderI
         actorId: null,
         action: 'SELLER_COMMISSION_REFUND_REVIEW_CREATED',
         entity: 'SellerCommissionReviewEvent', entityId: review.id,
-        metadata: { provider: event.provider, providerEventId: event.eventId, parentOrderId, amountMinor: delta, currency: event.currency?.toUpperCase() ?? null }
+        metadata: { provider: event.provider, providerEventId: event.eventId, parentOrderId, amountMinor: delta, currency: payment.parent.currency, providerAmountMinor: source.amountMinor, providerCurrency: event.currency?.toUpperCase() ?? null }
       } });
     }
     if (isDispute) await tx.payment.updateMany({ where: { parentId: parentOrderId, status: PaymentStatus.PAID }, data: { status: PaymentStatus.DISPUTED } });
@@ -238,7 +278,10 @@ async function applyAdjustment(tx: Tx, event: VerifiedPaymentEvent, parentOrderI
   return { eventId: event.eventId, eventType: event.eventType, amountMinor: delta };
 }
 
-async function reconcileWaitingEvents(tx: Tx, provider: Provider, providerObjectRef: string, order: { id: string; totalMinor: number; currency: string }) {
+async function reconcileWaitingEvents(tx: Tx, provider: Provider, providerObjectRef: string, order: { id: string; totalMinor: number; currency: string }, attempts: { provider: PaymentMethod; metadata: Prisma.JsonValue | null }[]) {
+  const snapshot = chargeSnapshot(attempts, provider as PaymentMethod);
+  const expectedCurrency = snapshot?.chargeCurrency ?? order.currency;
+  const expectedAmount = snapshot?.chargeAmountMinor ?? order.totalMinor;
   const waiting = await tx.processedWebhookEvent.findMany({
     where: { provider: provider as PaymentMethod, providerObjectRef, reviewReason: 'AWAITING_CAPTURE_ASSOCIATION' },
     orderBy: [{ providerOccurredAt: 'asc' }, { receivedAt: 'asc' }]
@@ -246,19 +289,19 @@ async function reconcileWaitingEvents(tx: Tx, provider: Provider, providerObject
   const adjustments: { eventId: string; eventType: string; amountMinor: number }[] = [];
   for (const row of waiting) {
     let reason: string | null = null;
+    const isRefund = refundTypes[provider].has(row.eventType ?? '');
+    const isDispute = disputeTypes[provider].has(row.eventType ?? '');
     if (row.metadataOrderId && row.metadataOrderId !== order.id) reason = 'ORDER_PAYMENT_REFERENCE_MISMATCH';
     else if (row.parentOrderId && row.parentOrderId !== order.id) reason = 'ORDER_PAYMENT_REFERENCE_MISMATCH';
-    else if (row.currency?.toUpperCase() !== order.currency) reason = 'PROVIDER_AMOUNT_OR_CURRENCY_REQUIRES_REVIEW';
-    else if (row.eventType === 'charge.refunded' && (row.providerTotalMinor !== order.totalMinor || !amountIsValid(row.amountMinor) || row.amountMinor! > order.totalMinor)) reason = 'PROVIDER_AMOUNT_OR_CURRENCY_REQUIRES_REVIEW';
-    else if (row.eventType === 'charge.dispute.created' && (!amountIsValid(row.amountMinor) || row.amountMinor! > order.totalMinor)) reason = 'PROVIDER_AMOUNT_OR_CURRENCY_REQUIRES_REVIEW';
-    else if (row.eventType === 'PAYMENT.CAPTURE.REFUNDED' && (!amountIsValid(row.amountMinor) || row.amountMinor! > order.totalMinor)) reason = 'PROVIDER_AMOUNT_OR_CURRENCY_REQUIRES_REVIEW';
-    else if (row.eventType === 'CUSTOMER.DISPUTE.CREATED' && (!amountIsValid(row.amountMinor) || row.amountMinor! > order.totalMinor)) reason = 'PROVIDER_AMOUNT_OR_CURRENCY_REQUIRES_REVIEW';
-    else if (!refundTypes[provider].has(row.eventType ?? '') && !disputeTypes[provider].has(row.eventType ?? '')) reason = 'UNSUPPORTED_EVENT_TYPE';
+    else if (!isRefund && !isDispute) reason = 'UNSUPPORTED_EVENT_TYPE';
+    else if (row.currency?.toUpperCase() !== expectedCurrency || !amountIsValid(row.amountMinor) || row.amountMinor > expectedAmount) reason = 'PROVIDER_AMOUNT_OR_CURRENCY_REQUIRES_REVIEW';
+    else if (provider === 'STRIPE' && isRefund && row.providerTotalMinor !== expectedAmount) reason = 'PROVIDER_AMOUNT_OR_CURRENCY_REQUIRES_REVIEW';
     if (reason) {
       await tx.processedWebhookEvent.update({ where: { id: row.id }, data: { reviewReason: reason } });
       continue;
     }
-    await tx.processedWebhookEvent.update({ where: { id: row.id }, data: { parentOrderId: order.id, reviewReason: null } });
+    const normalizedAmountMinor = providerAmountToBase(row.amountMinor!, snapshot, order.totalMinor);
+    await tx.processedWebhookEvent.update({ where: { id: row.id }, data: { parentOrderId: order.id, reviewReason: null, normalizedAmountMinor, normalizedCurrency: snapshot?.baseCurrency ?? order.currency } });
     const result = await applyAdjustment(tx, {
       provider, eventId: row.eventId, eventType: row.eventType!, providerObjectRef,
       paymentLookupRef: providerObjectRef, metadataOrderId: row.metadataOrderId,
@@ -297,12 +340,15 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
     return { orderId: priorEvent.parentOrderId, becamePaid: false, adjustments: [], reviewReason: null };
   }
 
-  // Stripe events can carry both a Checkout Session lookup reference and its
-  // stable PaymentIntent reference. Match either only when they resolve to a
-  // single local payment; conflicting local bindings are never guessed.
+  // Match gateway session/transaction and stable payment references only when
+  // they resolve to a single local payment; conflicting bindings are never guessed.
   const references = [...new Set([lookupRef, stableRef].filter((value): value is string => Boolean(value)))];
   const candidates = references.length ? await tx.payment.findMany({
-    where: { method: event.provider as PaymentMethod, providerRef: { in: references } },
+    where: { method: event.provider as PaymentMethod, OR: [
+      { providerRef: { in: references } },
+      { attempts: { some: { provider: event.provider as PaymentMethod, providerRef: { in: references } } } },
+      ...(stableRef ? [{ attempts: { some: { provider: event.provider as PaymentMethod, metadata: { path: ['providerObjectRef'], equals: stableRef } } } }] : [])
+    ] },
     select: { id: true, parentId: true, providerRef: true }
   }) : [];
   const uniqueCandidates = [...new Map(candidates.map(candidate => [candidate.id, candidate])).values()];
@@ -325,9 +371,9 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
   }
 
   await tx.$queryRaw`SELECT "id" FROM "ParentOrder" WHERE "id" = ${payment.parentId} FOR UPDATE`;
-  const freshPayment = await tx.payment.findUnique({ where: { id: payment.id } });
+  const freshPayment = await tx.payment.findUnique({ where: { id: payment.id }, include: { attempts: true } });
   const order = await tx.parentOrder.findUnique({ where: { id: payment.parentId }, select: {
-    id: true, totalMinor: true, currency: true, status: true,
+    id: true, orderNumber: true, buyerId: true, totalMinor: true, currency: true, status: true,
     sellerOrders: { select: { id: true, sellerId: true, status: true } }
   } });
   if (!freshPayment || !order) {
@@ -336,8 +382,14 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
     await auditLegacyWebhook(tx, priorEvent, 'LEGACY_PAYMENT_WEBHOOK_REVIEW_REQUIRED', reason, null);
     return { orderId: null, becamePaid: false, adjustments: [], reviewReason: reason };
   }
+  const savedChargeSnapshot = chargeSnapshot(freshPayment.attempts, event.provider as PaymentMethod);
   const mismatched = freshPayment.method !== event.provider || (event.metadataOrderId != null && event.metadataOrderId !== order.id);
-  const currencyMatches = event.currency?.toUpperCase() === order.currency;
+  const expectedCurrency = savedChargeSnapshot?.chargeCurrency ?? order.currency;
+  const expectedAmount = savedChargeSnapshot?.chargeAmountMinor ?? order.totalMinor;
+  const currencyMatches = event.currency?.toUpperCase() === expectedCurrency;
+  const normalizedAmountMinor = (isRefund || isDispute) && currencyMatches && amountIsValid(event.amountMinor)
+    ? providerAmountToBase(event.amountMinor, savedChargeSnapshot, order.totalMinor)
+    : null;
   const commonEventData = {
     provider: event.provider as PaymentMethod, eventId: event.eventId, eventType: event.eventType,
     providerOccurredAt: event.occurredAt ?? null,
@@ -346,7 +398,9 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
     providerTotalMinor: event.providerTotalMinor ?? null,
     identityVerified: true,
     parentOrderId: order.id, amountMinor: event.amountMinor ?? null,
-    currency: event.currency?.toUpperCase() ?? null
+    currency: event.currency?.toUpperCase() ?? null,
+    normalizedAmountMinor,
+    normalizedCurrency: normalizedAmountMinor === null ? null : savedChargeSnapshot?.baseCurrency ?? order.currency
   };
   if (mismatched) {
     if (priorEvent) await tx.processedWebhookEvent.update({ where: { id: priorEvent.id }, data: { reviewReason: 'ORDER_PAYMENT_REFERENCE_MISMATCH' } });
@@ -357,7 +411,7 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
   }
 
   if (isCapture) {
-    const validCapture = event.captureConfirmed === true && currencyMatches && amountIsValid(event.amountMinor) && event.amountMinor === order.totalMinor;
+    const validCapture = event.captureConfirmed === true && currencyMatches && amountIsValid(event.amountMinor) && event.amountMinor === expectedAmount;
     const cancelledSellerOrders = order.sellerOrders.filter(sellerOrder => sellerOrder.sellerId !== null && sellerOrder.status === 'CANCELLED');
     const captureReviewReason = cancelledSellerOrders.length ? 'CAPTURE_AFTER_SELLER_CANCELLATION_REQUIRES_REVIEW' : null;
     if (priorEvent) await tx.processedWebhookEvent.update({ where: { id: priorEvent.id }, data: { ...commonEventData, parentOrderId: order.id, reviewReason: validCapture ? captureReviewReason : 'PAYMENT_AMOUNT_OR_CURRENCY_MISMATCH' } });
@@ -375,6 +429,11 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
       return { orderId: order.id, becamePaid: false, adjustments: [], reviewReason: reason };
     }
     const updated = await tx.payment.updateMany({ where: { id: freshPayment.id, status: PaymentStatus.PENDING }, data: { status: PaymentStatus.PAID, paidAt: new Date(), providerRef: event.providerObjectRef ?? lookupRef! } });
+    if (updated.count && savedChargeSnapshot) {
+      const attempt = freshPayment.attempts.find(item => item.provider === event.provider);
+      const metadata = attempt?.metadata && typeof attempt.metadata === 'object' && !Array.isArray(attempt.metadata) ? attempt.metadata as Record<string, unknown> : {};
+      if (attempt) await tx.paymentAttempt.update({ where: { id: attempt.id }, data: { status: PaymentStatus.PAID, ...(event.providerObjectRef ? { metadata: { ...metadata, providerObjectRef: event.providerObjectRef } as Prisma.InputJsonValue } : {}) } });
+    }
     const currentPayment = await tx.payment.findUniqueOrThrow({ where: { id: freshPayment.id }, select: { status: true } });
     if (updated.count || currentPayment.status === PaymentStatus.PAID) {
       if (updated.count) {
@@ -387,6 +446,14 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
           entityId: freshPayment.id,
           metadata: { provider: event.provider, providerEventId: event.eventId, parentOrderId: order.id, amountMinor: event.amountMinor, currency: order.currency }
         } });
+        await notifyOrderParties(tx, {
+          orderId: order.id, orderNumber: order.orderNumber, buyerId: order.buyerId,
+          sellerIds: order.sellerOrders.map(sellerOrder => sellerOrder.sellerId),
+          eventType: 'PAYMENT_CONFIRMED',
+          buyer: { title: 'Payment confirmed', body: `Payment for order ${order.orderNumber} was verified by ${event.provider}.`, link: '/dashboard?tab=orders' },
+          seller: { title: 'Order payment confirmed', body: `Payment for order ${order.orderNumber} was verified. Review the order in your seller dashboard.`, link: '/dashboard?mode=seller&tab=orders' },
+          admin: { title: 'Order payment verified', body: `Payment for order ${order.orderNumber} was confirmed by ${event.provider}.`, link: '/admin/platform?section=orders' }
+        });
         if (captureReviewReason) await tx.auditLog.create({ data: {
           actorId: null,
           action: 'PAYMENT_CAPTURE_AFTER_SELLER_CANCELLATION_REQUIRES_REVIEW',
@@ -397,7 +464,7 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
       }
       await accrueSellerCommissionsForPaidOrder(tx, order.id, event.eventId);
       await settleAffiliateForPaidOrderInTransaction(tx, order.id, event.eventId);
-      const adjustments = stableRef ? await reconcileWaitingEvents(tx, event.provider, stableRef, order) : [];
+      const adjustments = stableRef ? await reconcileWaitingEvents(tx, event.provider, stableRef, order, freshPayment.attempts) : [];
       await auditLegacyWebhook(tx, priorEvent, 'LEGACY_PAYMENT_WEBHOOK_RECONCILED', null, order.id);
       return { orderId: order.id, becamePaid: updated.count > 0, adjustments, reviewReason: captureReviewReason };
     }
@@ -408,8 +475,8 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
 
   if (isRefund || isDispute) {
     const amountValid = amountIsValid(event.amountMinor) && currencyMatches
-      && (!isRefund || event.provider !== 'STRIPE' || event.providerTotalMinor === order.totalMinor)
-      && (event.amountMinor ?? 0) <= order.totalMinor;
+      && (!isRefund || event.provider !== 'STRIPE' || event.providerTotalMinor === expectedAmount)
+      && (event.amountMinor ?? 0) <= expectedAmount;
     if (freshPayment.status === PaymentStatus.PENDING) {
       await storeUnresolved(tx, event, 'AWAITING_CAPTURE_ASSOCIATION', order.id, priorEvent?.id);
       await auditLegacyWebhook(tx, priorEvent, 'LEGACY_PAYMENT_WEBHOOK_REVIEW_REQUIRED', 'AWAITING_CAPTURE_ASSOCIATION', order.id);
@@ -429,7 +496,21 @@ export async function reconcileVerifiedPaymentEvent(tx: Tx, event: VerifiedPayme
     if (priorEvent) await tx.processedWebhookEvent.update({ where: { id: priorEvent.id }, data: { ...commonEventData, parentOrderId: order.id, reviewReason: null } });
     else await tx.processedWebhookEvent.create({ data: { ...commonEventData, reviewReason: null } });
     const result = await applyAdjustment(tx, event, order.id);
-    if (result) await reverseAffiliateAdjustment(tx, order.id, result);
+    if (result) {
+      await reverseAffiliateAdjustment(tx, order.id, result);
+      const title = isDispute ? 'Payment dispute received' : 'Refund recorded';
+      const body = isDispute
+        ? `The payment provider reported a dispute for order ${order.orderNumber}. The marketplace is reviewing the event.`
+        : `A verified refund adjustment was recorded for order ${order.orderNumber}.`;
+      await notifyOrderParties(tx, {
+        orderId: order.id, orderNumber: order.orderNumber, buyerId: order.buyerId,
+        sellerIds: order.sellerOrders.map(sellerOrder => sellerOrder.sellerId),
+        eventType: isDispute ? 'PAYMENT_DISPUTED' : 'PAYMENT_REFUNDED',
+        buyer: { title, body, link: '/dashboard?tab=orders' },
+        seller: { title, body, link: '/dashboard?mode=seller&tab=orders' },
+        admin: { title: `Order ${isDispute ? 'payment dispute' : 'refund'} received`, body, link: '/admin/platform?section=refunds' }
+      });
+    }
     await reverseClubCoinsForOrder(tx, order.id, event.eventId, `Reversed after verified ${isDispute ? 'payment dispute' : 'payment refund'} event ${event.eventId}.`);
     await auditLegacyWebhook(tx, priorEvent, 'LEGACY_PAYMENT_WEBHOOK_RECONCILED', null, order.id);
     return { orderId: order.id, becamePaid: false, adjustments: result ? [result] : [], reviewReason: null };

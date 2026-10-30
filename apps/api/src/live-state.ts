@@ -15,6 +15,12 @@ export function canTransition(from: LiveLifecycle, to: LiveLifecycle) {
   return from === to || liveTransitions[from].includes(to);
 }
 
+export function canDeleteLiveShow(status: LiveLifecycle, recordingStatus: string) {
+  const broadcastActive = status === 'STARTING' || status === 'LIVE' || status === 'PAUSED';
+  const recordingPending = recordingStatus === 'STARTING' || recordingStatus === 'RECORDING' || recordingStatus === 'PROCESSING';
+  return !broadcastActive && !recordingPending;
+}
+
 export function effectiveLiveShoppingEnabled(input: { deploymentGate: boolean; runtimeEnabled: boolean; providerConfigured: boolean; providerHealthy: boolean }) {
   return input.deploymentGate && input.runtimeEnabled && input.providerConfigured && input.providerHealthy;
 }

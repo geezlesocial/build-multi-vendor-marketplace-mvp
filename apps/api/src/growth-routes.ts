@@ -1,12 +1,14 @@
 import crypto from 'node:crypto';
 import type { Express, Request, Response } from 'express';
-import { AffiliateAdjustmentType, AffiliateAttributionRule, AffiliatePayoutStatus, AffiliateStatus, CommissionEntryType, CommissionStatus, Prisma, ProductStatus, Role, WholesaleStatus } from '@prisma/client';
+import { AffiliateAdjustmentType, AffiliateAttributionRule, AffiliatePayoutStatus, AffiliateStatus, CommissionEntryType, CommissionStatus, MediaScanStatus, MediaUploadStatus, MessageReactionKind, Prisma, ProductStatus, Role, SellerStatus, WholesaleStatus } from '@prisma/client';
 import { z } from 'zod';
 import { audit, currentUser, prisma, requireAuth, requireRole } from './security.js';
 import { env } from './config.js';
 import { generatedReferralCode, referralTokenHash, safeInternalPath, signedReferralToken, verifySignedReferralToken, escapeHtmlAttribute } from './growth-domain.js';
 import { reverseAffiliateForOrder } from './affiliate-ledger.js';
 import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
+import { createUserNotification } from './notification-delivery.js';
+import { campaignMediaFailure } from './campaign-media-domain.js';
 
 const run = (handler: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: (error?: unknown) => void) => Promise.resolve(handler(req, res)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
@@ -40,14 +42,90 @@ async function assertAffiliateLinkStoreEligible(link: { sellerId: string | null;
 }
 
 export function registerGrowthRoutes(app: Express) {
+  app.get('/api/favorites/ids', requireAuth, run(async (_req, res) => {
+    const user = res.locals.user as { id: string };
+    const favorites = await prisma.favorite.findMany({ where: { userId: user.id }, select: { productId: true } });
+    res.json({ productIds: favorites.map(favorite => favorite.productId) });
+  }));
+  app.get('/api/member/header-summary', requireAuth, run(async (_req, res) => {
+    const user = res.locals.user as { id: string; sellerId?: string };
+    const conversationScope: Prisma.ConversationWhereInput = {
+      OR: [{ buyerId: user.id }, ...(user.sellerId ? [{ sellerId: user.sellerId }] : [])]
+    };
+    const [favoriteCount, unreadNotificationCount, unreadMessageCount, notifications, recentMessages] = await Promise.all([
+      prisma.favorite.count({ where: { userId: user.id, product: { status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] } } }),
+      prisma.notification.count({ where: { userId: user.id, readAt: null } }),
+      prisma.message.count({ where: { conversation: conversationScope, senderId: { not: user.id }, readAt: null } }),
+      prisma.notification.findMany({
+        where: { userId: user.id }, orderBy: { createdAt: 'desc' }, take: 10,
+        select: { id: true, title: true, body: true, link: true, readAt: true, createdAt: true }
+      }),
+      prisma.message.findMany({
+        where: { conversation: conversationScope }, orderBy: { sentAt: 'desc' }, take: 10,
+        select: {
+          id: true, conversationId: true, senderId: true, body: true, sentAt: true, readAt: true,
+          sender: { select: { name: true } },
+          conversation: { select: { status: true, product: { select: { name: true } } } },
+          attachments: {
+            select: { mediaAsset: { select: { id: true, kind: true, originalName: true, sizeBytes: true, scanStatus: true, scanErrorCode: true, uploadStatus: true } } }
+          }
+        }
+      })
+    ]);
+    const messageIds = recentMessages.map(message => message.id);
+    const [reactionGroups, myReactions] = messageIds.length ? await Promise.all([
+      prisma.messageReaction.groupBy({ by: ['messageId', 'reaction'], where: { messageId: { in: messageIds } }, _count: { _all: true } }),
+      prisma.messageReaction.findMany({ where: { messageId: { in: messageIds }, userId: user.id }, select: { messageId: true, reaction: true } })
+    ]) : [[], []];
+    const reactionCounts = new Map<string, Record<MessageReactionKind, number>>();
+    for (const group of reactionGroups) {
+      const counts = reactionCounts.get(group.messageId) ?? Object.fromEntries(Object.values(MessageReactionKind).map(kind => [kind, 0])) as Record<MessageReactionKind, number>;
+      counts[group.reaction] = group._count._all;
+      reactionCounts.set(group.messageId, counts);
+    }
+    const myReactionByMessage = new Map(myReactions.map(reaction => [reaction.messageId, reaction.reaction]));
+    res.set('Cache-Control', 'private, no-store');
+    res.json({
+      favoriteCount, unreadNotificationCount, unreadMessageCount,
+      notifications,
+      messages: recentMessages.map(({ sender, conversation, attachments, ...message }) => ({
+        ...message,
+        senderName: sender.name,
+        productName: conversation.product?.name ?? null,
+        conversationStatus: conversation.status,
+        attachments: attachments.map(({ mediaAsset }) => ({
+          ...mediaAsset,
+          url: mediaAsset.scanStatus === MediaScanStatus.APPROVED && mediaAsset.uploadStatus === MediaUploadStatus.COMPLETE
+            ? `/api/conversations/${encodeURIComponent(message.conversationId)}/attachments/${encodeURIComponent(mediaAsset.id)}`
+            : null
+        })),
+        reactions: reactionCounts.get(message.id) ?? Object.fromEntries(Object.values(MessageReactionKind).map(kind => [kind, 0])),
+        myReaction: myReactionByMessage.get(message.id) ?? null
+      }))
+    });
+  }));
   app.get('/api/favorites', requireAuth, run(async (_req, res) => {
     const user = res.locals.user as { id: string };
-    res.json(await prisma.favorite.findMany({ where: { userId: user.id }, include: { product: { include: { inventory: true, seller: { include: { store: true } } } } }, orderBy: { createdAt: 'desc' } }));
+    const favorites = await prisma.favorite.findMany({
+      where: { userId: user.id, product: { status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] } },
+      select: {
+        id: true, createdAt: true, productId: true,
+        product: { select: {
+          id: true, name: true, description: true, priceMinor: true, salePriceMinor: true, currency: true,
+          images: { select: { url: true, alt: true }, take: 1 },
+          inventory: { select: { quantity: true } },
+          category: { select: { name: true } },
+          seller: { select: { store: { select: { name: true, slug: true } } } }
+        } }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(favorites);
   }));
   app.post('/api/favorites/:productId', requireAuth, run(async (req, res) => {
     const user = res.locals.user as { id: string };
     const productId = idSchema.parse(param(req.params.productId));
-    const product = await prisma.product.findFirst({ where: { id: productId, status: ProductStatus.APPROVED } });
+    const product = await prisma.product.findFirst({ where: { id: productId, status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] } });
     if (!product) return res.status(404).json({ error: 'Product not found' });
     const favorite = await prisma.$transaction(async tx => {
       const existing = await tx.favorite.findUnique({ where: { userId_productId: { userId: user.id, productId } }, select: { id: true } });
@@ -223,31 +301,53 @@ export function registerGrowthRoutes(app: Express) {
     if (input.productId && !(await prisma.product.findFirst({ where: { id: input.productId, sellerId: seller.id, status: ProductStatus.APPROVED } }))) return res.status(404).json({ error: 'Product not found for seller' });
     res.status(201).json(await prisma.conversation.create({ data: { buyerId: user.id, sellerId: seller.id, productId: input.productId, orderId: input.orderId } }));
   }));
+  app.post('/api/products/:productId/contact-seller', requireAuth, run(async (req, res) => {
+    const user = res.locals.user as { id: string };
+    const productId = idSchema.parse(param(req.params.productId));
+    const input = z.object({ body: z.string().trim().min(5).max(2000) }).parse(req.body);
+    const product = await prisma.product.findFirst({
+      where: { id: productId, status: ProductStatus.APPROVED, seller: { status: SellerStatus.APPROVED } },
+      select: { id: true, name: true, sellerId: true, seller: { select: { id: true, userId: true, status: true } } }
+    });
+    const seller = product?.seller;
+    if (!product || !product.sellerId || !seller) return res.status(404).json({ error: 'This product is not currently available from an independent seller.' });
+    if (seller.userId === user.id) return res.status(403).json({ error: 'You cannot contact yourself about your own listing.' });
+
+    const result = await prisma.$transaction(async tx => {
+      const existing = await tx.conversation.findFirst({
+        where: { buyerId: user.id, sellerId: product.sellerId!, productId: product.id, status: 'OPEN' },
+        orderBy: { updatedAt: 'desc' },
+        select: { id: true }
+      });
+      const conversation = existing ?? await tx.conversation.create({ data: { buyerId: user.id, sellerId: product.sellerId!, productId: product.id } });
+      const message = await tx.message.create({ data: { conversationId: conversation.id, senderId: user.id, body: input.body } });
+      await tx.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
+      await createUserNotification(tx, {
+        userId: seller.userId,
+        eventType: 'NEW_PRODUCT_INQUIRY',
+        title: 'New product inquiry',
+        body: `A buyer sent you a message about ${product.name}.`,
+        link: '/dashboard?mode=seller&tab=messages',
+        payloadJson: { conversationId: conversation.id, productId: product.id }
+      }, 'support');
+      return { conversationId: conversation.id, messageId: message.id };
+    });
+    res.status(201).json(result);
+  }));
   app.get('/api/conversations', requireAuth, run(async (_req, res) => {
     const user = res.locals.user as { id: string; sellerId?: string };
     res.json(await prisma.conversation.findMany({ where: { OR: [{ buyerId: user.id }, ...(user.sellerId ? [{ sellerId: user.sellerId }] : [])] }, include: { messages: { orderBy: { sentAt: 'desc' }, take: 1 }, product: true }, orderBy: { updatedAt: 'desc' }, take: 100 }));
   }));
-  app.get('/api/conversations/:id/messages', requireAuth, run(async (req, res) => {
-    const user = res.locals.user as { id: string; sellerId?: string };
-    const conversation = await prisma.conversation.findFirst({ where: { id: param(req.params.id), OR: [{ buyerId: user.id }, ...(user.sellerId ? [{ sellerId: user.sellerId }] : [])] } });
-    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
-    res.json(await prisma.message.findMany({ where: { conversationId: conversation.id }, orderBy: { sentAt: 'asc' }, take: 200 }));
-  }));
-  app.post('/api/conversations/:id/messages', requireAuth, run(async (req, res) => {
-    const user = res.locals.user as { id: string; sellerId?: string };
-    const body = z.object({ body: z.string().trim().min(1).max(4000) }).parse(req.body);
-    const conversation = await prisma.conversation.findFirst({ where: { id: param(req.params.id), status: 'OPEN', OR: [{ buyerId: user.id }, ...(user.sellerId ? [{ sellerId: user.sellerId }] : [])] } });
-    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
-    const message = await prisma.$transaction(async tx => { const created = await tx.message.create({ data: { conversationId: conversation.id, senderId: user.id, body: body.body } }); await tx.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } }); return created; });
-    res.status(201).json(message);
-  }));
-
   app.get('/api/campaigns/active', run(async (req, res) => {
     const placement = z.string().trim().min(1).max(80).parse(req.query.placement ?? 'home');
     const now = new Date();
-    res.json(await prisma.marketingCampaign.findMany({ where: { placements: { has: placement }, OR: [{ status: 'PUBLISHED', OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { status: 'SCHEDULED', startsAt: { lte: now } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now } }] }] }, orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }], take: 20 }));
+    const campaigns = await prisma.marketingCampaign.findMany({ where: { placements: { has: placement }, OR: [{ status: 'PUBLISHED', OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { status: 'SCHEDULED', startsAt: { lte: now } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now } }] }] }, include: { media: { where: { mediaAsset: { uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: MediaScanStatus.APPROVED } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true, detectedMime: true } } } } }, orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }], take: 20 });
+    res.set('Cache-Control', 'no-store').json(campaigns.map(({ media, ...campaign }) => ({ ...campaign, media: media.map(item => ({ id: item.mediaAssetId, kind: item.mediaAsset.kind, position: item.position, href: item.destinationUrl, altText: item.altText, buttonLabel: item.buttonLabel, url: `/content-media/${encodeURIComponent(item.mediaAssetId)}` })) })));
   }));
-  app.get('/api/admin/campaigns', requireAuth, requireRole(Role.ADMIN, Role.CONTENT_EDITOR), run(async (_req, res) => res.json(await prisma.marketingCampaign.findMany({ orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }], take: 100 }))));
+  app.get('/api/admin/campaigns', requireAuth, requireRole(Role.ADMIN, Role.CONTENT_EDITOR), run(async (_req, res) => {
+    const campaigns = await prisma.marketingCampaign.findMany({ include: { media: { orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true, originalName: true, sizeBytes: true, scanStatus: true, scanErrorCode: true, uploadStatus: true, detectedMime: true } } } } }, orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }], take: 100 });
+    res.json(campaigns.map(({ media, ...campaign }) => ({ ...campaign, media: media.map(item => ({ id: item.mediaAssetId, kind: item.mediaAsset.kind, position: item.position, href: item.destinationUrl, altText: item.altText, buttonLabel: item.buttonLabel, originalName: item.mediaAsset.originalName, sizeBytes: item.mediaAsset.sizeBytes, detectedMime: item.mediaAsset.detectedMime, scanStatus: item.mediaAsset.scanStatus, scanErrorCode: item.mediaAsset.scanErrorCode, uploadStatus: item.mediaAsset.uploadStatus, previewUrl: `/api/admin/campaigns/${encodeURIComponent(campaign.id)}/media/${encodeURIComponent(item.mediaAssetId)}/preview` })) })));
+  }));
   app.post('/api/admin/campaigns', requireAuth, requireRole(Role.ADMIN, Role.CONTENT_EDITOR), run(async (req, res) => {
     const user = res.locals.user as { id: string };
     const input = z.object({ name: z.string().trim().min(2).max(160), placements: z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{0,79}$/i)).min(1).max(20), contentJson: z.record(z.string(), z.unknown()), priority: z.number().int().min(-1000).max(1000).default(0), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional(), reason: z.string().trim().min(5).max(500) }).parse(req.body);
@@ -288,6 +388,11 @@ export function registerGrowthRoutes(app: Express) {
       if (status === 'SCHEDULED' && !startsAt) return { error: 'Scheduled campaigns require a start time' as const };
       if (status === 'SCHEDULED' && startsAt && startsAt <= now && (existing.status !== 'SCHEDULED' || input.startsAt !== undefined)) return { error: 'New schedules require a future start time' as const };
       if (status === 'PUBLISHED' && ((startsAt && startsAt > now) || (endsAt && endsAt <= now))) return { error: 'Campaign is outside its publishing window; schedule it or adjust its dates' as const };
+      if (status === 'PUBLISHED' || status === 'SCHEDULED') {
+        const media = await tx.marketingCampaignMedia.findMany({ where: { campaignId: existing.id }, include: { mediaAsset: { select: { kind: true, scanStatus: true, uploadStatus: true } } } });
+        const mediaFailure = campaignMediaFailure(media.map(item => ({ kind: item.mediaAsset.kind, scanStatus: item.mediaAsset.scanStatus, uploadStatus: item.mediaAsset.uploadStatus, destinationUrl: item.destinationUrl, buttonLabel: item.buttonLabel })));
+        if (mediaFailure) return { error: mediaFailure as string };
+      }
       const { reason, ...fields } = input;
       const updated = await tx.marketingCampaign.update({ where: { id: existing.id }, data: { ...fields, placements: input.placements ? [...new Set(input.placements)] : undefined, contentJson: input.contentJson as Prisma.InputJsonValue | undefined, startsAt, endsAt } });
       await tx.auditLog.create({ data: { actorId: user.id, action: 'MARKETING_CAMPAIGN_UPDATED', entity: 'MarketingCampaign', entityId: updated.id, metadata: { reason, previousStatus: existing.status, status: updated.status } } });
@@ -310,8 +415,6 @@ export function registerGrowthRoutes(app: Express) {
     const products = await prisma.product.findMany({ where: { status: ProductStatus.APPROVED, OR: [{ name: { contains: query, mode: 'insensitive' } }, { description: { contains: query, mode: 'insensitive' } }] }, include: { inventory: true }, take: 30 });
     res.json({ mode: 'deterministic-fallback', notice: 'AI search is not configured; results use database text matching.', products });
   }));
-  app.post('/api/ai/chat', (_req, res) => res.status(503).json({ error: 'AI support is not configured. Browsing, checkout, and seller messaging remain available.' }));
-
   app.get('/api/admin/affiliate-settings', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
     const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
     res.json(settings ?? { affiliateEnabled: false, affiliateFundingConfigured: false, affiliateAttributionRule: AffiliateAttributionRule.LAST_VALID_CLICK, affiliateAttributionWindowDays: 30, affiliateMinimumPayoutMinor: 0 });

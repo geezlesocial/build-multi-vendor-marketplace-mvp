@@ -9,6 +9,46 @@ export async function createStripeCheckout(order: { id: string; orderNumber: str
   return stripe.checkout.sessions.create({ mode: 'payment', customer_email: order.buyerEmail, line_items: [{ price_data: { currency: order.currency.toLowerCase(), product_data: { name: `Marketplace order ${order.orderNumber}` }, unit_amount: order.totalMinor }, quantity: 1 }], metadata: { orderId: order.id, orderNumber: order.orderNumber }, success_url: successUrl, cancel_url: cancelUrl }, { idempotencyKey: `order-${order.id}` });
 }
 
+export async function createPaymongoCheckout(order: { id: string; orderNumber: string; totalMinor: number; currency: string }, successUrl: string, cancelUrl: string) {
+  const key = env.PAYMONGO_SECRET_KEY;
+  if (!key || key.toLowerCase().includes('placeholder')) throw new Error('PayMongo is not configured with a real API secret.');
+  if (order.currency !== 'PHP') throw new Error('PayMongo checkout is restricted to PHP.');
+  const auth = Buffer.from(`${key}:`).toString('base64');
+  const response = await fetch('https://api.paymongo.com/v2/checkout_sessions', {
+    method: 'POST',
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json', 'Idempotency-Key': `marketplace-checkout-${order.id}` },
+    body: JSON.stringify({ data: { attributes: {
+      line_items: [{ name: `Marketplace order ${order.orderNumber}`, amount: order.totalMinor, currency: 'PHP', quantity: 1 }],
+      payment_method_types: ['card', 'gcash', 'qrph'],
+      success_url: successUrl, cancel_url: cancelUrl, reference_number: order.id, pass_on_fees: false,
+      metadata: { orderId: order.id, orderNumber: order.orderNumber }
+    } } })
+  });
+  if (!response.ok) throw new Error(`PayMongo checkout session could not be created (${response.status}).`);
+  const result = await response.json() as { data?: { id?: string; attributes?: { checkout_url?: string } } };
+  const id = result.data?.id;
+  const checkoutUrl = result.data?.attributes?.checkout_url;
+  if (!id || !checkoutUrl || !checkoutUrl.startsWith('https://checkout.paymongo.com/')) throw new Error('PayMongo returned an invalid checkout session.');
+  return { id, checkoutUrl };
+}
+
+export async function createPaystackTransaction(order: { id: string; orderNumber: string; totalMinor: number; currency: string; buyerEmail: string }, callbackUrl: string) {
+  const key = env.PAYSTACK_SECRET_KEY;
+  if (!key || key.toLowerCase().includes('placeholder')) throw new Error('Paystack is not configured with a real API secret.');
+  if (order.currency !== 'NGN') throw new Error('Paystack checkout is restricted to NGN.');
+  const reference = `ML${order.id.replace(/[^A-Za-z0-9=.\-]/g, '')}`;
+  const response = await fetch('https://api.paystack.co/transaction/initialize', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: order.buyerEmail, amount: String(order.totalMinor), currency: 'NGN', reference, callback_url: callbackUrl, metadata: { orderId: order.id, orderNumber: order.orderNumber } })
+  });
+  if (!response.ok) throw new Error(`Paystack transaction could not be initialized (${response.status}).`);
+  const result = await response.json() as { status?: boolean; data?: { authorization_url?: string; access_code?: string; reference?: string } };
+  const authorizationUrl = result.data?.authorization_url;
+  if (!result.status || !authorizationUrl || !authorizationUrl.startsWith('https://checkout.paystack.com/') || result.data?.reference !== reference) throw new Error('Paystack returned an invalid transaction response.');
+  return { authorizationUrl, reference: result.data.reference, accessCode: result.data.access_code ?? null };
+}
+
 export async function createStripeStoreBusterCheckout(input: { fundingIntentId: string; amountMinor: number; currency: string; buyerEmail: string }, successUrl: string, cancelUrl: string) {
   if (!stripe) throw new Error('Stripe is not configured');
   return stripe.checkout.sessions.create({

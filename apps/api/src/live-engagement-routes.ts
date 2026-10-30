@@ -15,7 +15,7 @@ const reactionKinds = Object.values(LiveSessionReactionKind);
 
 async function activeSession(id: string) {
   return prisma.liveSession.findFirst({
-    where: { id, status: LiveSessionStatus.LIVE, providerSessionRef: { not: null }, seller: { is: { status: SellerStatus.APPROVED } } },
+    where: { id, deletedAt: null, status: LiveSessionStatus.LIVE, providerSessionRef: { not: null }, seller: { is: { status: SellerStatus.APPROVED } } },
     select: { id: true, providerSessionRef: true }
   });
 }

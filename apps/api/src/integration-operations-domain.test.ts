@@ -15,13 +15,15 @@ describe('integration operations policies', () => {
     const endpoints = webhookEndpointConfiguration({
       stripeCheckoutConfigured: true,
       paypalCheckoutConfigured: false,
+      paymongoCheckoutConfigured: false,
+      paystackCheckoutConfigured: false,
       storeBillingConfigured: true,
       storeBillingEnabled: false,
       walletFundingConfigured: true,
       walletFundingEnabled: false
     });
-    expect(endpoints.map(endpoint => endpoint.status)).toEqual(['CONFIGURED', 'NOT_CONFIGURED', 'DISABLED', 'DISABLED']);
+    expect(endpoints.map(endpoint => endpoint.status)).toEqual(['CONFIGURED', 'NOT_CONFIGURED', 'NOT_CONFIGURED', 'NOT_CONFIGURED', 'DISABLED', 'DISABLED']);
     expect(endpoints[0]?.note).toContain('have not been checked');
-    expect(endpoints[3]?.note).toContain('safety gates');
+    expect(endpoints[5]?.note).toContain('safety gates');
   });
 });

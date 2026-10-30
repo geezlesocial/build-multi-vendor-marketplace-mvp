@@ -14,22 +14,21 @@ const run = (handler: (req: Request, res: Response, next: NextFunction) => unkno
 const actor = (res: Response) => res.locals.user as { id: string; role: Role };
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
 const policyInput = z.object({
-  storeId: z.string().cuid().optional(), planVersionId: z.string().cuid().optional(),
-  type: z.enum(['ZERO', 'FIXED_PER_ORDER', 'PERCENTAGE', 'PERCENTAGE_PLUS_FIXED']),
-  currency: z.string().length(3).transform(value => value.toUpperCase()),
-  fixedMinor: z.number().int().min(0).max(2_000_000_000).nullable().optional(),
+  type: z.enum(['ZERO', 'PERCENTAGE']),
   basisPoints: z.number().int().min(0).max(10_000).nullable().optional(),
-  minimumMinor: z.number().int().min(0).max(2_000_000_000).nullable().optional(),
-  capMinor: z.number().int().min(0).max(2_000_000_000).nullable().optional(),
   reason: z.string().trim().min(5).max(500)
 }).strict().superRefine((input, context) => {
-  if (Boolean(input.storeId) === Boolean(input.planVersionId)) context.addIssue({ code: 'custom', message: 'Choose exactly one Store or Store Plan version.' });
-  if (input.minimumMinor != null && input.capMinor != null && input.minimumMinor > input.capMinor) context.addIssue({ code: 'custom', path: ['minimumMinor'], message: 'Minimum cannot exceed the cap.' });
-  const valid = input.type === 'ZERO' ? input.fixedMinor == null && input.basisPoints == null
-    : input.type === 'FIXED_PER_ORDER' ? input.fixedMinor != null && input.basisPoints == null
-      : input.type === 'PERCENTAGE' ? input.fixedMinor == null && input.basisPoints != null
-        : input.fixedMinor != null && input.basisPoints != null;
-  if (!valid) context.addIssue({ code: 'custom', path: ['type'], message: 'Commission terms do not match the selected policy type.' });
+  if (input.type === 'ZERO' && input.basisPoints != null) context.addIssue({ code: 'custom', path: ['basisPoints'], message: 'Zero commission has no percentage.' });
+  if (input.type === 'PERCENTAGE' && input.basisPoints == null) context.addIssue({ code: 'custom', path: ['basisPoints'], message: 'Enter a percentage for this policy.' });
+});
+const policyDraftUpdateInput = z.object({
+  type: z.enum(['ZERO', 'PERCENTAGE']),
+  basisPoints: z.number().int().min(0).max(10_000).nullable().optional(),
+  reason: z.string().trim().min(5).max(500),
+  changeReason: z.string().trim().min(5).max(500)
+}).strict().superRefine((input, context) => {
+  if (input.type === 'ZERO' && input.basisPoints != null) context.addIssue({ code: 'custom', path: ['basisPoints'], message: 'Zero commission has no percentage.' });
+  if (input.type === 'PERCENTAGE' && input.basisPoints == null) context.addIssue({ code: 'custom', path: ['basisPoints'], message: 'Enter a percentage for this policy.' });
 });
 
 export function registerCommissionRoutes(app: Express) {
@@ -51,30 +50,90 @@ export function registerCommissionRoutes(app: Express) {
   app.post('/api/admin/seller-commission-policies', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const user = actor(res);
     const input = policyInput.parse(req.body);
-    if (input.currency !== env.CURRENCY) return res.status(409).json({ error: 'Commission policy currency must match the configured checkout currency until provider currency support is verified.' });
-    const currency = await prisma.currencyCatalogEntry.findFirst({ where: { code: input.currency, active: true } });
-    if (!currency) return res.status(400).json({ error: 'Policy currency is not in the active currency catalog.' });
     const created = await prisma.$transaction(async tx => {
-      const scope = input.storeId ? `store:${input.storeId}` : `plan:${input.planVersionId}`;
       await tx.$queryRaw<Array<{ acquired: number }>>`
         WITH advisory_lock AS MATERIALIZED (
-          SELECT pg_advisory_xact_lock(hashtext(${`commission-policy:${scope}`} )::bigint)
+          SELECT pg_advisory_xact_lock(hashtext('commission-policy:free-stores')::bigint)
         )
         SELECT 1::int AS acquired FROM advisory_lock
       `;
-      if (input.storeId && !await tx.store.findUnique({ where: { id: input.storeId }, select: { id: true } })) throw Object.assign(new Error('Store not found.'), { statusCode: 404 });
-      if (input.planVersionId && !await tx.storePlanVersion.findUnique({ where: { id: input.planVersionId }, select: { id: true } })) throw Object.assign(new Error('Store Plan version not found.'), { statusCode: 404 });
-      const previous = await tx.sellerCommissionPolicyVersion.findFirst({ where: input.storeId ? { storeId: input.storeId } : { planVersionId: input.planVersionId }, orderBy: { version: 'desc' } });
+      const previous = await tx.sellerCommissionPolicyVersion.findFirst({ where: { freeStoreScopeKey: 'FREE_STORES' }, orderBy: { version: 'desc' } });
       const policy = await tx.sellerCommissionPolicyVersion.create({ data: {
-        version: (previous?.version ?? 0) + 1, storeId: input.storeId, planVersionId: input.planVersionId,
-        type: input.type, currency: input.currency, fixedMinor: input.fixedMinor ?? null,
-        basisPoints: input.basisPoints ?? null, minimumMinor: input.minimumMinor ?? null,
-        capMinor: input.capMinor ?? null, reason: input.reason, createdById: user.id
+        version: (previous?.version ?? 0) + 1, freeStoreScopeKey: 'FREE_STORES',
+        type: input.type, currency: env.CURRENCY, fixedMinor: null,
+        basisPoints: input.basisPoints ?? null, minimumMinor: null,
+        capMinor: null, reason: input.reason, createdById: user.id
       } });
-      await tx.auditLog.create({ data: { actorId: user.id, action: 'SELLER_COMMISSION_POLICY_DRAFT_CREATED', entity: 'SellerCommissionPolicyVersion', entityId: policy.id, metadata: { version: policy.version, storeId: policy.storeId, planVersionId: policy.planVersionId, type: policy.type, currency: policy.currency, fixedMinor: policy.fixedMinor, basisPoints: policy.basisPoints, minimumMinor: policy.minimumMinor, capMinor: policy.capMinor, reason: policy.reason } } });
+      await tx.auditLog.create({ data: { actorId: user.id, action: 'SELLER_COMMISSION_POLICY_DRAFT_CREATED', entity: 'SellerCommissionPolicyVersion', entityId: policy.id, metadata: { version: policy.version, scope: 'FREE_STORES', type: policy.type, basisPoints: policy.basisPoints, reason: policy.reason } } });
       return policy;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     res.status(201).json(created);
+  }));
+
+  app.patch('/api/admin/seller-commission-policies/:id', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const user = actor(res);
+    const id = param(req.params.id);
+    const input = policyDraftUpdateInput.parse(req.body);
+    const updated = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "SellerCommissionPolicyVersion" WHERE "id" = ${id} FOR UPDATE`;
+      const current = await tx.sellerCommissionPolicyVersion.findUnique({ where: { id } });
+      if (!current) throw Object.assign(new Error('Commission policy draft not found.'), { statusCode: 404 });
+      if (current.status !== 'DRAFT') throw Object.assign(new Error('Only draft commission policies can be edited. Activated or retired policy versions are immutable.'), { statusCode: 409 });
+      if (current.freeStoreScopeKey !== 'FREE_STORES') throw Object.assign(new Error('Legacy scoped policies cannot be edited here. Create a new all-free-Stores draft instead.'), { statusCode: 409 });
+
+      const row = await tx.sellerCommissionPolicyVersion.update({ where: { id }, data: {
+        type: input.type,
+        basisPoints: input.type === 'PERCENTAGE' ? input.basisPoints ?? null : null,
+        reason: input.reason
+      } });
+      await tx.auditLog.create({ data: {
+        actorId: user.id,
+        action: 'SELLER_COMMISSION_POLICY_DRAFT_UPDATED',
+        entity: 'SellerCommissionPolicyVersion',
+        entityId: row.id,
+        metadata: {
+          version: row.version,
+          scope: 'FREE_STORES',
+          previous: { type: current.type, basisPoints: current.basisPoints, reason: current.reason },
+          updated: { type: row.type, basisPoints: row.basisPoints, reason: row.reason },
+          changeReason: input.changeReason
+        }
+      } });
+      return row;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    res.json(updated);
+  }));
+
+  app.delete('/api/admin/seller-commission-policies/:id', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const user = actor(res);
+    const id = param(req.params.id);
+    const reason = z.object({ reason: z.string().trim().min(5).max(500) }).strict().parse(req.body).reason;
+    const removed = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "SellerCommissionPolicyVersion" WHERE "id" = ${id} FOR UPDATE`;
+      const current = await tx.sellerCommissionPolicyVersion.findUnique({ where: { id } });
+      if (!current) throw Object.assign(new Error('Commission policy draft not found.'), { statusCode: 404 });
+      if (current.status !== 'DRAFT') throw Object.assign(new Error('Only a draft commission policy can be removed.'), { statusCode: 409 });
+      if (current.freeStoreScopeKey !== 'FREE_STORES') throw Object.assign(new Error('Legacy scoped policies cannot be removed here.'), { statusCode: 409 });
+
+      // Drafts have never been effective; setting effectiveUntil without an
+      // effectiveFrom violates SellerCommissionPolicyVersion_effective_check.
+      // Retire the draft in-place while preserving its historical terms.
+      const row = await tx.sellerCommissionPolicyVersion.update({ where: { id }, data: { status: 'RETIRED' } });
+      await tx.auditLog.create({ data: {
+        actorId: user.id,
+        action: 'SELLER_COMMISSION_POLICY_DRAFT_REMOVED',
+        entity: 'SellerCommissionPolicyVersion',
+        entityId: row.id,
+        metadata: {
+          version: row.version,
+          scope: 'FREE_STORES',
+          previous: { type: current.type, basisPoints: current.basisPoints, reason: current.reason },
+          reason
+        }
+      } });
+      return row;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    res.json({ removed: true, policy: removed });
   }));
 
   app.post('/api/admin/seller-commission-policies/:id/activate', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
@@ -85,13 +144,8 @@ export function registerCommissionRoutes(app: Express) {
       await tx.$queryRaw`SELECT "id" FROM "SellerCommissionPolicyVersion" WHERE "id" = ${param(req.params.id)} FOR UPDATE`;
       const policy = await tx.sellerCommissionPolicyVersion.findUnique({ where: { id: param(req.params.id) } });
       if (!policy || policy.status !== 'DRAFT') throw Object.assign(new Error('Only a draft policy can be activated.'), { statusCode: 409 });
-      if (policy.currency !== env.CURRENCY) throw Object.assign(new Error('Policy currency no longer matches checkout currency.'), { statusCode: 409 });
-      if (policy.storeId && !await tx.store.findUnique({ where: { id: policy.storeId }, select: { id: true } })) throw Object.assign(new Error('Policy Store no longer exists.'), { statusCode: 409 });
-      if (policy.planVersionId) {
-        const planVersion = await tx.storePlanVersion.findUnique({ where: { id: policy.planVersionId }, select: { status: true } });
-        if (planVersion?.status !== 'ACTIVE') throw Object.assign(new Error('A commission policy can only be activated for an active Store Plan version.'), { statusCode: 409 });
-      }
-      const active = await tx.sellerCommissionPolicyVersion.findFirst({ where: policy.storeId ? { storeId: policy.storeId, status: 'ACTIVE' } : { planVersionId: policy.planVersionId, status: 'ACTIVE' } });
+      if (policy.freeStoreScopeKey !== 'FREE_STORES' || policy.type === 'FIXED_PER_ORDER' || policy.type === 'PERCENTAGE_PLUS_FIXED') throw Object.assign(new Error('This is a legacy scoped policy. Create a new all-free-Stores policy; existing order snapshots are unchanged.'), { statusCode: 409 });
+      const active = await tx.sellerCommissionPolicyVersion.findFirst({ where: { freeStoreScopeKey: 'FREE_STORES', status: 'ACTIVE' } });
       if (active) await tx.sellerCommissionPolicyVersion.update({ where: { id: active.id }, data: { status: 'SUPERSEDED', effectiveUntil: now } });
       const row = await tx.sellerCommissionPolicyVersion.update({ where: { id: policy.id }, data: { status: 'ACTIVE', effectiveFrom: now, effectiveUntil: null, activatedAt: now } });
       await tx.auditLog.create({ data: { actorId: user.id, action: 'SELLER_COMMISSION_POLICY_ACTIVATED', entity: 'SellerCommissionPolicyVersion', entityId: row.id, metadata: { version: row.version, supersededPolicyId: active?.id ?? null, reason } } });
@@ -115,8 +169,8 @@ export function registerCommissionRoutes(app: Express) {
   }));
 
   app.post('/api/admin/seller-commission-preview', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
-    const input = z.object({ policy: policyInput.omit({ reason: true, storeId: true, planVersionId: true }), eligibleBaseMinor: z.number().int().min(0).max(2_000_000_000) }).strict().parse(req.body);
-    res.json({ commissionMinor: calculateCommissionMinor({ ...input.policy, fixedMinor: input.policy.fixedMinor ?? null, basisPoints: input.policy.basisPoints ?? null, minimumMinor: input.policy.minimumMinor ?? null, capMinor: input.policy.capMinor ?? null }, input.eligibleBaseMinor), eligibleBaseMinor: input.eligibleBaseMinor, currency: input.policy.currency });
+    const input = z.object({ policy: policyInput.omit({ reason: true }), eligibleBaseMinor: z.number().int().min(0).max(2_000_000_000) }).strict().parse(req.body);
+    res.json({ commissionMinor: calculateCommissionMinor({ type: input.policy.type, fixedMinor: null, basisPoints: input.policy.basisPoints ?? null, minimumMinor: null, capMinor: null }, input.eligibleBaseMinor), eligibleBaseMinor: input.eligibleBaseMinor, currency: env.CURRENCY });
   }));
 
   app.get('/api/admin/seller-commission-reviews', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {

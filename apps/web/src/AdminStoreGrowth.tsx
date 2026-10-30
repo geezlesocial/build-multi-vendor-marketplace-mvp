@@ -29,6 +29,8 @@ const providerHelp: Record<string, string> = {
   SMTP2GO: 'Use the SMTP username and password from SMTP2GO; API tokens are not SMTP passwords.',
   MAILJET: 'Use the Mailjet API key as SMTP username and the secret key as SMTP password.',
   MAILERSEND: 'Use SMTP credentials generated in MailerSend, not a REST API token.',
+  ZOHO: 'Use your Zoho account SMTP username and password or an app-specific password. The correct hostname may vary by account/data center; confirm it in Zoho Mail settings.',
+  NAMECHEAP: 'Namecheap Private Email commonly uses mail.privateemail.com with SSL on port 465. Confirm the account-specific settings in your Namecheap email dashboard.',
   MANUAL_SMTP: 'Enter a public SMTP hostname, port, TLS mode, and optional credentials supplied by your mail host.'
 };
 

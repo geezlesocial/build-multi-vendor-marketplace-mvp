@@ -45,7 +45,7 @@ async function claimDelivery(now: Date) {
 }
 
 async function processOne(deliveryId: string, now: Date) {
-  const delivery = await prisma.storeEmailDelivery.findUnique({ where: { id: deliveryId }, include: { subscriber: true, campaign: { include: { store: { select: { name: true } } } } } });
+  const delivery = await prisma.storeEmailDelivery.findUnique({ where: { id: deliveryId }, include: { subscriber: true, campaign: { include: { store: { select: { id: true, name: true } } } } } });
   if (!delivery || delivery.status !== StoreEmailDeliveryStatus.SENDING) return;
   if (delivery.campaign.status !== StoreEmailCampaignStatus.QUEUED || delivery.subscriber.status !== StoreEmailSubscriberStatus.SUBSCRIBED || !delivery.subscriber.consentRecordedAt) {
     await prisma.$transaction(async tx => {
@@ -59,6 +59,7 @@ async function processOne(deliveryId: string, now: Date) {
   try {
     await sendStoreEmailCampaign({
       to: delivery.subscriber.email,
+      storeId: delivery.campaign.store.id,
       storeName: delivery.campaign.store.name,
       subject,
       content,
@@ -91,7 +92,12 @@ async function processOne(deliveryId: string, now: Date) {
 let running = false;
 
 export async function processStoreEmailDeliveryBatch(now = new Date()) {
-  if (running || !(await storeEmailProviderStatus()).enabled) return 0;
+  if (running || !env.STORE_EMAIL_DELIVERY_AVAILABLE || !env.STORE_EMAIL_TOKEN_SECRET) return 0;
+  const [platformProvider, sellerProviderCount] = await Promise.all([
+    storeEmailProviderStatus(),
+    prisma.storeEmailProviderConfiguration.count({ where: { active: true, verifiedAt: { gte: new Date(now.getTime() - 24 * 60 * 60_000) } } })
+  ]);
+  if (!platformProvider.enabled && !sellerProviderCount) return 0;
   running = true;
   try {
     await recoverStaleClaims(now);

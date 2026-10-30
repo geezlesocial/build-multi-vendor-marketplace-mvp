@@ -1,15 +1,21 @@
 import React, { useEffect, useState } from 'react';
 
 type CredentialStatus = { key: string; referenceConfigured: boolean; referenceType: string; maskedReference: string | null; runtimeValuePresent: boolean };
-type ProviderConfiguration = { id: string; provider: 'STRIPE' | 'PAYPAL'; context: 'MARKETPLACE_CHECKOUT' | 'WALLET_FUNDING'; environment: 'SANDBOX' | 'LIVE'; name: string; enabled: boolean; archivedAt: string | null; lastCheckedAt: string | null; readiness: { ready: boolean; code: string; message: string; credentials: CredentialStatus[] }; credentialReferences: CredentialStatus[] };
-type PaymentMethod = { method: 'STRIPE' | 'PAYPAL' | 'COD' | 'POS'; enabled: boolean };
+type ProviderConfiguration = { id: string; provider: 'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK'; context: 'MARKETPLACE_CHECKOUT' | 'WALLET_FUNDING'; environment: 'SANDBOX' | 'LIVE'; name: string; enabled: boolean; archivedAt: string | null; lastCheckedAt: string | null; readiness: { ready: boolean; code: string; message: string; credentials: CredentialStatus[] }; credentialReferences: CredentialStatus[] };
+type PaymentMethod = { method: 'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK' | 'COD' | 'POS'; enabled: boolean };
 type IntegrationData = { configurations: ProviderConfiguration[]; paymentMethods: PaymentMethod[]; liveConfigurationGate: boolean; storeBillingSandbox: { enabled: boolean; liveBillingEnabled: false }; notes: { secrets: string; checkout: string; wallet: string; storeBilling: string } };
-type Provider = 'STRIPE' | 'PAYPAL';
+type Provider = 'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK';
 type Context = 'MARKETPLACE_CHECKOUT' | 'WALLET_FUNDING';
 type ReferenceField = 'apiSecret' | 'webhookSecret' | 'clientId' | 'clientSecret' | 'webhookId';
 
-const fieldsFor = (provider: Provider, context: Context): ReferenceField[] => context === 'WALLET_FUNDING' || provider === 'STRIPE' ? ['apiSecret', 'webhookSecret'] : ['clientId', 'clientSecret', 'webhookId'];
-const envNames: Record<ReferenceField, string> = { apiSecret: 'STRIPE_SECRET_KEY', webhookSecret: 'STRIPE_WEBHOOK_SECRET', clientId: 'PAYPAL_CLIENT_ID', clientSecret: 'PAYPAL_CLIENT_SECRET', webhookId: 'PAYPAL_WEBHOOK_ID' };
+const fieldsFor = (provider: Provider, context: Context): ReferenceField[] => context === 'WALLET_FUNDING' || provider === 'STRIPE' ? ['apiSecret', 'webhookSecret'] : provider === 'PAYPAL' ? ['clientId', 'clientSecret', 'webhookId'] : provider === 'PAYMONGO' ? ['apiSecret', 'webhookSecret'] : ['apiSecret'];
+const envNames: Record<Provider, Partial<Record<ReferenceField, string>>> = {
+  STRIPE: { apiSecret: 'STRIPE_SECRET_KEY', webhookSecret: 'STRIPE_WEBHOOK_SECRET' },
+  PAYPAL: { clientId: 'PAYPAL_CLIENT_ID', clientSecret: 'PAYPAL_CLIENT_SECRET', webhookId: 'PAYPAL_WEBHOOK_ID' },
+  PAYMONGO: { apiSecret: 'PAYMONGO_SECRET_KEY', webhookSecret: 'PAYMONGO_WEBHOOK_SECRET' },
+  PAYSTACK: { apiSecret: 'PAYSTACK_SECRET_KEY' }
+};
+const envNameFor = (provider: Provider, key: ReferenceField) => envNames[provider][key] ?? 'UNCONFIGURED';
 const title = (value: string) => value.replaceAll('_', ' ').toLowerCase().replace(/(^| )\w/g, part => part.toUpperCase());
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -36,12 +42,13 @@ export function AdminIntegrations({ section = 'providers' }: { section?: 'provid
   const [codMaxInput, setCodMaxInput] = useState('');
 
   const load = async () => {
-    const [integrations, platformSettings] = await Promise.all([
-      api<IntegrationData>('/api/admin/integrations'),
-      api<{ codMaxMinor: number | null }>('/api/admin/platform/settings')
-    ]);
-    setData(integrations);
-    setCodMaxInput(platformSettings.codMaxMinor == null ? '' : String(platformSettings.codMaxMinor));
+    if (section === 'methods') {
+      const settings = await api<{ paymentMethods: PaymentMethod[]; codMaxMinor: number | null }>('/api/admin/payment-settings');
+      setData({ configurations: [], paymentMethods: settings.paymentMethods, liveConfigurationGate: false, storeBillingSandbox: { enabled: false, liveBillingEnabled: false }, notes: { secrets: '', checkout: '', wallet: '', storeBilling: '' } });
+      setCodMaxInput(settings.codMaxMinor == null ? '' : String(settings.codMaxMinor));
+      return;
+    }
+    setData(await api<IntegrationData>('/api/admin/integrations'));
   };
   useEffect(() => { load().catch(error => setMessage(error.message)).finally(() => setLoading(false)); }, []);
   const perform = async (work: () => Promise<unknown>, success: string) => {
@@ -107,7 +114,7 @@ export function AdminIntegrations({ section = 'providers' }: { section?: 'provid
         {editingId === item.id ? <form className="integrationEditForm" onSubmit={event => saveEdit(event, item)}>
           <label>Configuration name<input required minLength={2} maxLength={80} value={editName} onChange={event => setEditName(event.target.value)} /></label>
           <fieldset><legend>Replace references only (never enter secret values)</legend>{item.credentialReferences.map(credential => <div key={credential.key}>
-            <label>{title(credential.key)} reference<input disabled={item.enabled} autoComplete="off" value={editReferences[credential.key as ReferenceField] ?? ''} placeholder={credential.maskedReference ?? `env:${envNames[credential.key as ReferenceField]}`} onChange={event => setEditReferences({ ...editReferences, [credential.key]: event.target.value })} /></label>
+            <label>{title(credential.key)} reference<input disabled={item.enabled} autoComplete="off" value={editReferences[credential.key as ReferenceField] ?? ''} placeholder={credential.maskedReference ?? `env:${envNameFor(item.provider, credential.key as ReferenceField)}`} onChange={event => setEditReferences({ ...editReferences, [credential.key]: event.target.value })} /></label>
             {credential.referenceConfigured && <label className="storePlanCheck"><input type="checkbox" disabled={item.enabled} checked={removeReferences.includes(credential.key as ReferenceField)} onChange={event => setRemoveReferences(event.target.checked ? [...removeReferences, credential.key as ReferenceField] : removeReferences.filter(key => key !== credential.key))} />Remove this saved reference</label>}
           </div>)}</fieldset>
           <button className="primary" disabled={saving}>Save configuration changes</button><button type="button" onClick={() => setEditingId('')}>Cancel</button>
@@ -121,11 +128,11 @@ export function AdminIntegrations({ section = 'providers' }: { section?: 'provid
         <h4>Add a provider configuration</h4>
         <div className="storePlanNumberGrid">
           <label>Context<select value={form.context} onChange={event => { const context = event.target.value as Context; const provider = context === 'WALLET_FUNDING' ? 'STRIPE' : form.provider; setForm({ ...form, context, provider, references: {} }); }}><option value="MARKETPLACE_CHECKOUT">Marketplace buyer checkout</option><option value="WALLET_FUNDING">Wallet funding (hard-gated)</option></select></label>
-          <label>Provider<select value={form.provider} disabled={form.context === 'WALLET_FUNDING'} onChange={event => setForm({ ...form, provider: event.target.value as Provider, references: {} })}><option value="STRIPE">Stripe</option>{form.context === 'MARKETPLACE_CHECKOUT' && <option value="PAYPAL">PayPal</option>}</select></label>
+          <label>Provider<select value={form.provider} disabled={form.context === 'WALLET_FUNDING'} onChange={event => setForm({ ...form, provider: event.target.value as Provider, references: {} })}><option value="STRIPE">Stripe</option>{form.context === 'MARKETPLACE_CHECKOUT' && <><option value="PAYPAL">PayPal</option><option value="PAYMONGO">PayMongo (PHP)</option><option value="PAYSTACK">Paystack (NGN)</option></>}</select></label>
           <label>Environment<select value={form.environment} onChange={event => setForm({ ...form, environment: event.target.value as 'SANDBOX' | 'LIVE' })}><option value="SANDBOX">Sandbox</option><option value="LIVE">Live (deployment-gated)</option></select></label>
           <label>Configuration name<input required minLength={2} maxLength={80} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></label>
         </div>
-        <fieldset><legend>Credential references (optional until you enable the configuration)</legend>{requiredFields.map(key => <label key={key}>{title(key)} reference<input autoComplete="off" value={form.references[key] ?? ''} placeholder={`env:${envNames[key]} or secret-ref:payments/${form.provider.toLowerCase()}/${key}`} onChange={event => setForm({ ...form, references: { ...form.references, [key]: event.target.value } })} /></label>)}</fieldset>
+        <fieldset><legend>Credential references (optional until you enable the configuration)</legend>{requiredFields.map(key => <label key={key}>{title(key)} reference<input autoComplete="off" value={form.references[key] ?? ''} placeholder={`env:${envNameFor(form.provider, key)} or secret-ref:payments/${form.provider.toLowerCase()}/${key}`} onChange={event => setForm({ ...form, references: { ...form.references, [key]: event.target.value } })} /></label>)}</fieldset>
         <label>Reason<input required minLength={3} maxLength={500} value={form.reason} onChange={event => setForm({ ...form, reason: event.target.value })} /></label>
         <button className="primary" disabled={saving}>Save disabled configuration</button>
       </form>

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import './DashboardPolish.css';
 import './currency-location.css';
 import './checkout-discount.css';
 import { ContentAdmin } from './ContentAdmin.js';
@@ -18,16 +19,20 @@ import { StoreEmailAction } from './StoreEmailAction.js';
 import { EmailVerificationAction } from './EmailVerificationAction.js';
 import { Dashboard } from './Dashboard.js';
 import { MarketplaceHome } from './MarketplaceHome.js';
+import { MarketplaceCategory } from './MarketplaceCategory.js';
+import { Favorites } from './Favorites.js';
 import { ProductPage } from './ProductPage.js';
+import { JimaKnowledgeArticle } from './JimaKnowledgeArticle.js';
 import { Settings } from './Settings.js';
 import { AdminWallet } from './AdminWallet.js';
+import { MarketplaceAds } from './MarketplaceAds.js';
 import { ClubCoins, Wallet } from './Wallet.js';
 import { AppShell } from './AppShell.js';
 import { SessionProvider, useSession, type SessionUser } from './session.js';
 import { formatMinor } from './money.js';
 
 type User = SessionUser;
-type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; sellerId?: string | null; seller?: { store?: { name: string } }; category?: { name: string }; productType?: { id: string; name: string; requiresShipping: boolean } };
+type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; sellerId?: string | null; seller?: { store?: { name: string } }; category?: { name: string }; productType?: { id: string; name: string; requiresShipping: boolean } };
 type CartVariant = { id: string; name: string; priceMinor: number; currency: string; stock: number };
 type CartItem = { product: Product; quantity: number; variant?: CartVariant | null };
 type CartState = { items: CartItem[] };
@@ -54,7 +59,7 @@ function App() {
   useEffect(() => { load().catch(e => setMessage(e.message)); }, [query]);
   useEffect(() => { if (user) void loadCart().catch(e => setMessage(e.message)); else setCart({ items: [] }); }, [user?.id]);
   const cartTotal = useMemo(() => cart.items.reduce((sum, item) => sum + itemPrice(item) * item.quantity, 0), [cart]);
-  const add = async (productId: string) => { if (!user) { setView('login'); setMessage('Sign in to add items to your cart.'); return; } try { await api('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId, quantity: 1 }) }); setMessage('Added to cart'); await loadCart(); } catch (e) { setMessage((e as Error).message); } };
+  const add = async (productId: string, quantity = 1) => { if (!user) { setView('login'); setMessage('Sign in to add items to your cart.'); return; } try { await api('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId, quantity }) }); setMessage('Added to cart'); await loadCart(); } catch (e) { setMessage((e as Error).message); } };
   const login = async (form: FormData) => { try { const result = await api<{ user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) }); setUser(result.user); if (!result.user.onboardingCompletedAt) { window.location.assign('/onboarding'); return; } setCart(normalizeCart(await api<{ items: CartApiItem[] }>('/api/cart'))); setView('home'); setMessage(''); } catch (e) { setMessage((e as Error).message); } };
   const register = async (form: FormData) => { try { const result = await api<{ user: User }>('/api/auth/register', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) }); setUser(result.user); setCart({ items: [] }); window.location.assign(result.user.onboardingCompletedAt ? '/' : '/onboarding'); } catch (e) { setMessage((e as Error).message); } };
 
@@ -128,8 +133,8 @@ type ShippingQuote = { currency: string; itemSubtotalMinor: number; shippingTota
 type OrderDisplayEstimate = { currency: string; itemTotalMinor: number; shippingTotalMinor: number; totalMinor: number; purpose: 'DISPLAY_ESTIMATE_ONLY'; rateSnapshots: { provider: string; sourceDate: string; fetchedAt: string; rounding: string }[] };
 type OrderConfirmation = { orderNumber: string; total: number; itemSubtotal: number; discountMinor: number; discountCode?: string | null; shippingTotal: number; currency: string; method: string; paymentStatus: string; shipments: { storeName: string; serviceName: string; feeMinor: number; discountMinor: number; shippingMinor: number }[]; displayEstimate: OrderDisplayEstimate | null };
 type SavedOrderConfirmation = { orderNumber: string; totalMinor: number; currency: string; payment: { method: string; status: string } | null; displayEstimate: OrderDisplayEstimate | null; sellerOrders: { discountMinor?: number; discountCode?: string | null; shippingSnapshotJson: { serviceName?: unknown; feeMinor?: unknown; discountMinor?: unknown; shippingMinor?: unknown } | null; seller: { store: { name: string } } | null }[] };
-type CurrencyOptions = { checkoutCurrency: string; checkoutCompatible: boolean; displayCurrencies: { code: string; name: string; symbol: string; minorUnitExponent: number }[]; error: string | null };
-type CartEstimate = { displayCurrency: string; displayMerchandiseMinor: number; displayShippingMinor: number; displayTotalMinor: number; chargeCurrency: string; chargeMerchandiseMinor: number; discountMinor?: number; chargeShippingMinor: number; rates: { provider: string; sourceDate: string; fetchedAt: string; purpose: string }[]; note: string };
+type CurrencyOptions = { checkoutCurrency: string; checkoutCompatible: boolean; displayCurrencies: { code: string; name: string; symbol: string; minorUnitExponent: number }[]; paymentCurrencies: { method: string; code: string; name: string; symbol: string; minorUnitExponent: number }[]; error: string | null };
+type CartEstimate = { displayCurrency: string; complete: boolean; incompleteReason: string | null; displayMerchandiseMinor: number; displayShippingMinor: number; displayTotalMinor: number; chargeCurrency: string; chargeMerchandiseMinor: number; discountMinor?: number; chargeShippingMinor: number; items: { cartItemId: string; productId: string; quantity: number; sourceUnitAmountMinor: number; sourceAmountMinor: number; sourceCurrency: string; estimatedUnitAmountMinor: number; estimatedAmountMinor: number; targetCurrency: string; rate: string; provider: string; sourceDate: string; fetchedAt: string; purpose: string }[]; rates: { provider: string; sourceDate: string; fetchedAt: string; purpose: string }[]; note: string };
 
 function confirmationFromSavedOrder(order: SavedOrderConfirmation): OrderConfirmation {
   const shipments = order.sellerOrders.flatMap(sellerOrder => {
@@ -155,6 +160,7 @@ function confirmationFromSavedOrder(order: SavedOrderConfirmation): OrderConfirm
 function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnnounce }: { cart: CartState; total: number; settings: Settings; user: User | null; onChange: () => Promise<void>; onClearMessage: () => void; onAnnounce: (message: string) => void }) {
   const requestedOrderId = new URLSearchParams(window.location.search).get('order');
   const [form, setForm] = useState({ buyerName: user?.name ?? '', buyerEmail: user?.email ?? '', line1: '', city: '', region: '', postalCode: '', country: 'US', method: 'COD' });
+  const [paymentMethodManuallySelected, setPaymentMethodManuallySelected] = useState(false);
   const [result, setResult] = useState('');
   const [pendingProductId, setPendingProductId] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<OrderConfirmation | null>(null);
@@ -164,11 +170,13 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
   const [currencyOptions, setCurrencyOptions] = useState<CurrencyOptions | null>(null);
   const [displayCurrency, setDisplayCurrency] = useState('');
   const [displayEstimate, setDisplayEstimate] = useState<CartEstimate | null>(null);
+  const [providerPaymentEstimate, setProviderPaymentEstimate] = useState<CartEstimate | null>(null);
+  const [providerPaymentEstimateMessage, setProviderPaymentEstimateMessage] = useState('');
   const [estimateMessage, setEstimateMessage] = useState('');
   const [discountInput, setDiscountInput] = useState('');
   const [appliedDiscount, setAppliedDiscount] = useState<{ code: string; name: string; currency: string; discountMinor: number; eligibleSubtotalMinor: number } | null>(null);
   const [discountPending, setDiscountPending] = useState(false);
-  const nonCodMethods = useMemo(() => settings.paymentMethods.filter(x => x.enabled && ['STRIPE', 'PAYPAL'].includes(x.method)), [settings.paymentMethods]);
+  const nonCodMethods = useMemo(() => settings.paymentMethods.filter(x => x.enabled && ['STRIPE', 'PAYPAL', 'PAYMONGO', 'PAYSTACK'].includes(x.method) && (!['PAYMONGO', 'PAYSTACK'].includes(x.method) || currencyOptions?.paymentCurrencies.some(currency => currency.method === x.method))), [settings.paymentMethods, currencyOptions]);
   const codMethodEnabled = settings.paymentMethods.some(x => x.method === 'COD' && x.enabled);
   const codUnavailableMessage = 'COD is available only for physical seller items after calculating delivery and selecting a COD-enabled courier service.';
   const address = { line1: form.line1, city: form.city, region: form.region, postalCode: form.postalCode, country: form.country };
@@ -215,36 +223,61 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
     let active = true;
     setDisplayEstimate(null);
     if (!displayCurrency || !cart.items.length || !currencyOptions?.displayCurrencies.some(currency => currency.code === displayCurrency)) return;
-    if (requiresShipping && !shippingQuote) { setEstimateMessage('Calculate delivery first to see the complete display estimate.'); return; }
-    setEstimateMessage('');
-    api<CartEstimate>('/api/currency/cart-estimate', { method: 'POST', body: JSON.stringify({ displayCurrency, ...(appliedDiscount ? { discountCode: appliedDiscount.code } : {}), ...(requiresShipping ? { address, shippingQuoteToken: shippingQuote?.quoteToken } : {}) }) })
-      .then(estimate => { if (active) setDisplayEstimate(estimate); })
+    setEstimateMessage('Updating your currency estimate…');
+    const hasShippingQuote = requiresShipping && Boolean(shippingQuote?.quoteToken);
+    api<CartEstimate>('/api/currency/cart-estimate', { method: 'POST', body: JSON.stringify({ displayCurrency, ...(appliedDiscount ? { discountCode: appliedDiscount.code } : {}), ...(hasShippingQuote ? { address, shippingQuoteToken: shippingQuote!.quoteToken } : {}) }) })
+      .then(estimate => { if (active) { setDisplayEstimate(estimate); setEstimateMessage(estimate.incompleteReason ?? ''); } })
       .catch(error => { if (active) setEstimateMessage((error as Error).message); });
     return () => { active = false; };
   }, [requestedOrderId, displayCurrency, currencyOptions, cartKey, shippingQuote?.quoteToken, form.line1, form.city, form.region, form.postalCode, form.country, appliedDiscount?.code]);
 
+  const selectedProviderCurrency = currencyOptions?.paymentCurrencies.find(currency => currency.method === form.method);
+  useEffect(() => {
+    if (requestedOrderId || !selectedProviderCurrency || !cart.items.length) { setProviderPaymentEstimate(null); setProviderPaymentEstimateMessage(''); return; }
+    let active = true;
+    setProviderPaymentEstimate(null);
+    setProviderPaymentEstimateMessage('Refreshing payment conversion…');
+    const hasShippingQuote = requiresShipping && Boolean(shippingQuote?.quoteToken);
+    api<CartEstimate>('/api/currency/cart-estimate', { method: 'POST', body: JSON.stringify({ displayCurrency: selectedProviderCurrency.code, ...(appliedDiscount ? { discountCode: appliedDiscount.code } : {}), ...(hasShippingQuote ? { address, shippingQuoteToken: shippingQuote!.quoteToken } : {}) }) })
+      .then(estimate => { if (active) { setProviderPaymentEstimate(estimate); setProviderPaymentEstimateMessage(estimate.incompleteReason ?? ''); } })
+      .catch(error => { if (active) setProviderPaymentEstimateMessage((error as Error).message); });
+    return () => { active = false; };
+  }, [requestedOrderId, selectedProviderCurrency?.code, form.method, cartKey, shippingQuote?.quoteToken, form.line1, form.city, form.region, form.postalCode, form.country, appliedDiscount?.code]);
+
+  useEffect(() => {
+    if (paymentMethodManuallySelected) return;
+    const preferred = form.country === 'PH' ? 'PAYMONGO' : form.country === 'NG' ? 'PAYSTACK' : null;
+    if (preferred && methods.some(method => method.method === preferred) && form.method !== preferred) setForm(current => ({ ...current, method: preferred }));
+  }, [form.country, form.method, methods, paymentMethodManuallySelected]);
+
   useEffect(() => {
     if (!requestedOrderId) return;
     let active = true;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
     if (!user?.id) {
       setResult('Sign in to view this saved order confirmation.');
       return () => { active = false; };
     }
     onAnnounce('Loading saved order confirmation…');
-    api<SavedOrderConfirmation>(`/api/dashboard/orders/${encodeURIComponent(requestedOrderId)}`)
-      .then(order => {
+    const loadSavedOrder = async () => {
+      try {
+        const order = await api<SavedOrderConfirmation>(`/api/dashboard/orders/${encodeURIComponent(requestedOrderId)}`);
         if (!active) return;
         const savedConfirmation = confirmationFromSavedOrder(order);
         setConfirmation(savedConfirmation);
         if (order.displayEstimate) {
           setDisplayEstimate({
             displayCurrency: order.displayEstimate.currency,
+            complete: true,
+            incompleteReason: null,
             displayMerchandiseMinor: order.displayEstimate.itemTotalMinor,
             displayShippingMinor: order.displayEstimate.shippingTotalMinor,
             displayTotalMinor: order.displayEstimate.totalMinor,
             chargeCurrency: order.currency,
             chargeMerchandiseMinor: savedConfirmation.itemSubtotal,
             chargeShippingMinor: savedConfirmation.shippingTotal,
+            discountMinor: savedConfirmation.discountMinor,
+            items: [],
             rates: order.displayEstimate.rateSnapshots.map(rate => ({ ...rate, purpose: 'DISPLAY_ESTIMATE_ONLY' })),
             note: `Estimate only, restored from reference-rate snapshots saved with this order. USD order total: ${money(order.totalMinor, order.currency)}; payment status: ${savedConfirmation.paymentStatus}.`
           });
@@ -253,13 +286,15 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
         }
         setResult('');
         onAnnounce('');
-      })
-      .catch(error => {
+        if (order.payment?.method !== 'COD' && order.payment?.status === 'PENDING') pollTimer = setTimeout(() => void loadSavedOrder(), 5000);
+      } catch (error) {
         if (!active) return;
         setResult(`Your order is saved, but its confirmation details could not be loaded. ${(error as Error).message}`);
         onAnnounce('');
-      });
-    return () => { active = false; };
+      }
+    };
+    void loadSavedOrder();
+    return () => { active = false; if (pollTimer) clearTimeout(pollTimer); };
   }, [requestedOrderId, user?.id, onAnnounce]);
 
   const calculateShipping = async (selections = selectedServices) => {
@@ -310,7 +345,9 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
     if (form.method === 'COD' && !codEligible) { setResult(codUnavailableMessage); return; }
     try {
       const displayCurrencyAllowed = Boolean(currencyOptions?.displayCurrencies.some(currency => currency.code === displayCurrency));
-      const r = await api<{ orderId: string; orderNumber: string; totalMinor: number; shippingTotalMinor: number; discountMinor: number; discountCode?: string | null; currency: string; paymentStatus: string; shippingBreakdown: OrderConfirmation['shipments'] }>('/api/orders/checkout', { method: 'POST', body: JSON.stringify({ buyerName: form.buyerName, buyerEmail: form.buyerEmail, address, method: form.method, ...(displayCurrencyAllowed ? { displayCurrency } : {}), ...(appliedDiscount ? { discountCode: appliedDiscount.code } : {}), shippingQuoteToken: shippingQuote?.quoteToken ?? undefined }) });
+      const r = await api<{ orderId: string; orderNumber: string; totalMinor: number; shippingTotalMinor: number; discountMinor: number; discountCode?: string | null; currency: string; paymentStatus: string; shippingBreakdown: OrderConfirmation['shipments']; payment?: { checkoutUrl?: string; approvalUrl?: string } | null }>('/api/orders/checkout', { method: 'POST', body: JSON.stringify({ buyerName: form.buyerName, buyerEmail: form.buyerEmail, address, method: form.method, ...(displayCurrencyAllowed ? { displayCurrency } : {}), ...(appliedDiscount ? { discountCode: appliedDiscount.code } : {}), shippingQuoteToken: shippingQuote?.quoteToken ?? undefined }) });
+      const redirectUrl = r.payment?.checkoutUrl ?? r.payment?.approvalUrl;
+      if (redirectUrl) { window.location.assign(redirectUrl); return; }
       window.history.replaceState({}, '', `/checkout?order=${encodeURIComponent(r.orderId)}`);
       setConfirmation({ orderNumber: r.orderNumber, total: r.totalMinor, itemSubtotal: r.totalMinor - r.shippingTotalMinor + r.discountMinor, discountMinor: r.discountMinor, discountCode: r.discountCode, shippingTotal: r.shippingTotalMinor, currency: r.currency, method: form.method, paymentStatus: r.paymentStatus, shipments: r.shippingBreakdown, displayEstimate: null });
       setDisplayEstimate(null);
@@ -323,9 +360,11 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
   const currentDiscountMinor = appliedDiscount?.discountMinor ?? 0;
   const summaryTotal = confirmation?.total ?? (shippingQuote ? shippingQuote.totalMinor - currentDiscountMinor : total - currentDiscountMinor);
   const summaryCurrency = confirmation?.currency ?? cart.items[0]?.variant?.currency ?? cart.items[0]?.product.currency ?? 'USD';
+  const estimatedLine = (productId: string) => displayEstimate?.items.find(item => item.productId === productId);
+  const estimatedSummaryTotal = displayEstimate ? (displayEstimate.complete ? displayEstimate.displayTotalMinor : displayEstimate.displayMerchandiseMinor) : null;
   if (cart.items.length > 0 || Boolean(confirmation)) return <section className="checkout">
     <div><p className="eyebrow">Checkout</p><h1>Complete your order</h1>
-      {confirmation && <div className="notice orderConfirmation" role="status" aria-live="polite"><strong>Order confirmed</strong><p>Your order is confirmed and awaiting collection.</p><dl><div><dt>Order reference</dt><dd>{confirmation.orderNumber}</dd></div><div><dt>Total</dt><dd>{money(confirmation.total, confirmation.currency)}</dd></div><div><dt>Payment method</dt><dd>{confirmation.method === 'COD' ? 'COD (Cash on delivery)' : confirmation.method}</dd></div><div><dt>Status</dt><dd>{confirmation.paymentStatus === 'PENDING' ? 'Pending' : confirmation.paymentStatus}</dd></div></dl></div>}
+      {confirmation && <div className="notice orderConfirmation" role="status" aria-live="polite"><strong>{confirmation.paymentStatus === 'PAID' ? 'Payment received' : confirmation.method === 'COD' ? 'Order received' : 'Order received · waiting for payment confirmation'}</strong><p>{confirmation.paymentStatus === 'AWAITING_PROVIDER' ? 'Your order is saved and the payment provider is confirming the transaction. This page refreshes the status automatically; do not place the order again.' : confirmation.paymentStatus === 'PAID' ? 'Your payment has been confirmed.' : confirmation.method === 'COD' ? 'The seller will collect payment on delivery.' : 'The latest payment status is shown below.'}</p><dl><div><dt>Order reference</dt><dd>{confirmation.orderNumber}</dd></div><div><dt>Total</dt><dd>{money(confirmation.total, confirmation.currency)}</dd></div><div><dt>Payment method</dt><dd>{confirmation.method === 'COD' ? 'COD (Cash on delivery)' : confirmation.method}</dd></div><div><dt>Status</dt><dd>{confirmation.paymentStatus === 'PENDING' ? 'Pending' : confirmation.paymentStatus}</dd></div></dl></div>}
       {!confirmation && <form onSubmit={submit}>
         <label>Name<input required value={form.buyerName} onChange={event => setForm({ ...form, buyerName: event.target.value })} /></label>
         <label>Email<input required type="email" value={form.buyerEmail} onChange={event => setForm({ ...form, buyerEmail: event.target.value })} /></label>
@@ -337,19 +376,45 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
         {requiresShipping && <button type="button" onClick={() => void calculateShipping()} disabled={quotePending}>{quotePending ? 'Calculating shipping…' : shippingQuote ? 'Recalculate shipping' : 'Calculate shipping'}</button>}
         {currencyOptions && <label>Display estimate (not payment currency)<select value={displayCurrency} onChange={event => setDisplayCurrency(event.target.value)}>{currencyOptions.displayCurrencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>}
         {currencyOptions?.error && <p className="muted" role="status">{currencyOptions.error}</p>}
-        <label>Payment method<select value={form.method} onChange={event => setForm({ ...form, method: event.target.value })}>{methods.map(method => <option key={method.method} value={method.method}>{method.method}</option>)}</select></label>
+        <label>Payment method<select value={form.method} onChange={event => { setPaymentMethodManuallySelected(true); setForm({ ...form, method: event.target.value }); }}>{methods.map(method => <option key={method.method} value={method.method}>{method.method === 'PAYMONGO' ? 'PayMongo · PHP' : method.method === 'PAYSTACK' ? 'Paystack · NGN' : method.method === 'COD' ? 'Cash on delivery' : method.method}</option>)}</select></label>
+        {selectedProviderCurrency && <p className="muted" role="status">Your actual order and seller accounting stay in {currencyOptions?.checkoutCurrency}. The provider charge will be collected in {selectedProviderCurrency.code}; the current conversion estimate is shown in the summary and will be recalculated securely when you place the order.</p>}
         <button className="primary" disabled={discountPending || quotePending || (requiresShipping && !shippingQuote) || Boolean(currencyOptions && !currencyOptions.checkoutCompatible)}>Place order</button>
         {requiresShipping && !shippingQuote && <p className="muted">Calculate a covered shipping option for each Store before placing your order.</p>}{result && <p className="notice" role="alert">{result}</p>}
       </form>}
     </div>
     <aside className="summary"><h2>Summary</h2>
-      {cart.items.map(item => { const name = item.variant ? `${item.product.name} — ${item.variant.name}` : item.product.name; const available = itemStock(item); const pending = pendingProductId === item.product.id; return <div className="cartLine" key={item.product.id}><div className="cartLineInfo"><span>{name}</span><small>{money(itemPrice(item), item.variant?.currency ?? item.product.currency)} each · {available} available</small></div><div className="cartControls" aria-label={`Quantity controls for ${name}`}><button type="button" aria-label={`Decrease quantity for ${name}`} disabled={pending || item.quantity <= 1} onClick={() => void updateQuantity(item, item.quantity - 1)}>−</button><output aria-live="polite">{pending ? 'Saving…' : item.quantity}</output><button type="button" aria-label={`Increase quantity for ${name}`} disabled={pending || item.quantity >= Math.min(available, 99)} onClick={() => void updateQuantity(item, item.quantity + 1)}>+</button><button type="button" className="removeButton" aria-label={`Remove ${name} from cart`} disabled={pending} onClick={() => void updateQuantity(item, 0)}>Remove</button></div><strong>{money(itemPrice(item) * item.quantity, item.variant?.currency ?? item.product.currency)}</strong></div>; })}
-      <hr /><p>Merchandise subtotal<strong>{money(confirmation?.itemSubtotal ?? total, summaryCurrency)}</strong></p>
+      {selectedProviderCurrency && !confirmation && <div className="displayEstimate" aria-live="polite"><strong>{providerPaymentEstimate?.complete ? 'Estimated payment charge' : `Estimated merchandise in ${selectedProviderCurrency.code}`}: {providerPaymentEstimate ? money(providerPaymentEstimate.complete ? providerPaymentEstimate.displayTotalMinor : providerPaymentEstimate.displayMerchandiseMinor, selectedProviderCurrency.code) : 'Calculating…'}</strong><small>{providerPaymentEstimateMessage || `Reference-rate estimate only. Final ${selectedProviderCurrency.code} charge is recalculated and saved with the order at submission.`}</small></div>}
+      {displayEstimate && !confirmation && <div className="displayEstimate" aria-live="polite"><strong>{displayEstimate.complete ? 'Estimated order total' : 'Estimated merchandise subtotal (shipping not included)'}: {money(estimatedSummaryTotal!, displayEstimate.displayCurrency)}</strong><small>{displayEstimate.note}</small>{displayEstimate.rates[0] && <small>Rate observed {displayEstimate.rates[0].sourceDate}; fetched {new Date(displayEstimate.rates[0].fetchedAt).toLocaleString()}.</small>}</div>}
+      {cart.items.map(item => {
+        const name = item.variant ? `${item.product.name} — ${item.variant.name}` : item.product.name;
+        const available = itemStock(item);
+        const minimum = item.product.wholesaleEnabled ? item.product.wholesaleMinQuantity ?? 1 : 1;
+        const maximum = item.product.wholesaleEnabled ? Math.min(item.product.wholesaleMaxQuantity ?? 99, available, 99) : Math.min(available, 99);
+        const pending = pendingProductId === item.product.id;
+        const sourceCurrency = item.variant?.currency ?? item.product.currency;
+        const estimate = !confirmation ? estimatedLine(item.product.id) : undefined;
+        return <div className="cartLine" key={item.product.id}>
+          <div className="cartLineInfo">
+            <span>{name}</span>
+            <small>{estimate ? `≈ ${money(estimate.estimatedUnitAmountMinor, displayEstimate!.displayCurrency)} each (estimate) · ${money(itemPrice(item), sourceCurrency)} listed price · ${available} available` : `${money(itemPrice(item), sourceCurrency)} each · ${available} available`}</small>
+            {item.product.wholesaleEnabled && <small>Wholesale · {minimum}–{item.product.wholesaleMaxQuantity ?? 99} units per order</small>}
+            {item.product.wholesaleEnabled && item.quantity < minimum && <small role="status">Add {minimum - item.quantity} more unit{minimum - item.quantity === 1 ? '' : 's'} to meet the minimum.</small>}
+          </div>
+          <div className="cartControls" aria-label={`Quantity controls for ${name}`}>
+            <button type="button" aria-label={`Decrease quantity for ${name}`} disabled={pending || item.quantity <= minimum} onClick={() => void updateQuantity(item, item.quantity - 1)}>−</button>
+            <output aria-live="polite">{pending ? 'Saving…' : item.quantity}</output>
+            <button type="button" aria-label={`Increase quantity for ${name}`} disabled={pending || item.quantity >= maximum} onClick={() => void updateQuantity(item, item.quantity + 1)}>+</button>
+            <button type="button" className="removeButton" aria-label={`Remove ${name} from cart`} disabled={pending} onClick={() => void updateQuantity(item, 0)}>Remove</button>
+          </div>
+          <strong>{estimate ? `≈ ${money(estimate.estimatedAmountMinor, displayEstimate!.displayCurrency)}` : money(itemPrice(item) * item.quantity, sourceCurrency)}</strong>
+        </div>;
+      })}
+      <hr /><p>{selectedProviderCurrency && !confirmation ? `Merchandise subtotal (${summaryCurrency} platform currency)` : displayEstimate && !confirmation ? `Merchandise subtotal (${summaryCurrency} charge)` : 'Merchandise subtotal'}<strong>{money(confirmation?.itemSubtotal ?? total, summaryCurrency)}</strong></p>
       {(confirmation?.discountMinor ?? currentDiscountMinor) > 0 && <p>Product discount{(confirmation?.discountCode ?? appliedDiscount?.code) ? ` · ${confirmation?.discountCode ?? appliedDiscount?.code}` : ''}<strong>−{money(confirmation?.discountMinor ?? currentDiscountMinor, summaryCurrency)}</strong></p>}
       {confirmation ? confirmation.shipments.map(shipment => <p key={`${shipment.storeName}-${shipment.serviceName}`}>{shipment.storeName} · {shipment.serviceName}<strong>{money(shipment.shippingMinor, confirmation.currency)}</strong></p>) : shippingQuote?.shipments.map(shipment => <div className="shippingSummary" key={shipment.sellerId}><h3>{shipment.storeName}</h3><label>Delivery service<select aria-label={`Delivery service for ${shipment.storeName}`} value={shipment.selected.serviceId} onChange={event => { const next = { ...selectedServices, [shipment.sellerId]: event.target.value }; setSelectedServices(next); void calculateShipping(next); }}>{shipment.options.map(option => <option key={option.serviceId} value={option.serviceId}>{option.serviceName} · {money(option.shippingMinor, option.currency)}{option.estimatedMinDays !== null ? ` · ${option.estimatedMinDays}${option.estimatedMaxDays !== null && option.estimatedMaxDays !== option.estimatedMinDays ? `–${option.estimatedMaxDays}` : ''} days` : ''}</option>)}</select></label><p>Service fee<strong>{money(shipment.selected.feeMinor, shipment.selected.currency)}</strong></p>{shipment.selected.discount && <p>Shipping discount — {shipment.selected.discount.name}<strong>−{money(shipment.selected.discountMinor, shipment.selected.currency)}</strong></p>}<p>Shipment shipping<strong>{money(shipment.selected.shippingMinor, shipment.selected.currency)}</strong></p></div>)}
-      <hr /><p className="total">{requiresShipping && !shippingQuote && !confirmation ? 'Merchandise subtotal' : 'Order total'}<strong>{money(summaryTotal, summaryCurrency)}</strong></p>
-      {displayEstimate && <div className="displayEstimate" aria-live="polite"><strong>Estimated display total: {money(displayEstimate.displayTotalMinor, displayEstimate.displayCurrency)}</strong><small>{displayEstimate.note}</small>{displayEstimate.rates[0] && <small>Rate observed {displayEstimate.rates[0].sourceDate}; fetched {new Date(displayEstimate.rates[0].fetchedAt).toLocaleString()}.</small>}</div>}
-      {estimateMessage && <p className="muted" role="status">{estimateMessage}</p>}{requiresShipping && !shippingQuote && !confirmation ? <small>Calculate delivery first to see the complete display estimate.</small> : <small>Actual order charge remains {summaryCurrency}. No hidden tax is added.</small>}{result && !cart.items.length && <p className="notice" role="alert">{result}</p>}
+      <hr /><p className="total">{selectedProviderCurrency && !confirmation ? `Platform order total (${summaryCurrency})` : displayEstimate && !confirmation ? `Actual order charge (${summaryCurrency})` : requiresShipping && !shippingQuote && !confirmation ? 'Merchandise subtotal' : 'Order total'}<strong>{money(summaryTotal, summaryCurrency)}</strong></p>
+      {displayEstimate && confirmation && <div className="displayEstimate" aria-live="polite"><strong>Estimated display total: {money(displayEstimate.displayTotalMinor, displayEstimate.displayCurrency)}</strong><small>{displayEstimate.note}</small>{displayEstimate.rates[0] && <small>Rate observed {displayEstimate.rates[0].sourceDate}; fetched {new Date(displayEstimate.rates[0].fetchedAt).toLocaleString()}.</small>}</div>}
+      {estimateMessage && !displayEstimate && <p className="muted" role="status">{estimateMessage}</p>}{selectedProviderCurrency && !confirmation ? <small>Platform order and seller accounting remain in {summaryCurrency}; estimated payment is in {selectedProviderCurrency.code}. The provider determines the final charge at checkout.</small> : displayEstimate && !confirmation ? <small>{displayEstimate.complete ? `The estimate is informational only. Actual order charge remains ${money(summaryTotal, summaryCurrency)}.` : `Shipping is excluded. Merchandise charge is ${money(summaryTotal, summaryCurrency)}; actual payment remains in ${summaryCurrency}.`}</small> : <small>Actual order charge remains {summaryCurrency}. No hidden tax is added.</small>}{result && !cart.items.length && <p className="notice" role="alert">{result}</p>}
     </aside>
   </section>;
   return <section className="checkout"><div><p className="eyebrow">Checkout</p><h1>Complete your order</h1>{confirmation && <div className="notice orderConfirmation" role="status" aria-live="polite"><strong>Order confirmed</strong><p>Your order is confirmed and awaiting collection.</p><dl><div><dt>Order reference</dt><dd>{confirmation.orderNumber}</dd></div><div><dt>Total</dt><dd>{money(confirmation.total, confirmation.currency)}</dd></div><div><dt>Payment method</dt><dd>{confirmation.method === 'COD' ? 'COD (Cash on delivery)' : confirmation.method}</dd></div><div><dt>Status</dt><dd>{confirmation.paymentStatus === 'PENDING' ? 'Pending' : confirmation.paymentStatus}</dd></div></dl></div>}{cart.items.length === 0 ? <div className="empty">Your cart is empty.</div> : <form onSubmit={submit}><label>Name<input required value={form.buyerName} onChange={e => setForm({ ...form, buyerName: e.target.value })} /></label><label>Email<input required type="email" value={form.buyerEmail} onChange={e => setForm({ ...form, buyerEmail: e.target.value })} /></label><div className="two"><label>Address<input required value={form.line1} onChange={e => updateAddress('line1', e.target.value)} /></label><label>City<input required value={form.city} onChange={e => updateAddress('city', e.target.value)} /></label></div><div className="two"><label>Region<input required value={form.region} onChange={e => updateAddress('region', e.target.value)} /></label><label>Postal code<input required value={form.postalCode} onChange={e => updateAddress('postalCode', e.target.value)} /></label></div><label>Country code<input required minLength={2} maxLength={2} value={form.country} onChange={e => updateAddress('country', e.target.value.toUpperCase())} /></label>{requiresShipping && <button type="button" onClick={() => void calculateShipping()} disabled={quotePending}>{quotePending ? 'Calculating shipping…' : shippingQuote ? 'Recalculate shipping' : 'Calculate shipping'}</button>}{currencyOptions && <label>Display estimate (not payment currency)<select value={displayCurrency} onChange={event => setDisplayCurrency(event.target.value)}>{currencyOptions.displayCurrencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>}{currencyOptions?.error && <p className="muted" role="status">{currencyOptions.error}</p>}<label>Payment method<select value={form.method} onChange={e => setForm({ ...form, method: e.target.value })}>{methods.map(m => <option key={m.method} value={m.method}>{m.method}</option>)}</select></label><button className="primary" disabled={quotePending || (requiresShipping && !shippingQuote) || Boolean(currencyOptions && !currencyOptions.checkoutCompatible)}>Place order</button>{requiresShipping && !shippingQuote && <p className="muted">Calculate a covered shipping option for each Store before placing your order.</p>}{result && <p className="notice" role="alert">{result}</p>}</form>}</div><aside className="summary"><h2>Summary</h2>{cart.items.map(item => { const name = item.variant ? `${item.product.name} — ${item.variant.name}` : item.product.name; const available = itemStock(item); const pending = pendingProductId === item.product.id; return <div className="cartLine" key={item.product.id}><div className="cartLineInfo"><span>{name}</span><small>{money(itemPrice(item), item.variant?.currency ?? item.product.currency)} each · {available} available</small></div><div className="cartControls" aria-label={`Quantity controls for ${name}`}><button type="button" aria-label={`Decrease quantity for ${name}`} disabled={pending || item.quantity <= 1} onClick={() => void updateQuantity(item, item.quantity - 1)}>−</button><output aria-live="polite">{pending ? 'Saving…' : item.quantity}</output><button type="button" aria-label={`Increase quantity for ${name}`} disabled={pending || item.quantity >= Math.min(available, 99)} onClick={() => void updateQuantity(item, item.quantity + 1)}>+</button><button type="button" className="removeButton" aria-label={`Remove ${name} from cart`} disabled={pending} onClick={() => void updateQuantity(item, 0)}>Remove</button></div><strong>{money(itemPrice(item) * item.quantity, item.variant?.currency ?? item.product.currency)}</strong></div>; })}<hr /><p>Merchandise subtotal<strong>{money(confirmation?.itemSubtotal ?? total, summaryCurrency)}</strong></p>{confirmation ? confirmation.shipments.map(shipment => <p key={`${shipment.storeName}-${shipment.serviceName}`}>{shipment.storeName} · {shipment.serviceName}<strong>{money(shipment.shippingMinor, confirmation.currency)}</strong></p>) : shippingQuote?.shipments.map(shipment => <div className="shippingSummary" key={shipment.sellerId}><h3>{shipment.storeName}</h3><label>Delivery service<select aria-label={`Delivery service for ${shipment.storeName}`} value={shipment.selected.serviceId} onChange={event => { const next = { ...selectedServices, [shipment.sellerId]: event.target.value }; setSelectedServices(next); void calculateShipping(next); }}>{shipment.options.map(option => <option key={option.serviceId} value={option.serviceId}>{option.serviceName} · {money(option.shippingMinor, option.currency)}{option.estimatedMinDays !== null ? ` · ${option.estimatedMinDays}${option.estimatedMaxDays !== null && option.estimatedMaxDays !== option.estimatedMinDays ? `–${option.estimatedMaxDays}` : ''} days` : ''}</option>)}</select></label><p>Service fee<strong>{money(shipment.selected.feeMinor, shipment.selected.currency)}</strong></p>{shipment.selected.discount && <p>Shipping discount — {shipment.selected.discount.name}<strong>−{money(shipment.selected.discountMinor, shipment.selected.currency)}</strong></p>}<p>Shipment shipping<strong>{money(shipment.selected.shippingMinor, shipment.selected.currency)}</strong></p></div>)}<hr /><p className="total">{requiresShipping && !shippingQuote && !confirmation ? 'Merchandise subtotal' : 'Order total'}<strong>{money(summaryTotal, summaryCurrency)}</strong></p>{displayEstimate && <div className="displayEstimate" aria-live="polite"><strong>Estimated display total: {money(displayEstimate.displayTotalMinor, displayEstimate.displayCurrency)}</strong><small>{displayEstimate.note}</small>{displayEstimate.rates[0] && <small>Rate observed {displayEstimate.rates[0].sourceDate}; fetched {new Date(displayEstimate.rates[0].fetchedAt).toLocaleString()}.</small>}</div>}{estimateMessage && <p className="muted" role="status">{estimateMessage}</p>}{requiresShipping && !shippingQuote && !confirmation ? <small>Final charge total appears after shipping is calculated for every Store.</small> : <small>Actual order charge remains {summaryCurrency}. No hidden tax is added.</small>}{result && !cart.items.length && <p className="notice" role="alert">{result}</p>}</aside></section>;
@@ -359,6 +424,30 @@ function Admin() { const [settings, setSettings] = useState<{ marketplace: { mul
 
 function POS({ products }: { products: Product[] }) { const [items, setItems] = useState<Record<string, number>>({}); const [message, setMessage] = useState(''); const sale = async () => { try { const result = await api<{ receiptUrl: string }>('/api/pos/sales', { method: 'POST', body: JSON.stringify({ register: 'browser-1', items: Object.entries(items).filter(([, quantity]) => quantity > 0).map(([productId, quantity]) => ({ productId, quantity })) }) }); setMessage(`Sale created. Receipt: ${result.receiptUrl}`); setItems({}); } catch (e) { setMessage((e as Error).message); } }; return <section className="page"><p className="eyebrow">Seller-scoped cash register</p><h1>POS</h1><p className="muted">This is browser cash POS only. It does not process card-present payments or connect to hardware.</p><div className="grid posGrid">{products.map(p => <article className="card compact" key={p.id}><div><h2>{p.name}</h2><p>{money(p.salePriceMinor ?? p.priceMinor)} · {p.availableStock} available</p></div><input aria-label={`Quantity for ${p.name}`} type="number" min="0" max={p.availableStock} value={items[p.id] ?? 0} onChange={e => setItems({ ...items, [p.id]: Number(e.target.value) })} /></article>)}</div><button className="primary" onClick={sale}>Complete cash sale</button>{message && <p className="notice">{message}</p>}</section>; }
 
-function PageRouter() { const storeContentPath = window.location.pathname === '/seller/content'; const storeGrowthPath = window.location.pathname === '/seller/growth'; const storePath = window.location.pathname.match(/^\/store\/([^/]+)\/?$/); const productPath = window.location.pathname.match(/^\/products\/([^/]+)\/?$/); return storeContentPath ? <SellerStoreContent /> : storeGrowthPath ? <SellerStoreGrowth /> : window.location.pathname === '/email/confirm' ? <StoreEmailAction kind="confirm" /> : window.location.pathname === '/email/unsubscribe' ? <StoreEmailAction kind="unsubscribe" /> : window.location.pathname === '/seller/currency' ? <SellerStoreCurrency /> : window.location.pathname === '/seller/commissions' ? <SellerCommissionStatement /> : window.location.pathname === '/admin/currencies' ? <AdminCurrencyCommission section="currencies" /> : window.location.pathname === '/admin/commissions' ? <AdminCurrencyCommission section="commissions" /> : window.location.pathname === '/dashboard' ? <Dashboard /> : window.location.pathname === '/settings' ? <Settings /> : window.location.pathname === '/wallet' ? <Wallet /> : window.location.pathname === '/club-coins' ? <ClubCoins /> : window.location.pathname === '/admin/wallet' ? <AdminWallet /> : window.location.pathname.startsWith('/admin/content') ? <ContentAdmin /> : window.location.pathname.startsWith('/admin/platform') ? <PlatformAdmin /> : window.location.pathname.startsWith('/seller/plan') ? <SellerStorePlan /> : window.location.pathname.startsWith('/seller/platform') ? <SellerPlatform /> : window.location.pathname.startsWith('/affiliate') ? <AffiliateDashboard /> : storePath ? <Storefront slug={decodeURIComponent(storePath[1])} /> : productPath ? <ProductPage id={decodeURIComponent(productPath[1])} /> : <App />; }
+function DomainRootRoute() {
+  const [storeSlug, setStoreSlug] = useState<string | null>(null);
+  const [resolved, setResolved] = useState(false);
+  useEffect(() => {
+    let active = true;
+    fetch('/api/public/store-domain', { credentials: 'omit' })
+      .then(async response => response.ok ? await response.json() as { storeSlug?: string } : null)
+      .then(result => { if (active) { setStoreSlug(typeof result?.storeSlug === 'string' ? result.storeSlug : null); setResolved(true); } })
+      .catch(() => { if (active) setResolved(true); });
+    return () => { active = false; };
+  }, []);
+  if (!resolved) return <main className="shellLoading" role="status"><p className="eyebrow">Marketplace</p><h1>Opening Store…</h1></main>;
+  return storeSlug ? <Storefront slug={storeSlug} /> : <App />;
+}
+
+function PageRouter() {
+  const path = window.location.pathname;
+  const storeContentPath = path === '/seller/content';
+  const storeGrowthPath = path === '/seller/growth';
+  const storePath = path.match(/^\/store\/([^/]+)\/?$/);
+  const categoryPath = path.match(/^\/category\/([^/]+)\/?$/);
+  const productPath = path.match(/^\/products\/([^/]+)\/?$/);
+  const jimaHelpPath = path.match(/^\/help\/jima\/([^/]+)\/?$/);
+  return storeContentPath ? <SellerStoreContent /> : storeGrowthPath ? <SellerStoreGrowth /> : path === '/email/confirm' ? <StoreEmailAction kind="confirm" /> : path === '/email/unsubscribe' ? <StoreEmailAction kind="unsubscribe" /> : path === '/seller/currency' ? <SellerStoreCurrency /> : path === '/seller/commissions' ? <SellerCommissionStatement /> : path === '/admin/currencies' ? <AdminCurrencyCommission section="currencies" /> : path === '/admin/commissions' ? <AdminCurrencyCommission section="commissions" /> : path === '/dashboard' ? <Dashboard /> : path === '/ads' ? <MarketplaceAds /> : path === '/admin/ads' ? <MarketplaceAds admin /> : path === '/favorites' ? <Favorites /> : path === '/settings' ? <Settings /> : path === '/wallet' ? <Wallet /> : path === '/club-coins' ? <ClubCoins /> : path === '/admin/wallet' ? <AdminWallet /> : path.startsWith('/admin/content') ? <ContentAdmin /> : path.startsWith('/admin/platform') ? <PlatformAdmin /> : path.startsWith('/seller/plan') ? <SellerStorePlan /> : path.startsWith('/seller/platform') ? <SellerPlatform /> : path.startsWith('/affiliate') ? <AffiliateDashboard /> : jimaHelpPath ? <JimaKnowledgeArticle id={decodeURIComponent(jimaHelpPath[1])} /> : categoryPath ? <MarketplaceCategory slug={decodeURIComponent(categoryPath[1])} /> : storePath ? <Storefront slug={decodeURIComponent(storePath[1])} /> : productPath ? <ProductPage id={decodeURIComponent(productPath[1])} /> : path === '/' ? <DomainRootRoute /> : <App />;
+}
 function RoutedPage() { return window.location.pathname === '/email/verify' ? <EmailVerificationAction /> : <PageRouter />; }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><SessionProvider><AppShell><RoutedPage /></AppShell></SessionProvider></React.StrictMode>);

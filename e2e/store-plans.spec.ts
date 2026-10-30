@@ -248,22 +248,23 @@ test('product quotas, theme entitlements, and staff-seat limits are enforced at 
   try {
     const adminPage = await adminContext.newPage();
     await signIn(adminPage, adminEmail);
-    const demoStore = await getSellerStore(adminPage);
     const created = await newPlan(adminPage, `quota-${randomUUID().slice(0, 6)}`, { productLimit: 2, staffSeatLimit: 0, allowedThemes: ['CLASSIC'] });
     await activatePlan(adminPage, created.plan.id, created.version.id);
-    await assignPlan(adminPage, demoStore.id, created.version.id);
+    await assignPlan(adminPage, otherStoreId, created.version.id);
 
     const sellerPage = await sellerContext.newPage();
-    await signIn(sellerPage, sellerEmail);
+    await signIn(sellerPage, otherSellerEmail, isolatedSellerPassword);
     await sellerPage.goto('/seller/plan');
     await expect(sellerPage.getByRole('heading', { name: 'Plan & Billing' })).toBeVisible();
-    await expect(sellerPage.getByText('1 of 2 used')).toBeVisible();
+    await expect(sellerPage.getByText('0 of 2 used')).toBeVisible();
     await expect(sellerPage.getByText('0 of 0 used')).toBeVisible();
 
     const csrf = await csrfHeaders(sellerPage);
     const productInput = { name: 'Plan boundary item', description: 'Disposable plan quota boundary fixture.', priceMinor: 1200, stock: 2 };
     const allowed = await sellerPage.request.post('/api/products', { data: productInput, headers: csrf });
     expect(allowed.status(), await allowed.text()).toBe(201);
+    const secondAllowed = await sellerPage.request.post('/api/products', { data: { ...productInput, name: 'Second plan boundary item' }, headers: csrf });
+    expect(secondAllowed.status(), await secondAllowed.text()).toBe(201);
     const denied = await sellerPage.request.post('/api/products', { data: { ...productInput, name: 'Over quota item' }, headers: csrf });
     expect(denied.status()).toBe(409);
     const limit = await denied.json();
@@ -275,7 +276,7 @@ test('product quotas, theme entitlements, and staff-seat limits are enforced at 
     expect(deniedTheme.status()).toBe(409);
     expect(await deniedTheme.json()).toMatchObject({ code: 'PLAN_ENTITLEMENT_REQUIRED', entitlement: 'themePreset', upgradeRequired: true });
 
-    const seller = await prisma.seller.findFirst({ where: { user: { email: sellerEmail } } });
+    const seller = await prisma.seller.findFirst({ where: { user: { email: otherSellerEmail } } });
     const staffUser = await prisma.user.create({ data: { email: `seat-limit-${randomUUID().slice(0, 8)}@example.test`, name: 'Disposable Seat User', role: Role.BUYER, passwordHash: 'unused-test-only-hash', onboardingCompletedAt: new Date() } });
     await expect(prisma.sellerStaff.create({ data: { sellerId: seller!.id, userId: staffUser.id } })).rejects.toThrow(/staff seat limit/i);
   } finally {

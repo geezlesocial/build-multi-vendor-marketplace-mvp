@@ -90,7 +90,7 @@ export function registerDashboardRoutes(app: Express) {
   app.get('/api/dashboard/access', requireAuth, run(async (_req, res) => {
     const user = actor(res);
     const seller = user.sellerId ? await prisma.seller.findUnique({ where: { id: user.sellerId }, select: { id: true, status: true, reason: true, store: { select: { name: true, slug: true } } } }) : null;
-    res.json({ buyer: user.role !== Role.ADMIN, seller: seller?.status === SellerStatus.APPROVED, sellerApplication: seller ? { status: seller.status, reason: seller.reason, store: seller.store } : null, affiliateEligible: Boolean(await prisma.affiliateProfile.findUnique({ where: { userId: user.id, status: 'APPROVED' }, select: { id: true } })) });
+    res.json({ buyer: user.role !== Role.ADMIN, seller: seller?.status === SellerStatus.APPROVED && Boolean(seller.store), sellerApplication: seller ? { status: seller.status, reason: seller.reason, store: seller.store } : null, affiliateEligible: Boolean(await prisma.affiliateProfile.findUnique({ where: { userId: user.id, status: 'APPROVED' }, select: { id: true } })) });
   }));
 
   app.get('/api/dashboard/buyer', requireAuth, run(async (_req, res) => {
@@ -100,7 +100,7 @@ export function registerDashboardRoutes(app: Express) {
       prisma.parentOrder.findMany({ where: { buyerId: user.id }, include: { payment: true, sellerOrders: { include: { items: true, seller: { include: { store: true } }, shipmentUpdates: { orderBy: { createdAt: 'desc' }, take: 20 }, receiptConfirmedBy: { select: { id: true, name: true } } } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
       prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { inventory: true, seller: { include: { store: true } } } } } } } }),
       prisma.favorite.findMany({ where: { userId: user.id }, include: { product: { include: { inventory: true, seller: { include: { store: true } } } } }, orderBy: { createdAt: 'desc' }, take: 100 }),
-      prisma.conversation.findMany({ where: { buyerId: user.id }, include: { seller: { include: { store: true } }, product: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { updatedAt: 'desc' }, take: 50 }),
+      prisma.conversation.findMany({ where: { OR: [{ buyerId: user.id }, { directRecipientId: user.id }] }, include: { buyer: { select: { id: true, name: true } }, directRecipient: { select: { id: true, name: true } }, seller: { include: { store: true } }, product: { include: { images: { take: 1 } } }, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { updatedAt: 'desc' }, take: 50 }),
       prisma.notification.findMany({ where: { userId: user.id }, orderBy: { createdAt: 'desc' }, take: 20 }),
       prisma.savedAddress.findMany({ where: { userId: user.id }, orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }] }),
       prisma.affiliateProfile.findUnique({ where: { userId: user.id }, select: { id: true, status: true, referralCode: true } })
@@ -188,11 +188,12 @@ export function registerDashboardRoutes(app: Express) {
     const user = actor(res); if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
     const seller = await prisma.seller.findFirst({ where: { id: user.sellerId, status: SellerStatus.APPROVED }, include: { store: true } });
     if (!seller) return res.status(403).json({ error: 'Approved seller required' });
+    if (!seller.store) return res.status(409).json({ error: 'Your seller application is approved, but Store setup is incomplete. Ask a marketplace administrator to retry Store provisioning from Sellers & stores.', code: 'SELLER_STORE_REQUIRED' });
     const [summary, products, orders, conversations, payoutMethods, payouts, live] = await Promise.all([
       sellerDashboardSummary(seller.id),
       prisma.product.findMany({ where: { sellerId: seller.id }, include: { inventory: true, variants: true, category: true, brand: true, productType: true, featureAssignments: { include: { feature: true } }, images: { orderBy: { id: 'asc' } }, mediaAttachments: { orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, originalName: true, kind: true, detectedMime: true, safeName: true, scanStatus: true, uploadStatus: true } } } } }, orderBy: { updatedAt: 'desc' }, take: 200 }),
       prisma.parentOrder.findMany({ where: { sellerOrders: { some: { sellerId: seller.id } } }, include: { payment: true, _count: { select: { sellerOrders: true } }, sellerOrders: { where: { sellerId: seller.id }, include: { items: true, shipmentUpdates: { orderBy: { createdAt: 'desc' }, take: 20 }, receiptConfirmedBy: { select: { id: true, name: true } } } } }, orderBy: { createdAt: 'desc' }, take: 100 }),
-      prisma.conversation.findMany({ where: { sellerId: seller.id }, include: { buyer: { select: { name: true } }, product: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { updatedAt: 'desc' }, take: 100 }),
+      prisma.conversation.findMany({ where: { OR: [{ sellerId: seller.id }, { directRecipientId: user.id }] }, include: { buyer: { select: { id: true, name: true } }, directRecipient: { select: { id: true, name: true } }, seller: { include: { store: true } }, product: { include: { images: { take: 1 } } }, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { updatedAt: 'desc' }, take: 100 }),
       prisma.sellerPayoutMethod.findMany({ where: { sellerId: seller.id }, orderBy: { createdAt: 'desc' } }),
       prisma.sellerPayout.findMany({ where: { sellerId: seller.id }, include: { payoutMethod: { select: { type: true, maskedIdentifier: true } } }, orderBy: { createdAt: 'desc' }, take: 50 }),
       liveShoppingState()

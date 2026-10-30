@@ -22,6 +22,9 @@ const publicProduct = (product: any) => ({
   description: product.description,
   priceMinor: product.priceMinor,
   salePriceMinor: product.salePriceMinor,
+  wholesaleEnabled: product.wholesaleEnabled,
+  wholesaleMinQuantity: product.wholesaleMinQuantity,
+  wholesaleMaxQuantity: product.wholesaleMaxQuantity,
   color: product.color,
   features: (product.featureAssignments ?? []).map((assignment: any) => ({ id: assignment.feature.id, name: assignment.feature.name })),
   currency: product.currency,
@@ -54,6 +57,35 @@ export function registerMarketplaceRoutes(app: Express) {
       productCollection: products.slice(6).map(publicProduct),
       featuredStores: stores.map(publicStore)
     });
+  }));
+
+  app.get('/api/marketplace/categories/:slug', run(async (req, res) => {
+    const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
+    if (!slug) return res.status(404).json({ error: 'This marketplace category is unavailable.' });
+    const category = await prisma.category.findFirst({ where: { slug, status: TaxonomyStatus.ACTIVE }, select: { id: true, name: true, slug: true, description: true, imageUrl: true } });
+    if (!category) return res.status(404).json({ error: 'This marketplace category is unavailable.' });
+    const activeCategories = await prisma.category.findMany({ where: { status: TaxonomyStatus.ACTIVE }, select: { id: true, parentId: true, name: true, slug: true, description: true, imageUrl: true, displayOrder: true } });
+    const categoriesByParent = new Map<string, typeof activeCategories>();
+    for (const item of activeCategories) {
+      if (!item.parentId) continue;
+      const siblings = categoriesByParent.get(item.parentId) ?? [];
+      siblings.push(item);
+      categoriesByParent.set(item.parentId, siblings);
+    }
+    const descendants = new Set([category.id]);
+    const pending = [category.id];
+    while (pending.length) {
+      const parentId = pending.pop()!;
+      for (const child of categoriesByParent.get(parentId) ?? []) {
+        if (descendants.has(child.id)) continue;
+        descendants.add(child.id);
+        pending.push(child.id);
+      }
+    }
+    const children = (categoriesByParent.get(category.id) ?? []).sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)).map(({ id, name, slug, description, imageUrl }) => ({ id, name, slug, description, imageUrl }));
+    const products = await prisma.product.findMany({ where: { ...approvedProductWhere(), inventory: { quantity: { gt: 0 } }, categoryId: { in: [...descendants] } }, include: { inventory: true, images: { take: 1 }, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true } } } }, category: true, brand: true, featureAssignments: { include: { feature: true } }, seller: { include: { store: true } } }, orderBy: { createdAt: 'desc' }, take: 48 });
+    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
+    res.json({ category, children, items: products.map(publicProduct) });
   }));
 
   app.get('/api/marketplace/search', run(async (req, res) => {

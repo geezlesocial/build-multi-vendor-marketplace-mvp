@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import './AdminWallet.css';
+import { formatMinor } from './money.js';
 
 type Summary = {
   gates: {
@@ -21,6 +22,13 @@ type Summary = {
   walletAccounts: number;
   balances: Array<{ currency: string; _sum: Record<string, number | null> }>;
   clubCoins: { _sum: { balance: number | null }; _count: { _all: number } };
+  currencyOptions: Array<{ code: string; name: string; symbol: string | null; minorUnitExponent: number }>;
+  adminWallet: { walletId: string; status: string; balances: Array<{ currency: string; availableMinor: number; pendingMinor: number; heldMinor: number; frozenMinor: number }> } | null;
+};
+
+type WalletMemberRow = {
+  user: { id: string; name: string; email: string; emailVerified: boolean; role: string; createdAt: string };
+  account: { id: string; walletId: string | null; status: string; balances: Array<{ currency: string; availableMinor: number; pendingMinor: number; heldMinor: number; frozenMinor: number }> } | null;
 };
 
 type CoinAccountRow = {
@@ -150,6 +158,14 @@ export function AdminWallet() {
   const [draft, setDraft] = useState<RuleDraft>(blankRule);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [walletMembers, setWalletMembers] = useState<WalletMemberRow[]>([]);
+  const [walletSearch, setWalletSearch] = useState('');
+  const [selectedWalletMember, setSelectedWalletMember] = useState<WalletMemberRow | null>(null);
+  const [walletAmount, setWalletAmount] = useState('');
+  const [walletCurrency, setWalletCurrency] = useState('USD');
+  const [walletReason, setWalletReason] = useState('');
+  const [walletReference, setWalletReference] = useState('');
+  const [walletActionBusy, setWalletActionBusy] = useState(false);
 
   const loadCoinAccounts = async (search: string, cursor?: string, append = false) => {
     const params = new URLSearchParams();
@@ -177,12 +193,15 @@ export function AdminWallet() {
 
   const load = async () => {
     try {
-      const [nextSummary, nextRules] = await Promise.all([
+      const [nextSummary, nextRules, memberRows] = await Promise.all([
         request<Summary>('/api/admin/wallet/summary'),
-        request<Rule[]>('/api/admin/club-coins/rules')
+        request<Rule[]>('/api/admin/club-coins/rules'),
+        request<WalletMemberRow[]>(`/api/admin/wallet/users?q=${encodeURIComponent(walletSearch.trim())}`)
       ]);
       setSummary(nextSummary);
       setRules(nextRules);
+      setWalletMembers(memberRows);
+      if (nextSummary.currencyOptions.length && !nextSummary.currencyOptions.some(item => item.code === walletCurrency)) setWalletCurrency(nextSummary.currencyOptions[0].code);
       await loadCoinAccounts(coinQuery);
     } catch (error) {
       setMessage((error as Error).message);
@@ -194,6 +213,40 @@ export function AdminWallet() {
   if (!summary) return <section className="page"><h1>Wallet administration</h1>{message ? <p className="notice">{message}</p> : <p>Loading…</p>}</section>;
 
   const gates = summary.gates;
+  const loadWalletMembers = async (search = walletSearch) => {
+    setWalletActionBusy(true);
+    try { setWalletMembers(await request<WalletMemberRow[]>(`/api/admin/wallet/users?q=${encodeURIComponent(search.trim())}`)); }
+    catch (error) { setMessage((error as Error).message); }
+    finally { setWalletActionBusy(false); }
+  };
+  const activatePlatformWallet = async () => {
+    setWalletActionBusy(true);
+    try { await request('/api/admin/wallet/platform/activate', { method: 'POST', body: '{}' }); setMessage('Platform wallet UI314159 is active.'); await load(); }
+    catch (error) { setMessage((error as Error).message); }
+    finally { setWalletActionBusy(false); }
+  };
+  const fundWallet = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedWalletMember) return;
+    const currencyMeta = summary.currencyOptions.find(item => item.code === walletCurrency);
+    const amountMinor = Math.round(Number(walletAmount) * 10 ** (currencyMeta?.minorUnitExponent ?? 2));
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) { setMessage('Enter a valid positive amount.'); return; }
+    setWalletActionBusy(true); setMessage('');
+    try {
+      await request(`/api/admin/wallet/users/${encodeURIComponent(selectedWalletMember.user.id)}/fund`, { method: 'POST', body: JSON.stringify({ amountMinor, currency: walletCurrency, reason: walletReason, reference: walletReference, idempotencyKey: `admin-${window.crypto.randomUUID()}` }) });
+      setWalletAmount(''); setWalletReason(''); setWalletReference(''); setMessage('Audited transfer completed from platform wallet UI314159.');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setWalletActionBusy(false); }
+  };
+  const changeWalletStatus = async (row: WalletMemberRow, status: string) => {
+    const explanation = window.prompt(`Reason for changing ${row.user.name}'s eWallet status to ${status}:`);
+    if (!explanation?.trim()) return;
+    setWalletActionBusy(true);
+    try { await request(`/api/admin/wallet/users/${encodeURIComponent(row.user.id)}/status`, { method: 'PATCH', body: JSON.stringify({ status, reason: explanation.trim() }) }); await load(); setMessage('Wallet status updated.'); }
+    catch (error) { setMessage((error as Error).message); }
+    finally { setWalletActionBusy(false); }
+  };
   const draftActivationBlocked = gates.clubCoinsHardDisabled || !gates.clubCoinsEnabled || !gates.clubCoinsEarnEnabled
     || !isConnectedEvent(draft.eventType) || Boolean(draft.expiresAfterDays) || Boolean(draft.eligibleGroups.trim());
   const updatePolicy = async (field: string, value: boolean) => {
@@ -296,6 +349,45 @@ export function AdminWallet() {
       <article className="card cardBody"><h2>Wallet accounts</h2><strong>{summary.walletAccounts}</strong></article>
       <article className="card cardBody"><h2>{gates.clubCoinName} outstanding</h2><strong>{summary.clubCoins._sum.balance ?? 0}</strong><p>{summary.clubCoins._count._all} accounts · non-cash balance</p></article>
     </div>
+
+    <section className="adminCoinAccounts adminWalletMembers">
+      <div className="sectionHeading"><div><p className="eyebrow">Platform eWallet operations</p><h2>Member wallets &amp; manual funding</h2></div><span className="adminWalletBadge">{summary.adminWallet?.walletId ?? 'Platform wallet not active'}</span></div>
+      <p className="muted">Search member accounts, inspect balances, and freeze or close wallets. Manual funding is an auditable balanced transfer from the platform eWallet; it cannot create funds or bypass the server money-movement gate.</p>
+      {!summary.adminWallet && <button type="button" disabled={walletActionBusy} onClick={() => void activatePlatformWallet()}>{walletActionBusy ? 'Activating…' : 'Activate platform eWallet UI314159'}</button>}
+      {summary.adminWallet && <p className="adminWalletPlatformBalances"><strong>Platform wallet {summary.adminWallet.walletId}</strong>{summary.adminWallet.balances.length ? summary.adminWallet.balances.map(balance => <span key={balance.currency}>{balance.currency}: {formatMinor(balance.availableMinor, balance.currency)} available</span>) : <span>No available funds recorded.</span>}</p>}
+      <form className="adminCoinSearch" onSubmit={event => { event.preventDefault(); void loadWalletMembers(); }}>
+        <label>Find by name or email<input type="search" maxLength={120} value={walletSearch} onChange={event => setWalletSearch(event.target.value)} placeholder="Member name or email" /></label>
+        <button type="submit" disabled={walletActionBusy}>{walletActionBusy ? 'Searching…' : 'Search wallets'}</button>
+      </form>
+      <div className="adminCoinAccountLayout">
+        <div className="adminCoinAccountList" aria-label="Member eWallet accounts">
+          {walletMembers.length === 0 ? <div className="empty">No matching members.</div> : walletMembers.map(row => <button type="button" className={`adminCoinAccountRow${selectedWalletMember?.user.id === row.user.id ? ' isSelected' : ''}`} key={row.user.id} onClick={() => setSelectedWalletMember(row)}>
+            <span><strong>{row.user.name}</strong><small>{row.user.email} · {row.user.emailVerified ? 'verified' : 'unverified'} · {row.user.role}</small></span>
+            <span><strong>{row.account?.walletId ?? 'Not activated'}</strong><small>{row.account?.status ?? 'No wallet'}</small></span>
+          </button>)}
+        </div>
+        <div className="adminCoinAccountDetail">
+          {!selectedWalletMember ? <div className="empty">Choose a member to review their eWallet.</div> : <>
+            <div className="sectionHeading"><div><span className="adminWalletBadge">{selectedWalletMember.account?.status ?? 'No wallet'}</span><h3>{selectedWalletMember.user.name}</h3><p className="muted">{selectedWalletMember.user.email}{selectedWalletMember.user.emailVerified ? ' · verified' : ' · email verification required'}</p></div></div>
+            {selectedWalletMember.account && <>
+              <p className="adminWalletPlatformBalances"><strong>eWallet ID: {selectedWalletMember.account.walletId ?? 'Not assigned'}</strong>{selectedWalletMember.account.balances.map(balance => <span key={balance.currency}>{balance.currency}: {formatMinor(balance.availableMinor, balance.currency)} available · {formatMinor(balance.heldMinor, balance.currency)} held</span>)}</p>
+              <label className="adminWalletStatusControl">Wallet status<select disabled={walletActionBusy} value={selectedWalletMember.account.status} onChange={event => void changeWalletStatus(selectedWalletMember, event.target.value)}><option value="ACTIVE">Active</option><option value="FROZEN">Frozen</option><option value="CLOSED">Closed</option></select></label>
+            </>}
+            <form className="adminCoinAdjustment" onSubmit={event => void fundWallet(event)}>
+              <h4>Manual wallet transfer</h4>
+              <p className="muted">The recipient must have a verified email and an active wallet. The platform wallet must have sufficient available funds in the same currency.</p>
+              <div className="adminCoinRuleGrid">
+                <label>Amount<input type="number" min="0.01" step="0.01" required value={walletAmount} onChange={event => setWalletAmount(event.target.value)} /></label>
+                <label>Currency<select required value={walletCurrency} onChange={event => setWalletCurrency(event.target.value)}>{summary.currencyOptions.map(item => <option key={item.code} value={item.code}>{item.code} · {item.name}</option>)}</select></label>
+                <label>Reference<input required maxLength={160} value={walletReference} onChange={event => setWalletReference(event.target.value)} placeholder="Support ticket or funding reference" /></label>
+                <label className="adminWalletWide">Audit reason<input required minLength={8} maxLength={500} value={walletReason} onChange={event => setWalletReason(event.target.value)} placeholder="Explain and document this manual transfer" /></label>
+              </div>
+              <button className="primary" disabled={walletActionBusy || gates.moneyMovementHardDisabled || gates.walletEmergencyPause || !gates.walletEnabled || !selectedWalletMember.user.emailVerified || !selectedWalletMember.account || selectedWalletMember.account.status !== 'ACTIVE'}>{walletActionBusy ? 'Posting…' : 'Transfer from platform eWallet'}</button>
+            </form>
+          </>}
+        </div>
+      </div>
+    </section>
 
     <section className="adminCoinAccounts">
       <div className="sectionHeading"><div><p className="eyebrow">Account operations</p><h2>Club Coins accounts & ledger</h2></div><span className="adminWalletBadge">Audited · non-cash</span></div>

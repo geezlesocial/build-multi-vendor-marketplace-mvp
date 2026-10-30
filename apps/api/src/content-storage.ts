@@ -8,7 +8,7 @@ import { env } from './config.js';
 
 export interface ContentStorage {
   put(key: string, bytes: Buffer, contentType?: string): Promise<void>;
-  open(key: string): Readable;
+  open(key: string, range?: { start: number; end: number }): Readable;
   remove(key: string): Promise<void>;
 }
 
@@ -56,7 +56,7 @@ export class LocalContentStorage implements ContentStorage {
     return { bytes, contentLength: bytes.length, contentType: metadata?.contentType ?? 'application/octet-stream' };
   }
 
-  open(key: string) { return createReadStream(safePath(key)); }
+  open(key: string, range?: { start: number; end: number }) { return createReadStream(safePath(key), range); }
 
   async remove(key: string) {
     try { await unlink(safePath(key)); this.metadata.delete(key); }
@@ -99,9 +99,9 @@ export class S3ContentStorage implements ContentStorage {
     await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType, CacheControl: 'private, no-store' }));
   }
 
-  open(key: string) {
+  open(key: string, range?: { start: number; end: number }) {
     const output = new PassThrough();
-    this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key })).then(response => {
+    this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}) })).then(response => {
       const body = response.Body as Readable | undefined;
       if (!body) return output.destroy(new Error('Object body is missing'));
       body.on('error', error => output.destroy(error));
@@ -117,8 +117,8 @@ export const localContentStorage = new LocalContentStorage();
 export const objectContentStorage = env.CONTENT_OBJECT_STORAGE_AVAILABLE ? new S3ContentStorage() : null;
 export const contentStorage: ContentStorage = localContentStorage;
 
-export function openContentObject(storageProvider: 'LOCAL' | 'OBJECT', key: string) {
-  if (storageProvider === 'LOCAL') return localContentStorage.open(key);
+export function openContentObject(storageProvider: 'LOCAL' | 'OBJECT', key: string, range?: { start: number; end: number }) {
+  if (storageProvider === 'LOCAL') return localContentStorage.open(key, range);
   if (!objectContentStorage) throw new Error('Managed object storage is not available');
-  return objectContentStorage.open(key);
+  return objectContentStorage.open(key, range);
 }

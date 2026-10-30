@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { AccessToken, RoomServiceClient, TrackType } from 'livekit-server-sdk';
+import { AccessToken, EgressClient, RoomServiceClient, TrackType } from 'livekit-server-sdk';
+import { EncodedFileOutput, EncodedFileType, S3Upload } from 'livekit-server-sdk';
 import { env } from './config.js';
 
 export type LiveProviderReadiness = { provider: string | null; configured: boolean; healthy: boolean; attendanceVerificationAvailable: boolean; reason: string };
@@ -15,6 +16,9 @@ export interface LiveProviderAdapter {
   verifyHostPublishing(roomName: string, identity: string): Promise<boolean>;
   verifyViewerPlayback(roomName: string, identity: string): Promise<boolean>;
   getViewerCount(roomName: string): Promise<number>;
+  startRecording(roomName: string, storageKey: string): Promise<{ egressId: string; status: number }>;
+  stopRecording(egressId: string): Promise<{ status: number }>;
+  getRecordingStatus(egressId: string): Promise<number | null>;
   clientServerUrl(): string | null;
 }
 
@@ -30,11 +34,15 @@ export class UnavailableLiveProvider implements LiveProviderAdapter {
   async verifyHostPublishing(): Promise<boolean> { return false; }
   async verifyViewerPlayback(): Promise<boolean> { return false; }
   async getViewerCount(): Promise<number> { return 0; }
+  async startRecording(): Promise<{ egressId: string; status: number }> { throw new Error('Live recording is unavailable.'); }
+  async stopRecording(): Promise<{ status: number }> { return { status: 0 }; }
+  async getRecordingStatus(): Promise<number | null> { return null; }
   clientServerUrl(): string | null { return null; }
 }
 
 export class LiveKitProvider implements LiveProviderAdapter {
   private readonly rooms: RoomServiceClient;
+  private readonly egress: EgressClient;
   private readonly httpUrl: string;
   private readonly wsUrl: string;
 
@@ -42,6 +50,7 @@ export class LiveKitProvider implements LiveProviderAdapter {
     this.httpUrl = serverUrl(url);
     this.wsUrl = browserUrl(url);
     this.rooms = new RoomServiceClient(this.httpUrl, apiKey, apiSecret);
+    this.egress = new EgressClient(this.httpUrl, apiKey, apiSecret);
   }
 
   async getReadiness(): Promise<LiveProviderReadiness> {
@@ -83,6 +92,37 @@ export class LiveKitProvider implements LiveProviderAdapter {
     return participants.filter(participant => participant.identity.startsWith('viewer:') || participant.identity.startsWith('guest:')).length;
   }
 
+  async startRecording(roomName: string, storageKey: string) {
+    if (!env.LIVE_RECORDING_STORAGE_AVAILABLE || !env.LIVE_RECORDING_STORAGE_BUCKET || !env.LIVE_RECORDING_STORAGE_REGION || !env.LIVE_RECORDING_STORAGE_ACCESS_KEY_ID || !env.LIVE_RECORDING_STORAGE_SECRET_ACCESS_KEY) {
+      throw new Error('Private live replay storage is not configured.');
+    }
+    const file = new EncodedFileOutput({
+      fileType: EncodedFileType.MP4,
+      filepath: storageKey,
+      output: { case: 's3', value: new S3Upload({
+        accessKey: env.LIVE_RECORDING_STORAGE_ACCESS_KEY_ID,
+        secret: env.LIVE_RECORDING_STORAGE_SECRET_ACCESS_KEY,
+        region: env.LIVE_RECORDING_STORAGE_REGION,
+        bucket: env.LIVE_RECORDING_STORAGE_BUCKET,
+        endpoint: env.LIVE_RECORDING_STORAGE_ENDPOINT ?? '',
+        forcePathStyle: env.LIVE_RECORDING_STORAGE_FORCE_PATH_STYLE,
+        contentDisposition: 'inline'
+      }) }
+    });
+    const result = await this.egress.startRoomCompositeEgress(roomName, { file }, { layout: 'speaker' });
+    return { egressId: result.egressId, status: result.status };
+  }
+
+  async stopRecording(egressId: string) {
+    const result = await this.egress.stopEgress(egressId);
+    return { status: result.status };
+  }
+
+  async getRecordingStatus(egressId: string) {
+    const result = await this.egress.listEgress({ egressId });
+    return result.find(item => item.egressId === egressId)?.status ?? null;
+  }
+
   clientServerUrl() { return this.wsUrl; }
 }
 
@@ -104,6 +144,9 @@ class ReloadableLiveProvider implements LiveProviderAdapter {
   verifyHostPublishing(roomName: string, identity: string) { return this.delegate.verifyHostPublishing(roomName, identity); }
   verifyViewerPlayback(roomName: string, identity: string) { return this.delegate.verifyViewerPlayback(roomName, identity); }
   getViewerCount(roomName: string) { return this.delegate.getViewerCount(roomName); }
+  startRecording(roomName: string, storageKey: string) { return this.delegate.startRecording(roomName, storageKey); }
+  stopRecording(egressId: string) { return this.delegate.stopRecording(egressId); }
+  getRecordingStatus(egressId: string) { return this.delegate.getRecordingStatus(egressId); }
   clientServerUrl() { return this.delegate.clientServerUrl(); }
 }
 

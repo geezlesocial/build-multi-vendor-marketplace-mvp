@@ -8,6 +8,7 @@ import { env } from './config.js';
 import { audit, createSession, hashPassword, prisma, requireAuth, requireRole } from './security.js';
 import { createAccountVerificationChallenge, deliverAccountVerification } from './account-verification-routes.js';
 import { authPageCustomizationSchema, callbackUrl, oidcIssuerByProvider, oauthProviderEndpoints, parseSocialProfile, safeScrolithIssuer, socialLoginProviders, socialProviderLabels, socialProviderUpdateSchema, stateCookieName, type SocialProfile } from './social-auth-domain.js';
+import { createRoleNotifications, createUserNotification } from './notification-delivery.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const stateCookie = { httpOnly: true as const, secure: env.NODE_ENV === 'production', sameSite: 'lax' as const, maxAge: 5 * 60 * 1000 };
@@ -210,16 +211,23 @@ async function completeProviderLogin(provider: SocialLoginProvider, profile: Soc
   let verificationNeeded = false;
   try {
     if (!userId) {
-      const user = await prisma.user.create({ data: {
-        email: profile.email,
-        name: profile.name,
-        passwordHash: await hashPassword(crypto.randomBytes(48).toString('base64url')),
-        ...(profile.emailVerified ? { emailVerifiedAt: new Date() } : {})
-      } });
-      userId = user.id;
+      const created = await prisma.$transaction(async tx => {
+        const user = await tx.user.create({ data: {
+          email: profile.email,
+          name: profile.name,
+          passwordHash: await hashPassword(crypto.randomBytes(48).toString('base64url')),
+          ...(profile.emailVerified ? { emailVerifiedAt: new Date() } : {})
+        } });
+        await tx.socialLoginIdentity.create({ data: { provider, subject: profile.subject, email: profile.email, userId: user.id } });
+        await createUserNotification(tx, { userId: user.id, eventType: 'ACCOUNT_CREATED', title: 'Welcome to Market Lane', body: 'Your account is ready. Complete onboarding to start exploring the marketplace.', link: '/onboarding', payloadJson: { userId: user.id } }, 'account');
+        await createRoleNotifications(tx, Role.ADMIN, { eventType: 'ACCOUNT_CREATED', title: 'New member account created', body: `${user.name} (${user.email}) created an account using ${socialProviderLabels[provider]}.`, link: '/admin/platform?section=members', payloadJson: { userId: user.id, provider } }, 'account');
+        return user;
+      });
+      userId = created.id;
       verificationNeeded = !profile.emailVerified;
+    } else {
+      await prisma.socialLoginIdentity.create({ data: { provider, subject: profile.subject, email: profile.email, userId } });
     }
-    await prisma.socialLoginIdentity.create({ data: { provider, subject: profile.subject, email: profile.email, userId } });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       const racedIdentity = await prisma.socialLoginIdentity.findUnique({ where: { provider_subject: { provider, subject: profile.subject } }, include: { user: true } });

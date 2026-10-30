@@ -6,7 +6,7 @@ import './ProductReviews.css';
 import './LiveShopping.css';
 
 type LiveProduct = { id: string; name: string; priceMinor?: number; currency?: string; availableStock?: number };
-export type LiveSession = { id: string; title: string; description?: string | null; status: string; scheduledAt?: string | null; startedAt?: string | null; seller?: { store?: { name: string; slug?: string } | null }; products?: { productId: string; featured: boolean; product?: LiveProduct }[]; playbackAvailable?: boolean; realtimeAvailable?: boolean; playbackUrl?: string };
+export type LiveSession = { id: string; title: string; description?: string | null; status: string; scheduledAt?: string | null; startedAt?: string | null; recordingStatus?: string; replayPublishedAt?: string | null; replayAvailable?: boolean; replayUrl?: string; seller?: { store?: { name: string; slug?: string } | null }; products?: { productId: string; featured: boolean; product?: LiveProduct }[]; playbackAvailable?: boolean; realtimeAvailable?: boolean; playbackUrl?: string };
 type Attendance = { attendance: { eligibleDurationSeconds: number; rewardedAt: string | null } | null; rewardThresholdSeconds: number };
 type Engagement = { viewCount: number; viewersNow: number | null; reactions: Record<'LIKE' | 'LOVE' | 'HAPPY' | 'CONGRATS', number>; myReaction: 'LIKE' | 'LOVE' | 'HAPPY' | 'CONGRATS' | null };
 
@@ -52,9 +52,21 @@ export function LiveShopping() {
     {user && !user.emailVerifiedAt && <p className="notice">Verify your email in <a href="/settings#profile">account settings</a> before earning live-attendance rewards.</p>}
     {loading && <div className="empty" role="status">Loading live sessions…</div>}
     {!loading && !message && !sessions.length && <div className="empty">No live sessions are available right now.</div>}
-    <div className="adminReviewList">{sessions.map(session => <LiveSessionCard key={session.id} session={session} canEarn={Boolean(user?.emailVerifiedAt)} />)}</div>
+    <div className="adminReviewList">{sessions.map(session => session.status === 'ENDED' && session.replayAvailable
+      ? <LiveReplayCard key={session.id} session={session} />
+      : <LiveSessionCard key={session.id} session={session} canEarn={Boolean(user?.emailVerifiedAt)} />)}</div>
     {watchOpen && <LiveWatchModal sessions={liveSessions} onClose={closeViewer} canEarn={Boolean(user?.emailVerifiedAt)} canReact={Boolean(user)} />}
   </section>;
+}
+
+function LiveReplayCard({ session }: { session: LiveSession }) {
+  return <article className="card cardBody liveReplayCard">
+    <p className="eyebrow">Published live replay</p><h3>{session.title}</h3>
+    <p className="muted">{session.seller?.store?.name ?? 'Independent store'}{session.startedAt ? ` · Recorded ${new Date(session.startedAt).toLocaleString()}` : ''}</p>
+    {session.description && <p>{session.description}</p>}
+    {session.replayUrl && <video className="liveReplayPlayer" controls preload="metadata" playsInline src={session.replayUrl}>Your browser does not support replay video.</video>}
+    {!!session.products?.length && <div className="liveProductRail" aria-label="Products featured in this replay">{session.products.map(link => link.product && <a className="liveProductLink" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.featured ? 'Featured' : 'From this show'}</span><strong>{link.product.name}</strong><small>View product</small></a>)}</div>}
+  </article>;
 }
 
 function LiveSessionCard({ session, canEarn }: { session: LiveSession; canEarn: boolean }) {
@@ -364,13 +376,15 @@ function LiveKitHost({ sessionId, onPublished, onError }: { sessionId: string; o
   return <div ref={mount} className="liveKitMount" aria-label="Live broadcast preview" />;
 }
 
-type LiveReadiness = { effectiveEnabled: boolean; deploymentGate: boolean; runtimeEnabled: boolean; reason: string; readiness: { provider: string | null; configured: boolean; healthy: boolean; attendanceVerificationAvailable: boolean; reason: string } };
+type LiveReadiness = { effectiveEnabled: boolean; deploymentGate: boolean; runtimeEnabled: boolean; reason: string; recordingAvailable?: boolean; recordingStorageConfigured?: boolean; readiness: { provider: string | null; configured: boolean; healthy: boolean; attendanceVerificationAvailable: boolean; reason: string } };
 type LiveProviderConfiguration = { provider: 'LIVEKIT'; configured: boolean; serverUrl: string | null; apiKeyConfigured: boolean; apiSecretConfigured: boolean; apiKeyMasked: string | null; deploymentGateEnabled: boolean; source: 'ADMIN_DASHBOARD' | 'DEPLOYMENT_ENVIRONMENT' | 'NOT_CONFIGURED'; configurationError: string | null };
 type AdminLiveProvider = { configuration: LiveProviderConfiguration; readiness: LiveReadiness['readiness'] };
-type SellerLiveSession = LiveSession & { scheduledAt: string | null; timezone: string; products: { productId: string; featured: boolean; product?: LiveProduct }[] };
+type SellerLiveSession = LiveSession & { scheduledAt: string | null; timezone: string; deletedAt?: string | null; products: { productId: string; featured: boolean; product?: LiveProduct }[] };
 
 export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
   const [sessions, setSessions] = useState<SellerLiveSession[]>([]);
+  const [deletedSessions, setDeletedSessions] = useState<SellerLiveSession[]>([]);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [readiness, setReadiness] = useState<LiveReadiness | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -384,11 +398,13 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
     if (inFlight.current || document.visibilityState !== 'visible') return;
     inFlight.current = true;
     try {
-      const [items, liveState] = await Promise.all([
+      const [items, deletedItems, liveState] = await Promise.all([
         request<SellerLiveSession[]>('/api/seller/live-sessions'),
+        request<SellerLiveSession[]>('/api/seller/live-sessions?view=deleted'),
         request<LiveReadiness>('/api/live-shopping/status')
       ]);
       setSessions(items);
+      setDeletedSessions(deletedItems);
       setReadiness(liveState);
       setMessage('');
     } catch (error) { setMessage((error as Error).message); }
@@ -441,10 +457,65 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
     finally { setSaving(false); }
   };
 
+  const setShowPublished = async (session: SellerLiveSession, published: boolean) => {
+    if (saving) return;
+    setSaving(true); setMessage('');
+    try {
+      await request(`/api/seller/live-sessions/${encodeURIComponent(session.id)}/transition`, { method: 'POST', body: JSON.stringify({ status: published ? 'SCHEDULED' : 'DRAFT' }) });
+      setMessage(published ? 'Show published. Shoppers can see its schedule while live shopping is available.' : 'Show unpublished and returned to drafts. Its schedule and details were kept.');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const deleteShow = async (session: SellerLiveSession) => {
+    if (saving || !window.confirm(`Move “${session.title}” to Deleted shows? It will be unpublished and can be restored later.`)) return;
+    setSaving(true); setMessage('');
+    try {
+      await request(`/api/seller/live-sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+      setMessage('Show moved to Deleted shows. Any replay is private until the show is restored.');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const restoreShow = async (session: SellerLiveSession) => {
+    if (saving) return;
+    setSaving(true); setMessage('');
+    try {
+      await request(`/api/seller/live-sessions/${encodeURIComponent(session.id)}/restore`, { method: 'POST', body: JSON.stringify({}) });
+      setMessage('Show restored. It is not publicly listed until you publish it again.');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const setReplayPublished = async (session: SellerLiveSession, published: boolean) => {
+    if (saving) return;
+    setSaving(true); setMessage('');
+    try {
+      await request(`/api/seller/live-sessions/${encodeURIComponent(session.id)}/replay`, { method: 'POST', body: JSON.stringify({ published }) });
+      setMessage(published ? 'Replay published and now visible in Live Shopping.' : 'Replay is private again.');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const deleteReplay = async (session: SellerLiveSession) => {
+    if (saving || !window.confirm(`Permanently delete the replay for “${session.title}”? This cannot be undone.`)) return;
+    setSaving(true); setMessage('');
+    try {
+      await request(`/api/seller/live-sessions/${encodeURIComponent(session.id)}/replay`, { method: 'DELETE' });
+      setMessage('Replay permanently deleted from recording storage.');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  };
+
   const providerReady = Boolean(readiness?.effectiveEnabled);
   return <section className="liveShopping liveStudio">
     <header className="sectionHeading"><div><p className="eyebrow">Seller studio</p><h2>Live shows</h2><p className="muted">Prepare a show, schedule it, and attach approved products. Publishing and viewer playback require a real, healthy streaming provider.</p></div><span className="ordersLiveBadge"><i aria-hidden="true" />Refreshes every 10 seconds</span></header>
-    {readiness && <div className={providerReady ? 'liveReadiness liveReadinessReady' : 'liveReadiness'}><strong>{providerReady ? 'Streaming is ready' : 'Publishing is not configured'}</strong><span>{providerReady ? `Provider: ${readiness.readiness.provider ?? 'configured'}` : readiness.reason}</span><small>{providerReady ? 'Create or schedule a show, then start it and allow camera and microphone access. Viewer attendance rewards count during provider-verified playback.' : 'Drafts and schedules can be managed now. Starting a broadcast stays unavailable until the platform owner configures and verifies a provider.'}</small></div>}
+    {readiness && <div className={providerReady ? 'liveReadiness liveReadinessReady' : 'liveReadiness'}><strong>{providerReady ? 'Streaming is ready' : 'Publishing is not configured'}</strong><span>{providerReady ? `Provider: ${readiness.readiness.provider ?? 'configured'}` : readiness.reason}</span><small>{providerReady ? `Create or schedule a show, then start it and allow camera and microphone access. Viewer attendance rewards count during provider-verified playback. ${readiness.recordingAvailable ? 'Private replay storage is configured; LiveKit Egress must also be enabled, and you choose whether to publish each replay.' : 'Replay recording is not configured; live streaming remains available, but shows will not be recorded.'}` : 'Drafts and schedules can be managed now. Starting a broadcast stays unavailable until the platform owner configures and verifies a provider.'}</small></div>}
     {message && <p className="notice" role="status">{message}</p>}
     <form className="liveSessionForm" onSubmit={event => void createSession(event)}>
       <div><p className="eyebrow">Plan a show</p><h3>Create a live show</h3></div>
@@ -454,17 +525,22 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
       <label>Featured products<select multiple size={Math.min(6, Math.max(3, products.length))} value={productIds} onChange={event => setProductIds(Array.from(event.currentTarget.selectedOptions, option => option.value))}>{products.filter(product => (product as LiveProduct & { status?: string }).status === 'APPROVED').map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select><small>Only approved products from your Store are listed. Use Ctrl/Cmd to select multiple items.</small></label>
       <button className="primary" disabled={saving}>{saving ? 'Saving show…' : 'Save draft or schedule'}</button>
     </form>
-    <div className="liveSessionListHeading"><h3>Your shows</h3><span>{sessions.length} total</span></div>
+    <div className="liveSessionListHeading"><h3>{showDeleted ? 'Deleted shows' : 'Your shows'}</h3><div className="liveShowListActions"><span>{showDeleted ? deletedSessions.length : sessions.length} total</span><button type="button" onClick={() => setShowDeleted(value => !value)}>{showDeleted ? 'Back to your shows' : `Deleted shows (${deletedSessions.length})`}</button></div></div>
+    {showDeleted && <p className="muted liveArchiveExplanation">Deleted shows are hidden from shoppers and their replays are unpublished. Restore a show to manage it again; replay files can be permanently removed from here.</p>}
     {loading && <div className="empty" role="status">Loading your shows…</div>}
-    {!loading && sessions.length === 0 && <div className="empty">No shows yet. Create a draft or add a schedule above.</div>}
-    <div className="liveSellerSessionList">{sessions.map(session => <SellerSessionCard key={session.id} session={session} saving={saving} onSave={updateSession} onCancel={cancelSession} onRefresh={load} providerReady={providerReady} />)}</div>
+    {!loading && !showDeleted && sessions.length === 0 && <div className="empty">No shows yet. Create a draft or add a schedule above.</div>}
+    {!loading && showDeleted && deletedSessions.length === 0 && <div className="empty">Deleted shows appear here and can be restored.</div>}
+    <div className="liveSellerSessionList">{(showDeleted ? deletedSessions : sessions).map(session => <SellerSessionCard key={session.id} session={session} saving={saving} onSave={updateSession} onCancel={cancelSession} onRefresh={load} providerReady={providerReady} onReplayChange={setReplayPublished} onReplayDelete={deleteReplay} onShowPublish={setShowPublished} onShowDelete={deleteShow} onRestore={restoreShow} archived={showDeleted} />)}</div>
   </section>;
 }
 
-function SellerSessionCard({ session, saving, onSave, onCancel, onRefresh, providerReady }: {
+function SellerSessionCard({ session, saving, onSave, onCancel, onRefresh, providerReady, onReplayChange, onReplayDelete, onShowPublish, onShowDelete, onRestore, archived }: {
   session: SellerLiveSession; saving: boolean;
   onSave: (sessionId: string, input: { title: string; description: string; scheduledAt: string }) => Promise<void>;
   onCancel: (session: SellerLiveSession) => Promise<void>; onRefresh: () => Promise<void>; providerReady: boolean;
+  onReplayChange: (session: SellerLiveSession, published: boolean) => Promise<void>; onReplayDelete: (session: SellerLiveSession) => Promise<void>;
+  onShowPublish: (session: SellerLiveSession, published: boolean) => Promise<void>; onShowDelete: (session: SellerLiveSession) => Promise<void>;
+  onRestore: (session: SellerLiveSession) => Promise<void>; archived: boolean;
 }) {
   const [title, setTitle] = useState(session.title);
   const [description, setDescription] = useState(session.description ?? '');
@@ -473,7 +549,9 @@ function SellerSessionCard({ session, saving, onSave, onCancel, onRefresh, provi
   const [hostPublished, setHostPublished] = useState(false);
   const [hostError, setHostError] = useState('');
   useEffect(() => { setTitle(session.title); setDescription(session.description ?? ''); setScheduledAt(toLocalDateTime(session.scheduledAt)); }, [session]);
-  const editable = session.status === 'DRAFT' || session.status === 'SCHEDULED';
+  const editable = !archived && (session.status === 'DRAFT' || session.status === 'SCHEDULED');
+  const canDelete = !['STARTING', 'LIVE', 'PAUSED'].includes(session.status) && !['STARTING', 'RECORDING', 'PROCESSING'].includes(session.recordingStatus ?? 'NOT_CONFIGURED');
+  const canPublish = Boolean(session.scheduledAt && new Date(session.scheduledAt).getTime() > Date.now());
   const transition = async (status: 'STARTING' | 'LIVE' | 'ENDED') => {
     if (broadcastBusy) return;
     setBroadcastBusy(true); setHostError('');
@@ -482,12 +560,25 @@ function SellerSessionCard({ session, saving, onSave, onCancel, onRefresh, provi
     finally { setBroadcastBusy(false); }
   };
   return <article className="liveSellerSession card">
-    <header><div><span className="liveStatusPill">{session.status.replaceAll('_', ' ')}</span><h4>{session.title}</h4><p className="muted">{session.scheduledAt ? new Date(session.scheduledAt).toLocaleString() : 'Not scheduled'} · {session.products.length} linked products</p></div><div className="liveSellerSessionActions">{session.status === 'SCHEDULED' && <button type="button" disabled={saving || broadcastBusy || !providerReady} onClick={() => void transition('STARTING')}>{broadcastBusy ? 'Starting…' : 'Start broadcast'}</button>}{session.status === 'STARTING' && <button type="button" disabled={saving || broadcastBusy || !hostPublished} onClick={() => void transition('LIVE')}>{broadcastBusy ? 'Going live…' : 'Go live'}</button>}{session.status === 'LIVE' && <button type="button" disabled={saving || broadcastBusy} onClick={() => void transition('ENDED')}>{broadcastBusy ? 'Ending…' : 'End broadcast'}</button>}{editable && <button type="button" disabled={saving || broadcastBusy} onClick={() => void onCancel(session)}>Cancel show</button>}</div></header>
+    <header><div><span className="liveStatusPill">{archived ? 'DELETED' : session.status.replaceAll('_', ' ')}</span><h4>{session.title}</h4><p className="muted">{session.scheduledAt ? new Date(session.scheduledAt).toLocaleString() : 'Not scheduled'} · {session.products.length} linked products{archived && session.deletedAt ? ` · Deleted ${new Date(session.deletedAt).toLocaleDateString()}` : ''}</p></div><div className="liveSellerSessionActions">
+      {archived ? <button type="button" disabled={saving || broadcastBusy} onClick={() => void onRestore(session)}>Restore show</button> : <>
+        {session.status === 'DRAFT' && <button type="button" disabled={saving || broadcastBusy || !canPublish} title={!canPublish ? 'Add a future schedule in Edit show details before publishing.' : undefined} onClick={() => void onShowPublish(session, true)}>Publish show</button>}
+        {session.status === 'SCHEDULED' && <><button type="button" disabled={saving || broadcastBusy} onClick={() => void onShowPublish(session, false)}>Unpublish show</button><button type="button" disabled={saving || broadcastBusy || !providerReady} onClick={() => void transition('STARTING')}>{broadcastBusy ? 'Starting…' : 'Start broadcast'}</button></>}
+        {session.status === 'STARTING' && <button type="button" disabled={saving || broadcastBusy || !hostPublished} onClick={() => void transition('LIVE')}>{broadcastBusy ? 'Going live…' : 'Go live'}</button>}
+        {session.status === 'LIVE' && <button type="button" disabled={saving || broadcastBusy} onClick={() => void transition('ENDED')}>{broadcastBusy ? 'Ending…' : 'End broadcast'}</button>}
+        {session.status === 'ENDED' && session.recordingStatus === 'READY' && <><button type="button" disabled={saving || broadcastBusy} onClick={() => void onReplayChange(session, !session.replayPublishedAt)}>{session.replayPublishedAt ? 'Unpublish replay' : 'Publish replay'}</button>{!session.replayPublishedAt && <button type="button" disabled={saving || broadcastBusy} onClick={() => void onReplayDelete(session)}>Delete replay</button>}</>}
+        {editable && <button type="button" disabled={saving || broadcastBusy} onClick={() => void onCancel(session)}>Cancel show</button>}
+        {canDelete && <button type="button" className="liveDeleteShowButton" disabled={saving || broadcastBusy} onClick={() => void onShowDelete(session)}>Delete show</button>}
+      </>}
+    </div></header>
     {!!session.products.length && <ul className="liveLinkedProducts">{session.products.map(link => <li key={link.productId}>{link.featured ? 'Featured: ' : ''}{link.product?.name ?? 'Product'}</li>)}</ul>}
     {['STARTING', 'LIVE', 'PAUSED'].includes(session.status) && <><LiveKitHost sessionId={session.id} onPublished={setHostPublished} onError={setHostError} /><small className="muted">{session.status === 'STARTING' ? (hostPublished ? 'Camera and microphone are ready. You can go live.' : 'Allow camera and microphone access, then wait for the preview.') : 'Your live broadcast is connected.'}</small></>}
+    {!archived && ['STARTING', 'LIVE', 'PAUSED'].includes(session.status) && <p className="muted">An active broadcast stays visible while it is on air. End the broadcast to take it offline; you can unpublish its replay after recording finishes.</p>}
+    {session.status === 'ENDED' && session.recordingStatus && session.recordingStatus !== 'NOT_CONFIGURED' && <div className="liveReplayStatus" role="status"><strong>Replay: {session.recordingStatus.toLowerCase()}</strong>{session.recordingStatus === 'READY' ? <><p>{session.replayPublishedAt ? 'This replay is published and visible to shoppers.' : 'This replay is private. Publish it when you are ready.'}</p><video className="liveReplayPlayer" controls preload="metadata" playsInline src={`/api/seller/live-sessions/${encodeURIComponent(session.id)}/replay`}>Your browser does not support replay video.</video>{archived && <button type="button" disabled={saving || broadcastBusy} onClick={() => void onReplayDelete(session)}>Permanently delete replay file</button>}</> : <p>{session.recordingStatus === 'FAILED' ? 'The recording could not be completed. Live streaming was not affected.' : 'The recording is being finalized in private storage. This card will update automatically.'}</p>}</div>}
+    {session.status === 'ENDED' && session.recordingStatus === 'NOT_CONFIGURED' && <p className="muted">Replay recording was not configured when this show went live, so there is no recording to publish.</p>}
     {hostError && <p className="notice" role="alert">{hostError}</p>}
     {editable && <details className="liveSessionEdit"><summary>Edit show details</summary><form onSubmit={event => { event.preventDefault(); void onSave(session.id, { title, description, scheduledAt }); }}><label>Title<input required minLength={3} maxLength={160} value={title} onChange={event => setTitle(event.target.value)} /></label><label>Description<textarea maxLength={5000} rows={2} value={description} onChange={event => setDescription(event.target.value)} /></label><label>Schedule<input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} /><small>Set a date to schedule the show, or clear it to keep a draft.</small></label><button disabled={saving}>Save show details</button></form></details>}
-    <button className="liveRefreshButton" type="button" onClick={() => void onRefresh()}>Refresh status</button>
+    {!archived && <button className="liveRefreshButton" type="button" onClick={() => void onRefresh()}>Refresh status</button>}
   </article>;
 }
 

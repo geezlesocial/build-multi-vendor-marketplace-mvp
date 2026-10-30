@@ -1,4 +1,4 @@
-export type ProviderName = 'STRIPE' | 'PAYPAL';
+export type ProviderName = 'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK';
 export type ProviderContext = 'MARKETPLACE_CHECKOUT' | 'WALLET_FUNDING';
 export type ProviderEnvironment = 'SANDBOX' | 'LIVE';
 
@@ -12,6 +12,12 @@ const registry: Record<ProviderName, Partial<Record<ProviderContext, Partial<Rec
   },
   PAYPAL: {
     MARKETPLACE_CHECKOUT: { clientId: 'PAYPAL_CLIENT_ID', clientSecret: 'PAYPAL_CLIENT_SECRET', webhookId: 'PAYPAL_WEBHOOK_ID' }
+  },
+  PAYMONGO: {
+    MARKETPLACE_CHECKOUT: { apiSecret: 'PAYMONGO_SECRET_KEY', webhookSecret: 'PAYMONGO_WEBHOOK_SECRET' }
+  },
+  PAYSTACK: {
+    MARKETPLACE_CHECKOUT: { apiSecret: 'PAYSTACK_SECRET_KEY' }
   }
 };
 
@@ -81,7 +87,7 @@ export function evaluateProviderReadiness(input: ProviderReadinessInput): Provid
     const envName = environmentNameFor(input.provider, input.context, key)!;
     const value = input.runtime[envName];
     const nonPlaceholder = Boolean(value?.trim()) && !value!.toLowerCase().includes('placeholder');
-    const modeMatches = key !== 'apiSecret' || input.provider !== 'STRIPE' || (value?.startsWith(input.environment === 'SANDBOX' ? 'sk_test_' : 'sk_live_') ?? false);
+    const modeMatches = !['STRIPE', 'PAYMONGO', 'PAYSTACK'].includes(input.provider) || key !== 'apiSecret' || (value?.startsWith(input.environment === 'SANDBOX' ? 'sk_test_' : 'sk_live_') ?? false);
     return {
       key,
       referenceConfigured: Boolean(reference),

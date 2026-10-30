@@ -27,4 +27,15 @@ describe('order resolution safety rules', () => {
     expect(canRecordManualCodRefund('COD', 'PENDING')).toBe(false);
     expect(canRecordManualCodRefund('STRIPE', 'PAID')).toBe(false);
   });
+
+  it('matches a localized-provider refund using its normalized base-currency amount', () => {
+    expect(refundEventMatchesCase({
+      paymentMethod: 'PAYMONGO', parentOrderId: 'order-1', parentTotalMinor: 5000, currency: 'USD', approvedAmountMinor: 1200,
+      event: {
+        provider: 'PAYMONGO', parentOrderId: 'order-1', eventType: 'refund.succeeded', identityVerified: true,
+        reviewReason: null, currency: 'PHP', amountMinor: 69000, providerTotalMinor: null,
+        normalizedCurrency: 'USD', normalizedAmountMinor: 1200
+      }
+    })).toBe(true);
+  });
 });

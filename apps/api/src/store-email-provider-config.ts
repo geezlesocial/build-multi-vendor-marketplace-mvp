@@ -22,6 +22,8 @@ export const emailProviders = [
   { id: 'SMTP2GO', label: 'SMTP2GO', host: 'mail.smtp2go.com', port: 587, secure: false, requireTls: true, username: '' },
   { id: 'MAILJET', label: 'Mailjet', host: 'in-v3.mailjet.com', port: 587, secure: false, requireTls: true, username: '' },
   { id: 'MAILERSEND', label: 'MailerSend', host: 'smtp.mailersend.net', port: 587, secure: false, requireTls: true, username: '' },
+  { id: 'ZOHO', label: 'Zoho Mail', host: 'smtp.zoho.com', port: 587, secure: false, requireTls: true, username: '' },
+  { id: 'NAMECHEAP', label: 'Namecheap Private Email', host: 'mail.privateemail.com', port: 465, secure: true, requireTls: false, username: '' },
   { id: 'MANUAL_SMTP', label: 'Manual SMTP', host: '', port: 587, secure: false, requireTls: true, username: '' }
 ] as const;
 
@@ -40,7 +42,7 @@ export type EffectiveEmailSettings = {
   replyTo?: string;
   verifiedAt?: Date | null;
   configurationUpdatedAt?: Date;
-  source: 'ADMIN_DASHBOARD' | 'DEPLOYMENT_ENVIRONMENT' | 'NOT_CONFIGURED';
+  source: 'ADMIN_DASHBOARD' | 'SELLER_STORE' | 'DEPLOYMENT_ENVIRONMENT' | 'NOT_CONFIGURED';
   credentialError?: boolean;
 };
 
@@ -202,6 +204,7 @@ export async function verifyActiveEmailProvider() {
 
 export function emailSettingsVerified(settings: EffectiveEmailSettings, environmentVerified: boolean) {
   if (settings.source === 'ADMIN_DASHBOARD') return Boolean(settings.verifiedAt && Date.now() - settings.verifiedAt.getTime() < verificationTtlMs);
+  if (settings.source === 'SELLER_STORE') return Boolean(settings.verifiedAt && Date.now() - settings.verifiedAt.getTime() < verificationTtlMs);
   return environmentVerified;
 }
 

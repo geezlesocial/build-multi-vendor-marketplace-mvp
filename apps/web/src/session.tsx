@@ -4,11 +4,14 @@ export type SessionUser = {
   id: string;
   email: string;
   name: string;
-  role: 'BUYER' | 'SELLER' | 'CASHIER' | 'ADMIN' | 'CONTENT_EDITOR';
+  role: 'BUYER' | 'SELLER' | 'CASHIER' | 'ADMIN' | 'CONTENT_EDITOR' | 'PLATFORM_STAFF';
   emailVerifiedAt?: string | null;
   onboardingCompletedAt?: string | null;
   sellerId?: string;
   avatarUrl?: string;
+  platformPermissions?: string[];
+  platformPosition?: string;
+  platformPositionName?: string;
 };
 
 type SessionStatus = 'loading' | 'ready' | 'error';

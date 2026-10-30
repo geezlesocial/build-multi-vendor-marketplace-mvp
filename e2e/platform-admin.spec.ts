@@ -25,6 +25,43 @@ async function csrfHeaders(page: Page) {
 
 test.afterAll(async () => prisma.$disconnect());
 
+test('admin can waive email verification with an audit reason and invalidate the pending token', async ({ page }) => {
+  await login(page, adminEmail);
+  const target = await prisma.user.create({ data: {
+    email: `verification-waiver-${Date.now()}@example.test`,
+    name: 'Verification waiver E2E',
+    passwordHash: 'not-used-by-this-test',
+    emailVerificationTokenHash: `pending-token-${Date.now()}`,
+    emailVerificationExpiresAt: new Date(Date.now() + 60_000),
+    emailVerificationSentAt: new Date()
+  } });
+  try {
+    const response = await page.request.post(`/api/admin/members/${encodeURIComponent(target.id)}/verify-email`, {
+      data: { reason: 'Approved manual identity review' },
+      headers: await csrfHeaders(page)
+    });
+    const responseBody = await response.text();
+    expect(response.status(), responseBody).toBe(200);
+    expect(JSON.parse(responseBody)).toMatchObject({ verified: true, alreadyVerified: false });
+    const updated = await prisma.user.findUniqueOrThrow({ where: { id: target.id } });
+    expect(updated.emailVerifiedAt).toBeInstanceOf(Date);
+    expect(updated.emailVerificationTokenHash).toBeNull();
+    expect(updated.emailVerificationExpiresAt).toBeNull();
+    expect(updated.emailVerificationSentAt).toBeNull();
+    expect(await prisma.auditLog.findFirst({ where: { action: 'ADMIN_EMAIL_VERIFICATION_WAIVED', entityId: target.id } })).not.toBeNull();
+
+    const repeated = await page.request.post(`/api/admin/members/${encodeURIComponent(target.id)}/verify-email`, {
+      data: { reason: 'Repeat verification review' },
+      headers: await csrfHeaders(page)
+    });
+    const repeatedBody = await repeated.text();
+    expect(repeated.status(), repeatedBody).toBe(200);
+    expect(JSON.parse(repeatedBody)).toMatchObject({ verified: true, alreadyVerified: true });
+  } finally {
+    await prisma.user.delete({ where: { id: target.id } });
+  }
+});
+
 test('admin can save/publish branding and manage taxonomy while public users cannot', async ({ page }) => {
   await login(page, adminEmail);
   await page.goto('/admin/platform');
@@ -53,7 +90,7 @@ test('approved seller can save a safe theme and seller cannot access admin payou
   const before = await page.request.get('/api/seller/store-theme');
   expect(before.ok(), await before.text()).toBeTruthy();
   const oldSlug = (await before.json() as { slug: string }).slug;
-  const storeName = 'Northstar Market';
+  const storeName = `Northstar Market ${Date.now()}`;
   const saved = await page.request.put('/api/seller/store-theme', { data: { name: storeName, description: 'Safe seller storefront', primaryColor: '#123456', accentColor: '#abcdef', font: 'system', sections: [], contactLinks: [] }, headers: await csrfHeaders(page) });
   expect(saved.status()).toBe(200);
   const savedBody = await saved.json() as { slug: string; name: string };
@@ -67,7 +104,7 @@ test('approved seller can save a safe theme and seller cannot access admin payou
   await page.goto(`/store/${savedBody.slug}`);
   await expect(page.getByRole('heading', { level: 1, name: storeName })).toBeVisible();
   await expect(page.getByText('Safe seller storefront')).toBeVisible();
-  await expect(page.getByText('Demo Canvas Tote')).toBeVisible();
+  await expect(page.locator('article.productCard').getByRole('link', { name: 'Demo Canvas Tote', exact: true })).toBeVisible();
   await expect(page).toHaveTitle(`${storeName} | Market Lane`);
   const adminReadiness = await page.request.get('/api/admin/payout-readiness');
   expect(adminReadiness.status()).toBe(403);

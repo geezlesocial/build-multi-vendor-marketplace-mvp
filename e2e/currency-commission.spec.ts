@@ -46,17 +46,18 @@ test('admin commission policy creation serializes versions and persists each aud
   try {
     const csrfHeaders = await csrf(admin.page);
     const responses = await Promise.all([
-      admin.page.request.post('/api/admin/seller-commission-policies', { data: { storeId: store.id, type: 'PERCENTAGE', currency: 'USD', basisPoints: 750, reason: 'Concurrent commission policy one' }, headers: csrfHeaders }),
-      admin.page.request.post('/api/admin/seller-commission-policies', { data: { storeId: store.id, type: 'PERCENTAGE', currency: 'USD', basisPoints: 900, reason: 'Concurrent commission policy two' }, headers: csrfHeaders })
+      admin.page.request.post('/api/admin/seller-commission-policies', { data: { type: 'PERCENTAGE', basisPoints: 750, reason: 'Concurrent commission policy one' }, headers: csrfHeaders }),
+      admin.page.request.post('/api/admin/seller-commission-policies', { data: { type: 'PERCENTAGE', basisPoints: 900, reason: 'Concurrent commission policy two' }, headers: csrfHeaders })
     ]);
     const responseBodies = await Promise.all(responses.map(response => response.text()));
     expect(responses.map(response => response.status()), responseBodies.join('\n')).toEqual([201, 201]);
-    const created = responseBodies.map(body => JSON.parse(body) as { id: string; version: number; status: string });
+    const created = responseBodies.map(body => JSON.parse(body) as { id: string; version: number; status: string; freeStoreScopeKey: string | null });
     expect(created.map(policy => policy.version).sort((a, b) => a - b)).toEqual([1, 2]);
     expect(created.every(policy => policy.status === 'DRAFT')).toBe(true);
+    expect(created.every(policy => policy.freeStoreScopeKey === 'FREE_STORES')).toBe(true);
 
     const persisted = await prisma.sellerCommissionPolicyVersion.findMany({
-      where: { id: { in: created.map(policy => policy.id) }, storeId: store.id },
+      where: { id: { in: created.map(policy => policy.id) }, freeStoreScopeKey: 'FREE_STORES' },
       orderBy: { version: 'asc' }
     });
     expect(persisted.map(policy => policy.version)).toEqual([1, 2]);
@@ -76,6 +77,78 @@ test('admin commission policy creation serializes versions and persists each aud
   }
 });
 
+test('admin can edit or remove only draft free-Store commission policies with an audit trail', async ({ browser }) => {
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const admin = await openAccount(browser, 'admin.local@example.test');
+  try {
+    const headers = await csrf(admin.page);
+    const createdResponse = await admin.page.request.post('/api/admin/seller-commission-policies', {
+      data: { type: 'PERCENTAGE', basisPoints: 250, reason: `Initial synthetic draft ${suffix}` },
+      headers
+    });
+    expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    const created = await createdResponse.json() as { id: string; version: number; status: string };
+    expect(created.status).toBe('DRAFT');
+
+    await admin.page.goto('/admin/commissions');
+    await expect(admin.page.getByRole('heading', { name: 'Seller commissions' })).toBeVisible();
+    const draftCard = admin.page.locator('.commissionPolicyCard').filter({ hasText: `Version ${created.version}` });
+    await draftCard.getByText('Edit or remove draft', { exact: true }).click();
+    await draftCard.getByRole('button', { name: 'Edit draft terms' }).click();
+    await draftCard.getByLabel('Commission type').selectOption('PERCENTAGE');
+    await draftCard.getByLabel('Percentage (basis points)').fill('475');
+    await draftCard.getByLabel('Policy description / reason').fill(`Updated synthetic terms ${suffix}`);
+    await draftCard.getByLabel('Audit reason for this change').fill(`Corrected draft after review ${suffix}`);
+    const editedResponsePromise = admin.page.waitForResponse(response => response.url().includes(`/api/admin/seller-commission-policies/${created.id}`) && response.request().method() === 'PATCH');
+    await draftCard.getByRole('button', { name: 'Save draft changes' }).click();
+    const editedResponse = await editedResponsePromise;
+    expect(editedResponse.status(), await editedResponse.text()).toBe(200);
+    expect(await editedResponse.json()).toMatchObject({ id: created.id, status: 'DRAFT', type: 'PERCENTAGE', basisPoints: 475, reason: `Updated synthetic terms ${suffix}` });
+    expect(await prisma.auditLog.count({ where: { action: 'SELLER_COMMISSION_POLICY_DRAFT_UPDATED', entityId: created.id } })).toBe(1);
+    await expect(draftCard).toContainText('4.75%');
+
+    await draftCard.getByText('Edit or remove draft', { exact: true }).click();
+    await draftCard.getByLabel('Reason for removing this draft').fill(`Withdraw synthetic draft ${suffix}`);
+    const removedResponsePromise = admin.page.waitForResponse(response => response.url().includes(`/api/admin/seller-commission-policies/${created.id}`) && response.request().method() === 'DELETE');
+    await draftCard.getByRole('button', { name: 'Remove draft' }).click();
+    const removedResponse = await removedResponsePromise;
+    expect(removedResponse.status(), await removedResponse.text()).toBe(200);
+    expect(await removedResponse.json()).toMatchObject({ removed: true, policy: { id: created.id, status: 'RETIRED' } });
+    expect(await prisma.sellerCommissionPolicyVersion.findUniqueOrThrow({ where: { id: created.id } })).toMatchObject({ status: 'RETIRED', basisPoints: 475, effectiveFrom: null, effectiveUntil: null });
+    expect(await prisma.auditLog.count({ where: { action: 'SELLER_COMMISSION_POLICY_DRAFT_REMOVED', entityId: created.id } })).toBe(1);
+
+    const editRemoved = await admin.page.request.patch(`/api/admin/seller-commission-policies/${created.id}`, {
+      data: { type: 'ZERO', reason: `No commission ${suffix}`, changeReason: `Attempt to edit removed draft ${suffix}` },
+      headers
+    });
+    expect(editRemoved.status(), await editRemoved.text()).toBe(409);
+
+    const activeDraftResponse = await admin.page.request.post('/api/admin/seller-commission-policies', {
+      data: { type: 'ZERO', reason: `Synthetic active policy ${suffix}` },
+      headers
+    });
+    expect(activeDraftResponse.status(), await activeDraftResponse.text()).toBe(201);
+    const activeDraft = await activeDraftResponse.json() as { id: string };
+    const activation = await admin.page.request.post(`/api/admin/seller-commission-policies/${activeDraft.id}/activate`, {
+      data: { reason: `Activate synthetic policy ${suffix}` },
+      headers
+    });
+    expect(activation.ok(), await activation.text()).toBeTruthy();
+    const editActive = await admin.page.request.patch(`/api/admin/seller-commission-policies/${activeDraft.id}`, {
+      data: { type: 'PERCENTAGE', basisPoints: 500, reason: `Attempt active edit ${suffix}`, changeReason: `Must remain immutable ${suffix}` },
+      headers
+    });
+    expect(editActive.status(), await editActive.text()).toBe(409);
+    const removeActive = await admin.page.request.delete(`/api/admin/seller-commission-policies/${activeDraft.id}`, {
+      data: { reason: `Attempt active removal ${suffix}` },
+      headers
+    });
+    expect(removeActive.status(), await removeActive.text()).toBe(409);
+  } finally {
+    await admin.context.close();
+  }
+});
+
 test('store display estimates, checkout currency, COD eligibility and commission reversals remain distinct and tenant-scoped', async ({ browser }) => {
   test.setTimeout(90_000);
   const suffix = randomUUID().slice(0, 10);
@@ -85,6 +158,7 @@ test('store display estimates, checkout currency, COD eligibility and commission
   const buyer = await prisma.user.create({ data: { email: `currency-buyer-${suffix}@example.test`, name: 'Currency Test Buyer', role: Role.BUYER, passwordHash: buyerTemplate.passwordHash, onboardingCompletedAt: new Date() } });
   const rate = await prisma.exchangeRateSnapshot.create({ data: { baseCurrency: 'USD', quoteCurrency: 'JPY', rate: '150', provider: `e2e-${suffix}`, sourceDate: new Date(new Date().toISOString().slice(0, 10)), fetchedAt: new Date() } });
   expect(rate.provider).toContain('e2e-');
+  await prisma.exchangeRateSnapshot.create({ data: { baseCurrency: 'USD', quoteCurrency: 'PHP', rate: '64', provider: `e2e-php-${suffix}`, sourceDate: new Date(new Date().toISOString().slice(0, 10)), fetchedAt: new Date() } });
   const admin = await openAccount(browser, 'admin.local@example.test');
   const buyerAccount = await openAccount(browser, buyer.email);
   const sellerAccounts = await Promise.all(sellers.map(store => openAccount(browser, store.user.email)));
@@ -94,7 +168,7 @@ test('store display estimates, checkout currency, COD eligibility and commission
     const deniedPolicies = await sellerAccounts[0]!.page.request.get('/api/admin/seller-commission-policies');
     expect(deniedPolicies.status()).toBe(403);
 
-    const policyResponse = await admin.page.request.post('/api/admin/seller-commission-policies', { data: { storeId: sellers[0]!.store.id, type: 'PERCENTAGE', currency: 'USD', basisPoints: 1000, reason: 'Synthetic E2E commission rule' }, headers: await csrf(admin.page) });
+    const policyResponse = await admin.page.request.post('/api/admin/seller-commission-policies', { data: { type: 'PERCENTAGE', basisPoints: 1000, reason: 'Synthetic E2E commission rule' }, headers: await csrf(admin.page) });
     expect(policyResponse.status(), await policyResponse.text()).toBe(201);
     const policy = await policyResponse.json() as { id: string; version: number };
     const activated = await admin.page.request.post(`/api/admin/seller-commission-policies/${policy.id}/activate`, { data: { reason: 'Synthetic E2E policy activation' }, headers: await csrf(admin.page) });
@@ -104,6 +178,7 @@ test('store display estimates, checkout currency, COD eligibility and commission
     expect(buyerResponse.ok(), await buyerResponse.text()).toBeTruthy();
     const options = await buyerResponse.json() as { checkoutCurrency: string; displayCurrencies: { code: string }[] };
     expect(options.checkoutCurrency).toBe('USD');
+    expect(options.displayCurrencies.map(currency => currency.code)).toContain('PHP');
 
     await buyerAccount.page.goto(`/store/${sellers[0]!.store.slug}`);
     await expect(buyerAccount.page.getByRole('heading', { name: sellers[0]!.store.name })).toBeVisible();
@@ -131,9 +206,21 @@ test('store display estimates, checkout currency, COD eligibility and commission
     await buyerAccount.page.getByLabel('Postal code').fill(address.postalCode);
     await buyerAccount.page.getByLabel('Country code').fill(address.country);
     await buyerAccount.page.getByLabel('Display estimate (not payment currency)').selectOption('JPY');
+    await buyerAccount.page.getByLabel('Display estimate (not payment currency)').selectOption('PHP');
+    await expect(buyerAccount.page.locator('.displayEstimate')).toContainText('Estimated merchandise subtotal (shipping not included)');
+    await expect(buyerAccount.page.locator('.displayEstimate')).toContainText('4,480');
+    await expect(buyerAccount.page.locator('.cartLine').first().locator('.cartLineInfo')).toContainText(/≈\s*(?:₱|PHP).*2,240.*each \(estimate\)/);
+    await buyerAccount.page.getByLabel('Display estimate (not payment currency)').selectOption('JPY');
+    const merchandiseEstimateResponse = await buyerAccount.page.request.post('/api/currency/cart-estimate', { data: { displayCurrency: 'JPY' }, headers: buyerHeaders });
+    expect(merchandiseEstimateResponse.status(), await merchandiseEstimateResponse.text()).toBe(200);
+    expect(await merchandiseEstimateResponse.json()).toMatchObject({ complete: false, displayCurrency: 'JPY', displayMerchandiseMinor: 10500, displayShippingMinor: 0 });
+    await expect(buyerAccount.page.locator('.displayEstimate')).toContainText('Estimated merchandise subtotal (shipping not included)');
+    await expect(buyerAccount.page.locator('.displayEstimate')).toContainText('¥10,500');
+    await expect(buyerAccount.page.locator('.cartLine').first().locator('strong')).toContainText('¥5,250');
+    await expect(buyerAccount.page.locator('.cartLine').first().locator('.cartLineInfo')).toContainText('≈ ¥5,250 each (estimate)');
     await buyerAccount.page.getByRole('button', { name: 'Calculate shipping' }).click();
     await expect(buyerAccount.page.getByLabel(/Delivery service for Currency Store/)).toHaveCount(2);
-    await expect(buyerAccount.page.getByText(/Estimated display total:/)).toBeVisible();
+    await expect(buyerAccount.page.locator('.displayEstimate')).toContainText('Estimated order total');
     const checkoutResponsePromise = buyerAccount.page.waitForResponse(response => response.url().includes('/api/orders/checkout') && response.request().method() === 'POST');
     await buyerAccount.page.getByRole('button', { name: 'Place order' }).click();
     const checkoutResponse = await checkoutResponsePromise;
@@ -159,13 +246,13 @@ test('store display estimates, checkout currency, COD eligibility and commission
     };
     buyerAccount.page.on('request', countEstimateRequest);
     await buyerAccount.page.reload();
-    await expect(buyerAccount.page.getByText('Order confirmed', { exact: true })).toBeVisible();
+    await expect(buyerAccount.page.getByText('Order received', { exact: true })).toBeVisible();
     await expect(buyerAccount.page.locator('.total')).toContainText('$80.00');
     await expect(buyerAccount.page.locator('.displayEstimate')).toContainText('¥12,000');
     await expect(buyerAccount.page.locator('.displayEstimate')).toContainText('saved with this order');
     buyerAccount.page.off('request', countEstimateRequest);
     expect(recalculatedAfterReload).toBe(false);
-    await expect(buyerAccount.page.getByText('Order confirmed', { exact: true })).toBeVisible();
+    await expect(buyerAccount.page.getByText('Order received', { exact: true })).toBeVisible();
     const order = await prisma.parentOrder.findUniqueOrThrow({ where: { id: orderResult.orderId }, include: { payment: true, sellerOrders: { include: { items: true } } } });
     expect(order.payment?.status).toBe('PENDING');
     expect(await prisma.sellerCommissionLedgerEntry.count({ where: { sellerOrder: { parentId: order.id } } })).toBe(0);

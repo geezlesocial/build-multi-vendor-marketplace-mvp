@@ -20,19 +20,29 @@ export function refundEventMatchesCase(input: {
     currency: string | null;
     amountMinor: number | null;
     providerTotalMinor: number | null;
+    normalizedCurrency?: string | null;
+    normalizedAmountMinor?: number | null;
   };
 }) {
   const { event } = input;
-  const expectedType = event.provider === 'STRIPE' ? 'charge.refunded' : event.provider === 'PAYPAL' ? 'PAYMENT.CAPTURE.REFUNDED' : null;
+  const expectedTypes: Record<string, string> = {
+    STRIPE: 'charge.refunded',
+    PAYPAL: 'PAYMENT.CAPTURE.REFUNDED',
+    PAYMONGO: 'refund.succeeded',
+    PAYSTACK: 'refund.processed'
+  };
+  const expectedType = expectedTypes[event.provider];
+  const amountMinor = event.normalizedAmountMinor ?? event.amountMinor;
+  const currency = event.normalizedCurrency ?? event.currency;
   return Boolean(expectedType
     && input.paymentMethod === event.provider
     && event.parentOrderId === input.parentOrderId
     && event.eventType === expectedType
     && event.identityVerified
     && event.reviewReason === null
-    && event.currency?.toUpperCase() === input.currency.toUpperCase()
-    && Number.isSafeInteger(event.amountMinor)
-    && (event.amountMinor ?? 0) >= input.approvedAmountMinor
+    && currency?.toUpperCase() === input.currency.toUpperCase()
+    && Number.isSafeInteger(amountMinor)
+    && (amountMinor ?? 0) >= input.approvedAmountMinor
     && (event.provider !== 'STRIPE' || event.providerTotalMinor === input.parentTotalMinor));
 }
 

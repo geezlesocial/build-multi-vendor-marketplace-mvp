@@ -151,6 +151,18 @@
   font-size: .82rem;
 }
 
+.liveShowListActions {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+}
+
+.liveShowListActions > span { color: #68736b; font-size: .82rem; }
+.liveShowListActions button { padding: .45rem .7rem; font-size: .82rem; }
+.liveArchiveExplanation { margin: -.3rem 0 .2rem; }
+.liveSellerSessionActions .liveDeleteShowButton { border-color: #e9c5bc; color: #a84632; }
+.liveSellerSessionActions .liveDeleteShowButton:hover { background: #fff3ef; }
+
 .liveSellerSessionList,
 .liveAdminReports {
   display: grid;
@@ -442,6 +454,7 @@
 .liveWatchNav { position: fixed; z-index: 4; top: 50%; right: 1rem; display: grid; justify-items: center; gap: .45rem; transform: translateY(-50%); color: #fff; font-size: .72rem; }
 .liveWatchNav button { display: grid; width: 2.65rem; height: 2.65rem; place-items: center; border: 1px solid #ffffff45; border-radius: 50%; background: #111714b8; color: #fff; font-size: 1.2rem; cursor: pointer; }
 .liveWatchNav button:disabled { opacity: .35; cursor: default; }
+.liveReplayCard { display: grid; gap: .6rem; }.liveReplayPlayer { display: block; width: min(100%, 900px); max-height: min(72vh, 720px); margin: .5rem auto; border-radius: .8rem; background: #101713; }.liveReplayStatus { display: grid; gap: .35rem; margin-top: .8rem; padding: .85rem; border: 1px solid #dce7dc; border-radius: .8rem; background: #f5f9f4; }.liveReplayStatus p { margin: 0; color: #68736b; }
 
 @media (max-width: 720px) {
   .liveProviderForm {
@@ -464,6 +477,8 @@
     align-items: stretch;
     flex-direction: column;
   }
+
+  .liveShowListActions { justify-content: space-between; flex-wrap: wrap; }
 
   .liveDashboardHeaderActions { justify-content: flex-start; }
 

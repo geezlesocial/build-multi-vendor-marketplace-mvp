@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { allocateCommission, calculateCommissionMinor, convertMinorExact, FrankfurterRateAdapter, INITIAL_CURRENCY_CODES, isRateFresh, parseRate } from './currency-domain.js';
+import { allocateCommission, calculateCommissionMinor, convertMinorExact, deriveUsdPivotRate, fetchReferenceRatesWithUnsupportedFallback, FrankfurterRateAdapter, INITIAL_CURRENCY_CODES, isRateFresh, parseRate, ReferenceRateFetchError } from './currency-domain.js';
 
 describe('currency and seller commission domain', () => {
   it('contains the initial requested regional catalog without enabling charge currencies', () => {
@@ -20,6 +20,11 @@ describe('currency and seller commission domain', () => {
     expect(convertMinorExact(100n, '150', 2, 0)).toBe(150n);
   });
 
+  it('derives currency cross-rates through USD without floating-point rounding', () => {
+    expect(deriveUsdPivotRate('0.92', '1.35')).toBe('1.467391304348');
+    expect(deriveUsdPivotRate('1.35', '0.92')).toBe('0.681481481481');
+  });
+
   it('marks future and stale rates unavailable', () => {
     const now = new Date('2026-10-23T12:00:00Z');
     expect(isRateFresh(new Date('2026-10-23T11:00:00Z'), now)).toBe(true);
@@ -36,6 +41,19 @@ describe('currency and seller commission domain', () => {
     expect(String(fetcher.mock.calls[0]?.[0])).toContain('/v2/rates?');
     const invalidDateAdapter = new FrankfurterRateAdapter('https://example.test/v2', vi.fn(async () => new Response(JSON.stringify([{ date: '2026-02-31', base: 'USD', quote: 'EUR', rate: 0.92 }]), { status: 200 })) as typeof fetch);
     await expect(invalidDateAdapter.fetchRates('USD', ['EUR'])).rejects.toThrow(/observation date/);
+  });
+
+  it('keeps a provider-unsupported quote from blocking supported reference currencies', async () => {
+    const provider = {
+      provider: 'test',
+      fetchRates: vi.fn(async (base: string, quotes: string[]) => {
+        if (quotes.includes('BAD')) throw new ReferenceRateFetchError(422);
+        return quotes.map(quote => ({ base, quote, rate: '1.25', sourceDate: '2026-10-27' }));
+      })
+    };
+    const result = await fetchReferenceRatesWithUnsupportedFallback(provider, 'USD', ['EUR', 'BAD', 'JPY']);
+    expect(result).toMatchObject({ requested: 3, unavailableCurrencies: ['BAD'] });
+    expect(result.rates.map(rate => rate.quote).sort()).toEqual(['EUR', 'JPY']);
   });
 
   it('calculates fixed, percentage, capped, and zero policies with integer rounding', () => {

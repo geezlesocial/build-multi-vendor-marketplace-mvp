@@ -9,6 +9,7 @@ import { appendWalletAllocations, buildPostingAllocations } from './wallet-ledge
 import { buildWalletReconciliationReport } from './wallet-reconciliation.js';
 import { createWalletFundingPayment, getStripeWalletFundingProvider, persistWalletFundingProviderReference, processWalletFundingEvent, recoverWalletFundingPaymentIntent, validateWalletFundingPaymentIntent, walletFundingSandboxEnabled, WalletFundingRetryableError } from './wallet-funding.js';
 import { liveShoppingState } from './live-domain.js';
+import { generateUserWalletId, normalizeWalletId, PLATFORM_ADMIN_WALLET_ID } from './wallet-identity.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
@@ -20,7 +21,8 @@ const param = (value: string | string[] | undefined) => Array.isArray(value) ? (
 const inputJson = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 const isUniqueConstraintError = (error: unknown): error is Prisma.PrismaClientKnownRequestError => error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
-const transferSchema = z.object({ recipientEmail: z.string().email(), amountMinor: positiveMinorSchema, currency: currencyCodeSchema, idempotencyKey: z.string().trim().min(8).max(120) });
+const transferSchema = z.object({ recipient: z.string().trim().min(3).max(254).optional(), recipientEmail: z.string().trim().email().optional(), recipientWalletId: z.string().trim().min(3).max(16).optional(), amountMinor: positiveMinorSchema, currency: currencyCodeSchema, idempotencyKey: z.string().trim().min(8).max(120) }).strict().refine(value => [value.recipient, value.recipientEmail, value.recipientWalletId].filter(Boolean).length === 1, 'Provide exactly one recipient email or eWallet ID');
+const adminWalletFundingSchema = z.object({ amountMinor: positiveMinorSchema, currency: currencyCodeSchema, reason: z.string().trim().min(8).max(500), reference: z.string().trim().min(3).max(160), idempotencyKey: z.string().trim().min(8).max(120) }).strict();
 const fundingSchema = z.object({ amountMinor: positiveMinorSchema, currency: currencyCodeSchema, provider: z.string().trim().min(2).max(60), idempotencyKey: z.string().trim().min(8).max(120) });
 const withdrawalSchema = z.object({ amountMinor: positiveMinorSchema, currency: currencyCodeSchema, payoutMethodId: z.string().cuid().optional(), destinationType: z.enum(['APPROVED_PAYOUT_METHOD']), idempotencyKey: z.string().trim().min(8).max(120) });
 const walletSettingsSchema = z.object({
@@ -124,7 +126,26 @@ async function userCoinAccount(userId: string) {
 }
 
 async function ensureWalletAccount(tx: Prisma.TransactionClient, userId: string) {
-  return tx.walletAccount.upsert({ where: { userId }, update: {}, create: { userId, type: WalletAccountType.USER } });
+  const account = await tx.walletAccount.upsert({ where: { userId }, update: {}, create: { userId, type: WalletAccountType.USER } });
+  if (account.walletId) return account;
+  const owner = await tx.user.findUnique({ where: { id: userId }, select: { role: true } });
+  const reservedAdminAccount = owner?.role === Role.ADMIN
+    ? await tx.walletAccount.findUnique({ where: { walletId: PLATFORM_ADMIN_WALLET_ID }, select: { id: true } })
+    : null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const walletId = owner?.role === Role.ADMIN && (!reservedAdminAccount || reservedAdminAccount.id === account.id)
+      ? PLATFORM_ADMIN_WALLET_ID
+      : generateUserWalletId();
+    try {
+      const updated = await tx.walletAccount.updateMany({ where: { id: account.id, walletId: null }, data: { walletId } });
+      if (updated.count === 1) return tx.walletAccount.findUniqueOrThrow({ where: { id: account.id } });
+      const current = await tx.walletAccount.findUniqueOrThrow({ where: { id: account.id } });
+      if (current.walletId) return current;
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+    }
+  }
+  throw fail(503, 'A unique eWallet ID could not be assigned. Retry activation.');
 }
 
 async function ensureWalletBalance(tx: Prisma.TransactionClient, accountId: string, currency: string) {
@@ -224,13 +245,31 @@ export async function applyClubCoinAdjustment(currentActorId: string, input: Clu
 export function registerWalletRoutes(app: Express) {
   app.get('/api/wallet', requireAuth, run(async (_req, res) => {
     const user = actor(res);
-    const [account, setting] = await Promise.all([userAccount(user.id), settings()]);
+    const [account, setting, currencyOptions, preference] = await Promise.all([
+      userAccount(user.id), settings(),
+      prisma.currencyCatalogEntry.findMany({ where: { active: true }, orderBy: { code: 'asc' }, select: { code: true, name: true, symbol: true, minorUnitExponent: true } }),
+      prisma.userPreference.findUnique({ where: { userId: user.id }, select: { displayCurrency: true } })
+    ]);
+    const walletDisplayCurrency = currencyOptions.some(currency => currency.code === preference?.displayCurrency)
+      ? preference!.displayCurrency
+      : currencyOptions.some(currency => currency.code === env.CURRENCY)
+        ? env.CURRENCY
+        : currencyOptions[0]?.code ?? env.CURRENCY;
     const postings = account ? await prisma.walletLedgerPosting.findMany({ where: { accountId: account.id }, include: { transaction: true }, orderBy: { createdAt: 'desc' }, take: 100 }) : [];
     res.json({
-      account: account ? { id: account.id, status: account.status, balances: account.balances.map(balance => ({ currency: balance.currency, availableMinor: balance.availableMinor, pendingMinor: balance.pendingMinor, heldMinor: balance.heldMinor, frozenMinor: balance.frozenMinor })) } : { status: 'ACTIVE', balances: [] },
+      account: account ? { id: account.id, walletId: account.walletId, status: account.status, balances: account.balances.map(balance => ({ currency: balance.currency, availableMinor: balance.availableMinor, pendingMinor: balance.pendingMinor, heldMinor: balance.heldMinor, frozenMinor: balance.frozenMinor })) } : { id: null, walletId: null, status: 'NOT_ACTIVATED', balances: [] },
       transactions: postings.map(posting => ({ id: posting.id, amountMinor: posting.amountMinor, direction: posting.direction, currency: posting.currency, status: publicWalletStatus(posting.transaction.status), type: posting.transaction.entryType, referenceType: posting.transaction.referenceType, referenceId: posting.transaction.referenceId, createdAt: posting.createdAt })),
+      currencyOptions,
+      walletDisplayCurrency,
       gates: walletSummary(setting)
     });
+  }));
+
+  app.post('/api/wallet/activate', requireAuth, run(async (_req, res) => {
+    const user = actor(res);
+    const existing = await prisma.walletAccount.findUnique({ where: { userId: user.id }, select: { walletId: true } });
+    const account = await prisma.$transaction(tx => ensureWalletAccount(tx, user.id));
+    res.status(existing?.walletId ? 200 : 201).json({ id: account.id, walletId: account.walletId, status: account.status, alreadyActivated: Boolean(existing?.walletId) });
   }));
 
   app.get('/api/wallet/transactions', requireAuth, run(async (req, res) => {
@@ -303,8 +342,20 @@ export function registerWalletRoutes(app: Express) {
     const input = transferSchema.parse(req.body);
     const setting = await settings();
     if (!isWalletActionEnabled('walletTransfersEnabled', walletGateSettings(setting), env.MONEY_MOVEMENT_HARD_DISABLED)) throw fail(409, 'Wallet transfers are disabled');
-    const recipient = await prisma.user.findUnique({ where: { email: input.recipientEmail.toLowerCase() }, select: { id: true } });
-    if (!recipient || recipient.id === user.id) throw fail(409, 'Transfer recipient is not eligible');
+    if (!await prisma.currencyCatalogEntry.findFirst({ where: { code: input.currency, active: true }, select: { code: true } })) throw fail(409, 'Transfers are limited to currently active platform currencies. Refresh and choose another currency.');
+    const sender = await prisma.user.findUnique({ where: { id: user.id }, select: { id: true, emailVerifiedAt: true, walletAccount: { select: { id: true, walletId: true, status: true } } } });
+    if (!sender?.emailVerifiedAt) throw fail(403, 'Verify your email before sending wallet funds.');
+    if (!sender.walletAccount?.walletId) throw fail(409, 'Activate your eWallet before sending funds.');
+    if (sender.walletAccount.status !== WalletAccountStatus.ACTIVE) throw fail(409, 'Your eWallet is not active.');
+    let recipient: { id: string; emailVerifiedAt: Date | null; walletAccount: { id: string; walletId: string | null; status: WalletAccountStatus } | null } | null = null;
+    const recipientValue = input.recipient ?? input.recipientEmail ?? input.recipientWalletId ?? '';
+    if (z.string().email().safeParse(recipientValue).success) {
+      recipient = await prisma.user.findUnique({ where: { email: recipientValue.toLowerCase() }, select: { id: true, emailVerifiedAt: true, walletAccount: { select: { id: true, walletId: true, status: true } } } });
+    } else {
+      const account = await prisma.walletAccount.findUnique({ where: { walletId: normalizeWalletId(recipientValue) }, select: { id: true, walletId: true, status: true, user: { select: { id: true, emailVerifiedAt: true } } } });
+      if (account?.user) recipient = { id: account.user.id, emailVerifiedAt: account.user.emailVerifiedAt, walletAccount: { id: account.id, walletId: account.walletId, status: account.status } };
+    }
+    if (!recipient || recipient.id === user.id || !recipient.emailVerifiedAt || !recipient.walletAccount?.walletId || recipient.walletAccount.status !== WalletAccountStatus.ACTIVE) throw fail(409, 'Recipient must have an active eWallet and a verified email address.');
     const existing = await prisma.walletTransfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
     if (existing) {
       if (!transferMatches(existing, user.id, recipient.id, input)) throw fail(409, 'Idempotency key was already used for a different request');
@@ -312,8 +363,11 @@ export function registerWalletRoutes(app: Express) {
     }
     try {
       const transfer = await prisma.$transaction(async tx => {
-        const sourceAccount = await ensureWalletAccount(tx, user.id);
-        const destinationAccount = await ensureWalletAccount(tx, recipient.id);
+        const [sourceAccount, destinationAccount] = await Promise.all([
+          tx.walletAccount.findUnique({ where: { userId: user.id } }),
+          tx.walletAccount.findUnique({ where: { userId: recipient!.id } })
+        ]);
+        if (!sourceAccount || !destinationAccount || sourceAccount.id !== sender.walletAccount!.id || destinationAccount.id !== recipient!.walletAccount!.id) throw fail(409, 'Wallet identity changed. Refresh and retry.');
         if (sourceAccount.status !== WalletAccountStatus.ACTIVE || destinationAccount.status !== WalletAccountStatus.ACTIVE) throw fail(409, 'Wallet transfer is unavailable');
         const sourceBalance = await ensureWalletBalance(tx, sourceAccount.id, input.currency);
         const destinationBalance = await ensureWalletBalance(tx, destinationAccount.id, input.currency);
@@ -326,7 +380,7 @@ export function registerWalletRoutes(app: Express) {
         assertBalancedPostings(postings.map(posting => ({ direction: posting.direction, amountMinor: posting.amountMinor, currency: posting.currency })));
         await tx.walletLedgerPosting.createMany({ data: postings });
         await appendWalletAllocations(tx, buildPostingAllocations(ledger.id, input.idempotencyKey, postings));
-        const transfer = await tx.walletTransfer.create({ data: { senderId: user.id, recipientId: recipient.id, sourceAccountId: sourceAccount.id, destinationAccountId: destinationAccount.id, amountMinor: input.amountMinor, currency: input.currency, status: WalletTransferStatus.COMPLETED, idempotencyKey: input.idempotencyKey, ledgerTransactionId: ledger.id, completedAt: new Date() } });
+        const transfer = await tx.walletTransfer.create({ data: { senderId: user.id, recipientId: recipient!.id, sourceAccountId: sourceAccount.id, destinationAccountId: destinationAccount.id, amountMinor: input.amountMinor, currency: input.currency, status: WalletTransferStatus.COMPLETED, idempotencyKey: input.idempotencyKey, ledgerTransactionId: ledger.id, completedAt: new Date() } });
         await auditInTransaction(tx, user.id, 'WALLET_TRANSFER_COMPLETED', 'WalletTransfer', transfer.id, { amountMinor: transfer.amountMinor, currency: transfer.currency });
         return transfer;
       });
@@ -361,13 +415,15 @@ export function registerWalletRoutes(app: Express) {
   }));
 
   app.get('/api/admin/wallet/summary', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
-    const [setting, accounts, balances, coins] = await Promise.all([
+    const [setting, accounts, balances, coins, adminWallet, currencyOptions] = await Promise.all([
       settings(),
       prisma.walletAccount.count(),
       prisma.walletBalance.groupBy({ by: ['currency'], _sum: { availableMinor: true, pendingMinor: true, heldMinor: true, frozenMinor: true } }),
-      prisma.clubCoinAccount.aggregate({ _sum: { balance: true }, _count: { _all: true } })
+      prisma.clubCoinAccount.aggregate({ _sum: { balance: true }, _count: { _all: true } }),
+      prisma.walletAccount.findUnique({ where: { walletId: PLATFORM_ADMIN_WALLET_ID }, include: { balances: { orderBy: { currency: 'asc' } } } }),
+      prisma.currencyCatalogEntry.findMany({ where: { active: true }, orderBy: { code: 'asc' }, select: { code: true, name: true, symbol: true, minorUnitExponent: true } })
     ]);
-    res.json({ gates: walletSummary(setting), walletAccounts: accounts, balances, clubCoins: coins });
+    res.json({ gates: walletSummary(setting), walletAccounts: accounts, balances, clubCoins: coins, currencyOptions, adminWallet: adminWallet ? { walletId: adminWallet.walletId, status: adminWallet.status, balances: adminWallet.balances } : null });
   }));
 
   app.get('/api/admin/wallet/reconciliation', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
@@ -379,10 +435,70 @@ export function registerWalletRoutes(app: Express) {
     res.json(buildWalletReconciliationReport(balances.map(balance => ({ ...balance, userId: balance.account.userId })), postings, allocations));
   }));
 
+  app.post('/api/admin/wallet/platform/activate', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
+    const user = actor(res);
+    const account = await prisma.$transaction(async tx => {
+      const result = await ensureWalletAccount(tx, user.id);
+      await auditInTransaction(tx, user.id, 'PLATFORM_EWALLET_ACTIVATED', 'WalletAccount', result.id, { walletId: result.walletId });
+      return result;
+    });
+    if (account.walletId !== PLATFORM_ADMIN_WALLET_ID) throw fail(409, 'The reserved platform wallet ID is assigned to a different administrator account.');
+    res.status(201).json({ walletId: account.walletId, status: account.status });
+  }));
+
   app.get('/api/admin/wallet/users', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-    const accounts = await prisma.walletAccount.findMany({ where: query ? { user: { OR: [{ email: { contains: query, mode: 'insensitive' } }, { name: { contains: query, mode: 'insensitive' } }] } } : {}, include: { user: { select: { id: true, name: true, email: true } }, balances: true }, orderBy: { updatedAt: 'desc' }, take: 100 });
-    res.json(accounts.map(account => ({ id: account.id, user: account.user, status: account.status, balances: account.balances })));
+    const users = await prisma.user.findMany({ where: query ? { OR: [{ email: { contains: query, mode: 'insensitive' } }, { name: { contains: query, mode: 'insensitive' } }] } : {}, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100, select: { id: true, name: true, email: true, emailVerifiedAt: true, role: true, createdAt: true, walletAccount: { include: { balances: { orderBy: { currency: 'asc' } } } } } });
+    res.json(users.map(user => ({ user: { id: user.id, name: user.name, email: user.email, emailVerified: Boolean(user.emailVerifiedAt), role: user.role, createdAt: user.createdAt }, account: user.walletAccount ? { id: user.walletAccount.id, walletId: user.walletAccount.walletId, status: user.walletAccount.status, balances: user.walletAccount.balances } : null })));
+  }));
+
+  app.get('/api/admin/wallet/users/:userId/ledger', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const userId = param(req.params.userId);
+    const account = await prisma.walletAccount.findUnique({ where: { userId }, select: { id: true, walletId: true, status: true, balances: { orderBy: { currency: 'asc' } } } });
+    if (!account) return res.json({ account: null, entries: [] });
+    const entries = await prisma.walletLedgerPosting.findMany({ where: { accountId: account.id }, orderBy: { createdAt: 'desc' }, take: 100, include: { transaction: { select: { id: true, entryType: true, status: true, referenceType: true, referenceId: true } } } });
+    res.json({ account, entries });
+  }));
+
+  app.post('/api/admin/wallet/users/:userId/fund', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const currentActor = actor(res);
+    const userId = param(req.params.userId);
+    const input = adminWalletFundingSchema.parse(req.body);
+    if (env.MONEY_MOVEMENT_HARD_DISABLED) throw fail(409, 'Real-money wallet movement is hard-disabled by server configuration.');
+    const setting = await settings();
+    if (!setting.walletEnabled || setting.walletEmergencyPause) throw fail(409, 'Wallet funding is unavailable under the current platform policy.');
+    const targetUser = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, emailVerifiedAt: true } });
+    if (!targetUser || targetUser.id === currentActor.id || !targetUser.emailVerifiedAt) throw fail(409, 'Manual funding requires a different user with a verified email address.');
+    const idempotencyKey = `admin-fund:${currentActor.id}:${input.idempotencyKey}`;
+    const existing = await prisma.walletTransfer.findUnique({ where: { idempotencyKey } });
+    if (existing) {
+      if (existing.senderId !== currentActor.id || existing.recipientId !== userId || existing.amountMinor !== input.amountMinor || existing.currency !== input.currency || existing.adminReason !== input.reason || existing.adminReference !== input.reference) throw fail(409, 'Idempotency key was already used for a different wallet funding adjustment.');
+      return res.status(200).json({ id: existing.id, status: existing.status, alreadyApplied: true });
+    }
+    try {
+      const transfer = await prisma.$transaction(async tx => {
+        const [sourceAccount, destinationAccount] = await Promise.all([ensureWalletAccount(tx, currentActor.id), ensureWalletAccount(tx, userId)]);
+        if (sourceAccount.walletId !== PLATFORM_ADMIN_WALLET_ID || sourceAccount.status !== WalletAccountStatus.ACTIVE || destinationAccount.status !== WalletAccountStatus.ACTIVE) throw fail(409, 'The platform admin eWallet or recipient wallet is unavailable.');
+        const [sourceBalance, destinationBalance] = await Promise.all([ensureWalletBalance(tx, sourceAccount.id, input.currency), ensureWalletBalance(tx, destinationAccount.id, input.currency)]);
+        const debit = await tx.walletBalance.updateMany({ where: { id: sourceBalance.id, availableMinor: { gte: input.amountMinor } }, data: { availableMinor: { decrement: input.amountMinor } } });
+        if (debit.count !== 1) throw fail(409, 'The platform admin eWallet has insufficient available funds for this manual credit.');
+        await tx.walletBalance.update({ where: { id: destinationBalance.id }, data: { availableMinor: { increment: input.amountMinor } } });
+        const ledger = await tx.walletLedgerTransaction.create({ data: { idempotencyKey: `wallet-${idempotencyKey}`, entryType: WalletLedgerEntryType.ADJUSTMENT, status: WalletLedgerStatus.POSTED, currency: input.currency, referenceType: 'WalletAdminManualFunding', metadataJson: inputJson({ adminId: currentActor.id, targetUserId: userId, reference: input.reference, reason: input.reason }) } });
+        const postings = [{ transactionId: ledger.id, accountId: sourceAccount.id, direction: WalletPostingDirection.CREDIT, amountMinor: input.amountMinor, currency: input.currency }, { transactionId: ledger.id, accountId: destinationAccount.id, direction: WalletPostingDirection.DEBIT, amountMinor: input.amountMinor, currency: input.currency }];
+        assertBalancedPostings(postings.map(posting => ({ direction: posting.direction, amountMinor: posting.amountMinor, currency: posting.currency })));
+        await tx.walletLedgerPosting.createMany({ data: postings });
+        await appendWalletAllocations(tx, buildPostingAllocations(ledger.id, idempotencyKey, postings));
+        const created = await tx.walletTransfer.create({ data: { senderId: currentActor.id, recipientId: userId, sourceAccountId: sourceAccount.id, destinationAccountId: destinationAccount.id, amountMinor: input.amountMinor, currency: input.currency, status: WalletTransferStatus.COMPLETED, idempotencyKey, ledgerTransactionId: ledger.id, completedAt: new Date(), adminReason: input.reason, adminReference: input.reference } });
+        await auditInTransaction(tx, currentActor.id, 'WALLET_ADMIN_MANUAL_FUNDING', 'WalletTransfer', created.id, { targetUserId: userId, amountMinor: input.amountMinor, currency: input.currency, reference: input.reference, reason: input.reason, sourceWalletId: sourceAccount.walletId });
+        return created;
+      });
+      return res.status(201).json({ id: transfer.id, status: transfer.status, amountMinor: transfer.amountMinor, currency: transfer.currency });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const raced = await prisma.walletTransfer.findUnique({ where: { idempotencyKey } });
+      if (!raced || raced.senderId !== currentActor.id || raced.recipientId !== userId || raced.amountMinor !== input.amountMinor || raced.currency !== input.currency || raced.adminReason !== input.reason || raced.adminReference !== input.reference) throw fail(409, 'Idempotency key was already used for a different wallet funding adjustment.');
+      return res.status(200).json({ id: raced.id, status: raced.status, alreadyApplied: true });
+    }
   }));
 
   app.get('/api/admin/club-coins/accounts', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {

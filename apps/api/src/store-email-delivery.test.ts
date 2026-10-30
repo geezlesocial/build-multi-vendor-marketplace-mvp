@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
 vi.mock('nodemailer', () => ({ default: { createTransport: mocks.createTransport } }));
 vi.mock('./config.js', () => ({ env: mocks.env }));
 vi.mock('./store-email-provider-config.js', () => ({
+  emailProviders: [],
   resolvePlatformEmailSettings: async () => ({ provider: 'DEPLOYMENT_ENVIRONMENT', providerLabel: 'Deployment environment', host: mocks.env.STORE_EMAIL_SMTP_HOST, port: mocks.env.STORE_EMAIL_SMTP_PORT, secure: mocks.env.STORE_EMAIL_SMTP_SECURE, requireTls: mocks.env.STORE_EMAIL_SMTP_REQUIRE_TLS, username: mocks.env.STORE_EMAIL_SMTP_USER, password: mocks.env.STORE_EMAIL_SMTP_PASSWORD, senderName: 'Market Lane', senderEmail: mocks.env.STORE_EMAIL_FROM, source: 'DEPLOYMENT_ENVIRONMENT' }),
   emailSettingsVerified: (_settings: unknown, environmentVerified: boolean) => environmentVerified,
   verifyActiveEmailProvider: vi.fn()

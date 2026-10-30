@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSession } from './session.js';
 import { Onboarding } from './Onboarding.js';
+import { JimaWidget } from './JimaWidget.js';
+import { HeaderActivity } from './HeaderActivity.js';
 
 const CART_SYNC_STORAGE_KEY = 'marketplace:cart-sync';
 
@@ -101,7 +103,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (user && !user.onboardingCompletedAt && window.location.pathname !== '/email/verify') return <div className="app onboardingAppShell"><main className="onboardingGate"><Onboarding /></main></div>;
 
-  const dashboardHref = user?.role === 'ADMIN' ? '/admin/platform' : '/dashboard';
+  const dashboardHref = user?.role === 'ADMIN' || user?.role === 'PLATFORM_STAFF' ? '/admin/platform' : '/dashboard';
   const platformName = publicBranding?.platformName?.trim() || publicBranding?.shortName?.trim() || 'Market Lane';
   const platformShortName = publicBranding?.shortName?.trim() || platformName;
   const platformTagline = publicBranding?.tagline?.trim() || 'independent marketplace';
@@ -111,6 +113,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <a className="brand" href="/">{platformLogo && <img className="platformBrandLogo" src={`/content-media/${encodeURIComponent(platformLogo)}`} alt={`${platformName} logo`} onError={event => { event.currentTarget.hidden = true; }} />}<span className="platformBrandText"><span className="platformBrandName">{platformShortName}</span><small>{platformTagline}</small></span></a>
       <nav className="primaryNav" aria-label="Main navigation">
         <a className="navPill" href="/">Shop</a>
+        {user && <HeaderActivity userId={user.id} role={user.role} />}
         <a className="navPill cartButton" href="/checkout">Cart <b aria-label={`${cartCount} items in cart`}>{user ? cartCount : 0}</b></a>
         {!user && <><a className="navPill" href="/?auth=login">Sign in</a><a className="navPill primary" href="/?auth=register">Create account</a></>}
         {user && <div className="accountMenu" ref={accountRef}>
@@ -120,9 +123,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </button>
           <div className="accountMenuPanel" id="account-menu" aria-label="Account destinations" hidden={!accountOpen}>
             <div className="accountMenuIdentity"><strong>{user.name}</strong><small>{user.email}</small></div>
-            {user.role === 'ADMIN' ? <a href="/admin/platform" onClick={() => setAccountOpen(false)}>Admin dashboard</a> : <>
+            {user.role === 'ADMIN' || user.role === 'PLATFORM_STAFF' ? <><a href="/admin/platform" onClick={() => setAccountOpen(false)}>{user.role === 'ADMIN' ? 'Admin dashboard' : `${user.platformPositionName ?? user.platformPosition?.replaceAll('_', ' ') ?? 'Team'} workspace`}</a>{(user.role === 'ADMIN' || user.platformPermissions?.includes('GROWTH')) && <a href="/admin/ads" onClick={() => setAccountOpen(false)}>Marketplace ads</a>}{(user.role === 'ADMIN' || user.platformPermissions?.includes('CONTENT_MANAGEMENT')) && <a href="/admin/content" onClick={() => setAccountOpen(false)}>Content workspace</a>}</> : <>
               <a href={`${dashboardHref}?mode=buyer`} onClick={() => setAccountOpen(false)}>Buyer dashboard</a>
               {(user.role === 'SELLER' || user.role === 'CASHIER') && <a href="/dashboard?mode=seller" onClick={() => setAccountOpen(false)}>Seller dashboard</a>}
+              {(user.role === 'BUYER' || user.role === 'SELLER') && <a href="/ads" onClick={() => setAccountOpen(false)}>Create and manage ads</a>}
               <a href="/dashboard?tab=orders" onClick={() => setAccountOpen(false)}>Orders</a>
               <a href="/dashboard?tab=messages" onClick={() => setAccountOpen(false)}>Messages</a>
               <a href="/wallet" onClick={() => setAccountOpen(false)}>Wallet</a>
@@ -138,5 +142,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     {user && !user.emailVerifiedAt && <div className="notice emailVerificationBanner" role="status">Verify <strong>{user.email}</strong> to review products and qualify for account rewards. <a href="/settings#profile">Open account settings</a></div>}
     <main className="shellMain">{children}</main>
     <footer>{platformName} · Platform payments are collected by the owner; automated seller payouts are not included.</footer>
+    <JimaWidget userName={user?.name} />
   </div>;
 }

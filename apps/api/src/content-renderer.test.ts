@@ -11,4 +11,15 @@ describe('crawlable CMS rendering', () => {
     expect(html).toContain('<p>Safe content');
     expect(html).not.toContain('javascript:');
   });
+
+  it('adds the same-origin marketplace ad slot only when an eligible published blog opts in', () => {
+    const base = { title: 'A post', description: 'Description', canonical: 'https://localhost/blog/example', body: '<p>Post body</p>', type: 'BlogPosting' as const, updatedAt: new Date('2026-01-01T00:00:00.000Z'), breadcrumb: 'Blog' };
+    const blog = renderDocument({ ...base, marketplaceAdPlacement: true });
+    expect(blog).toContain('data-marketplace-ad-placement="BLOG_POSTS"');
+    expect(blog).toContain('/api/marketplace-ads/blog-placement.js');
+    expect(blog).toContain('/api/marketplace-ads/placement.css');
+    const page = renderDocument({ ...base, type: 'WebPage' });
+    expect(page).not.toContain('data-marketplace-ad-placement');
+    expect(page).not.toContain('/api/marketplace-ads/blog-placement.js');
+  });
 });

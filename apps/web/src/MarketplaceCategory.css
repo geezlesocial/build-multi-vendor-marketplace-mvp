@@ -1,0 +1,10 @@
+.marketplaceCategoryPage{width:min(1240px,calc(100% - 2rem));margin:0 auto;padding:2rem 0 4rem}
+.marketplaceCategoryPage>h1{margin:.45rem 0;font-size:clamp(2.3rem,6vw,4.5rem);letter-spacing:-.05em;line-height:1.02}
+.marketplaceCategoryPage .categoryDescription{max-width:760px;color:#68766e;line-height:1.65}
+.categorySubcategories{display:flex;flex-wrap:wrap;gap:.6rem;margin:1rem 0 1.5rem}
+.categoryGrid .categoryChip{display:inline-flex;align-items:center;min-height:40px;padding:.45rem .9rem;border:1px solid #cbd8ce;border-radius:999px;background:#fff;color:#315d47;text-decoration:none;font:inherit}
+.categoryGrid .categoryChip:hover,.categoryGrid .categoryChip:focus-visible{border-color:#315d47;background:#eef5ef}
+.marketplaceCategoryPage .categoryChip{display:inline-flex;align-items:center;min-height:40px;padding:.45rem .9rem;border:1px solid #cbd8ce;border-radius:999px;background:#fff;color:#315d47;text-decoration:none;font-weight:650}
+.marketplaceCategoryPage .categoryChip:hover,.marketplaceCategoryPage .categoryChip:focus-visible{border-color:#315d47;background:#eef5ef}
+.marketplaceCategoryPage .sectionHeading{margin:1.5rem 0 1rem}
+@media(max-width:640px){.marketplaceCategoryPage{padding-top:1.25rem}.marketplaceCategoryPage .categoryChip{min-height:44px}}

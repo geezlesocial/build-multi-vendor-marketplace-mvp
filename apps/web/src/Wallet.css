@@ -1,0 +1,9 @@
+.walletIdentityRow{display:flex;align-items:center;flex-wrap:wrap;gap:.55rem}
+.walletIdentityRow .walletIdentity{display:inline-block;padding:.65rem 1rem;border-radius:.65rem;background:#e8f1e9;color:#315d47;font-size:1.25rem;letter-spacing:.08em}
+.walletCopyButton{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;min-height:2.7rem;padding:.55rem .8rem;border-radius:.7rem;color:#315d47}
+.walletCopyButton svg{width:1rem;height:1rem;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.6}
+.walletCopyButton:focus-visible{outline:3px solid #547d62;outline-offset:2px}
+.walletZeroBalance h2{display:flex;align-items:baseline;flex-wrap:wrap;gap:.45rem;margin:.25rem 0 .6rem}
+.walletZeroBalance h2 strong{font-size:clamp(1.5rem,3vw,2.2rem);color:#315d47}
+.walletZeroBalance .muted{max-width:58rem;margin-bottom:0}
+@media(max-width:600px){.walletIdentityRow{align-items:flex-start}.walletIdentityRow .walletIdentity{font-size:1.05rem}.walletCopyButton{min-height:2.5rem}}

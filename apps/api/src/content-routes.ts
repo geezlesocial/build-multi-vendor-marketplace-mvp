@@ -83,7 +83,7 @@ async function publicMediaAsset(id: string) {
   if (!asset || asset.scanStatus !== MediaScanStatus.APPROVED) return null;
   if (asset.uploadStatus !== 'COMPLETE') return null;
   const publishedNow = { status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
-  const [posts, pages, storePosts, storePages, branding, stores, products, productAttachments, sponsoredCreative, authPage] = await Promise.all([
+  const [posts, pages, storePosts, storePages, branding, stores, products, productAttachments, sponsoredCreative, authPage, marketingCampaignMedia] = await Promise.all([
     prisma.blogPost.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
     prisma.contentPage.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, ogImageId: true } }),
     prisma.blogPost.findMany({ where: { ...publishedNow, store: { seller: { status: 'APPROVED' } } }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
@@ -93,9 +93,23 @@ async function publicMediaAsset(id: string) {
     prisma.productImage.findMany({ where: { mediaAssetId: id, product: { status: 'APPROVED', OR: [{ sellerId: null }, { seller: { status: 'APPROVED' } }] } }, select: { id: true } }),
     prisma.productMedia.findMany({ where: { mediaAssetId: id, product: { status: 'APPROVED', OR: [{ sellerId: null }, { seller: { status: 'APPROVED' } }] } }, select: { id: true } }),
     prisma.storeBusterCampaignCreative.findFirst({ where: { mediaAssetId: id, campaign: { sponsored: true, status: 'APPROVED', OR: [{ startsAt: null }, { startsAt: { lte: now() } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now() } }] }], store: { seller: { status: 'APPROVED' } } } }, select: { id: true } }),
-    prisma.authPageCustomization.findUnique({ where: { id: 'default' }, select: { logoMediaId: true } })
+    prisma.authPageCustomization.findUnique({ where: { id: 'default' }, select: { logoMediaId: true } }),
+    prisma.marketingCampaignMedia.findFirst({
+      where: {
+        mediaAssetId: id,
+        mediaAsset: { purpose: MediaPurpose.PLATFORM_CONTENT },
+        campaign: {
+          OR: [
+            { status: 'PUBLISHED', OR: [{ startsAt: null }, { startsAt: { lte: now() } }] },
+            { status: 'SCHEDULED', startsAt: { lte: now() } }
+          ],
+          AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now() } }] }]
+        }
+      },
+      select: { mediaAssetId: true }
+    })
   ]);
-  const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative) || authPage?.logoMediaId === id;
+  const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative) || authPage?.logoMediaId === id || Boolean(marketingCampaignMedia);
   return referencedInPublishedContent ? asset : null;
 }
 
@@ -120,7 +134,7 @@ async function contentHtml(content: { title: string; bodyJson: unknown; excerpt?
   const metadata = branding?.publishedJson && typeof branding.publishedJson === 'object' && !Array.isArray(branding.publishedJson) ? branding.publishedJson as { platformName?: unknown; faviconMediaId?: unknown } : {};
   const siteName = typeof metadata.platformName === 'string' ? metadata.platformName : null;
   const faviconUrl = typeof metadata.faviconMediaId === 'string' ? `/content-media/${encodeURIComponent(metadata.faviconMediaId)}` : null;
-  return renderDocument({ title: content.seoTitle || content.title, description: content.seoDescription || safeDescription(content.title, content.excerpt), canonical, body: renderBlocks(content.bodyJson), type: kind === 'blog' ? 'BlogPosting' : 'WebPage', publishedAt: content.publishedAt, updatedAt: content.updatedAt, noIndex: preview || content.noIndex, noFollow: preview || content.noFollow, imageUrl: content.ogImageId ? `/content-media/${encodeURIComponent(content.ogImageId)}` : null, breadcrumb: kind === 'blog' ? 'Blog' : 'Pages', siteName, faviconUrl });
+  return renderDocument({ title: content.seoTitle || content.title, description: content.seoDescription || safeDescription(content.title, content.excerpt), canonical, body: renderBlocks(content.bodyJson), type: kind === 'blog' ? 'BlogPosting' : 'WebPage', publishedAt: content.publishedAt, updatedAt: content.updatedAt, noIndex: preview || content.noIndex, noFollow: preview || content.noFollow, imageUrl: content.ogImageId ? `/content-media/${encodeURIComponent(content.ogImageId)}` : null, breadcrumb: kind === 'blog' ? 'Blog' : 'Pages', siteName, faviconUrl, marketplaceAdPlacement: kind === 'blog' && !preview });
 }
 
 export function registerContentRoutes(app: Express, openObject: typeof openContentObject = openContentObject, storage: ManagedContentStorage | null = objectContentStorage, scanner: MalwareScanner | null = malwareScanner) {
@@ -153,7 +167,25 @@ export function registerContentRoutes(app: Express, openObject: typeof openConte
     res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map(url => `<url><loc>${escape(url.loc)}</loc><lastmod>${url.lastmod.toISOString()}</lastmod></url>`).join('')}</urlset>`);
   }));
   app.get('/robots.txt', (_req, res) => res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /content-preview/\nSitemap: ${env.SITE_URL}/sitemap.xml\n`));
-  app.get('/content-media/:id', run(async (req, res) => { const asset = await publicMediaAsset(param(req.params.id)); if (!asset) return res.status(404).send('Media not found'); res.setHeader('Content-Type', asset.detectedMime); res.setHeader('Content-Disposition', asset.kind === MediaKind.DOCUMENT || asset.kind === MediaKind.CAPTION ? `attachment; filename="${asset.safeName}"` : `inline; filename="${asset.safeName}"`); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); openObject(asset.storageProvider, asset.storageKey).on('error', () => { if (!res.headersSent) res.status(404).send('Media not found'); }).pipe(res); }));
+  app.get('/content-media/:id', run(async (req, res) => {
+    const asset = await publicMediaAsset(param(req.params.id));
+    if (!asset) return res.status(404).send('Media not found');
+    const campaignMedia = await prisma.marketingCampaignMedia.findUnique({ where: { mediaAssetId: asset.id }, select: { mediaAssetId: true } });
+    const baseHeaders = { 'Content-Type': asset.detectedMime, 'Content-Disposition': asset.kind === MediaKind.DOCUMENT || asset.kind === MediaKind.CAPTION ? `attachment; filename="${asset.safeName}"` : `inline; filename="${asset.safeName}"`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': campaignMedia ? 'public, max-age=60' : 'public, max-age=31536000, immutable' };
+    const range = req.headers.range;
+    if (range && asset.kind === MediaKind.VIDEO) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (!match || (!match[1] && !match[2])) return res.status(416).set({ 'Content-Range': `bytes */${asset.sizeBytes}`, 'Accept-Ranges': 'bytes' }).end();
+      const start = match[1] ? Number(match[1]) : Math.max(0, asset.sizeBytes - Number(match[2]));
+      const end = match[2] && match[1] ? Math.min(asset.sizeBytes - 1, Number(match[2])) : asset.sizeBytes - 1;
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= asset.sizeBytes) return res.status(416).set({ 'Content-Range': `bytes */${asset.sizeBytes}`, 'Accept-Ranges': 'bytes' }).end();
+      res.status(206).set({ ...baseHeaders, 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${asset.sizeBytes}`, 'Content-Length': String(end - start + 1) });
+      openObject(asset.storageProvider, asset.storageKey, { start, end }).on('error', () => { if (!res.headersSent) res.status(404).end(); }).pipe(res);
+      return;
+    }
+    res.set({ ...baseHeaders, ...(asset.kind === MediaKind.VIDEO ? { 'Accept-Ranges': 'bytes' } : {}) });
+    openObject(asset.storageProvider, asset.storageKey).on('error', () => { if (!res.headersSent) res.status(404).end(); }).pipe(res);
+  }));
   app.get('/api/admin/store-buster/campaigns/:campaignId/creatives/:assetId', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const creative = await prisma.storeBusterCampaignCreative.findFirst({
       where: { campaignId: param(req.params.campaignId), mediaAssetId: param(req.params.assetId), campaign: { sponsored: true } },

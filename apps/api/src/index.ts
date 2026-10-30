@@ -4,22 +4,27 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import { z } from 'zod';
-import { AffiliateAdjustmentType, ApprovalPolicy, Prisma, PaymentMethod, PaymentStatus, ProductStatus, Role, SellerStatus, OrderStatus } from '@prisma/client';
+import { AffiliateAdjustmentType, ApprovalPolicy, LiveSessionStatus, Prisma, PaymentMethod, PaymentStatus, ProductStatus, Role, SellerStatus, OrderStatus } from '@prisma/client';
 import type { Stripe as StripeType } from 'stripe';
+import { EgressStatus } from 'livekit-server-sdk';
 import { env } from './config.js';
-import { prisma, hashPassword, verifyPassword, createSession, currentUser, requireAuth, requireRole, audit, safeUser } from './security.js';
+import { prisma, hashPassword, verifyPassword, createSession, currentUser, requireAuth, requireRole, audit, safeUser, resolvePlatformPositionName } from './security.js';
 import { registerSchema, loginSchema, checkoutSchema, productSchema, variantSchema, posSchema, settingSchema, liveSessionSchema, liveReportSchema } from './validation.js';
-import { capturePaypalOrder, createPaypalOrder, createStripeCheckout, stripe, verifyPaypalWebhook } from './payments.js';
+import { capturePaypalOrder, createPaymongoCheckout, createPaypalOrder, createPaystackTransaction, createStripeCheckout, stripe, verifyPaypalWebhook } from './payments.js';
 import { eligibleProducts, eligibleSeller, liveShoppingState, publicLiveSession, requireLiveShopping, canTransitionLiveSession } from './live-domain.js';
+import { canDeleteLiveShow } from './live-state.js';
 import { liveProvider } from './live-provider.js';
 import { registerLiveProviderConfigurationRoutes, syncLiveProviderFromDatabase } from './live-provider-config.js';
+import { liveReplayStorageReady, reconcileLiveRecordings, removeReplayObject, replayObjectExists, streamReplayObject } from './live-replays.js';
 import { registerContentRoutes } from './content-routes.js';
 import { publishDueContent } from './content-scheduler.js';
 import { registerGrowthRoutes } from './growth-routes.js';
+import { registerCampaignMediaRoutes } from './campaign-media-routes.js';
 import { registerPlatformRoutes } from './platform-routes.js';
 import { registerDashboardRoutes, sellerDashboardSummary } from './dashboard-routes.js';
 import { registerMarketplaceRoutes } from './marketplace-routes.js';
 import { registerWalletRoutes } from './wallet-routes.js';
+import { registerMarketplaceAdRoutes, releaseExpiredMarketplaceAdBudgets } from './marketplace-ad-routes.js';
 import { registerAvatarRoutes } from './avatar-routes.js';
 import { registerStorePlanRoutes } from './store-plan-routes.js';
 import { registerPlatformStoreRoutes } from './platform-store-routes.js';
@@ -31,9 +36,10 @@ import { registerStoreMediaRoutes } from './store-media-routes.js';
 import { registerBrandingMediaRoutes } from './branding-media-routes.js';
 import { registerStoreGrowthRoutes } from './store-growth-routes.js';
 import { registerEmailProviderConfigurationRoutes } from './store-email-provider-config.js';
+import { registerSellerStoreIntegrationRoutes } from './seller-store-integrations.js';
 import { registerProductMediaRoutes } from './product-media-routes.js';
 import { registerShippingRoutes } from './shipping-routes.js';
-import { registerCurrencyRoutes } from './currency-routes.js';
+import { refreshGlobalReferenceRates, registerCurrencyRoutes } from './currency-routes.js';
 import { enabledMarketplaceLanguages } from './marketplace-domain.js';
 import { processStoreEmailDeliveryBatch, processTransactionalEmailOutboxBatch } from './store-email-worker.js';
 import { registerCommissionRoutes } from './commission-routes.js';
@@ -42,7 +48,9 @@ import { registerProductDiscountRoutes, resolveCartProductDiscount } from './pro
 import { registerOrderShippingRoutes } from './order-shipping-routes.js';
 import { registerOrderResolutionRoutes } from './order-resolution-routes.js';
 import { registerSupportRoutes } from './support-routes.js';
+import { purgeExpiredJimaConversations, registerJimaRoutes } from './jima-routes.js';
 import { registerMemberAdminRoutes } from './member-admin-routes.js';
+import { registerPlatformCollaboratorRoutes } from './platform-collaborator-routes.js';
 import { registerCarrierRoutes } from './carrier-routes.js';
 import { registerDropshippingRoutes } from './dropshipping-routes.js';
 import { applicableSellerCommissionPolicy, makeCommissionSnapshot, accrueSellerCommissionsForPaidOrder, reverseSellerCommissionForOrder } from './seller-commission.js';
@@ -59,14 +67,19 @@ import { matchesPersistedPaymentEvent, reconcileVerifiedPaymentEvent, type Verif
 import { paypalWebhookEventToVerifiedPaymentEvent } from './paypal-webhook-event.js';
 import { codCheckoutEligibilityFailure, exceedsCodOrderLimit } from './cod-policy.js';
 import { awardClubCoinsForCompletedOrder } from './club-coins-awards.js';
-import { createUserNotification } from './notification-delivery.js';
+import { createRoleNotifications, createUserNotification } from './notification-delivery.js';
+import { provisionApprovedSellerStore } from './seller-store-provisioning.js';
+import { notifyOrderParties } from './order-notifications.js';
 import { createAccountVerificationChallenge, deliverAccountVerification, registerAccountVerificationRoutes } from './account-verification-routes.js';
 import { registerProductReviewRoutes } from './product-review-routes.js';
 import { registerLiveAttendanceRoutes } from './live-attendance-routes.js';
 import { registerLiveEngagementRoutes } from './live-engagement-routes.js';
+import { purgeExpiredMessageAttachmentDrafts, registerMessageRoutes } from './message-routes.js';
+import { wholesaleConfigurationError, wholesaleQuantityError } from './wholesale-domain.js';
 import { registerSocialAuthRoutes } from './social-auth-routes.js';
 import { registerOnboardingRoutes } from './onboarding-routes.js';
 import { handleSponsoredPaypalEvent, handleSponsoredStripeEvent } from './store-buster-sponsored.js';
+import { providerCurrencyForMethod, createProviderChargeQuote, paymongoEventToVerifiedPaymentEvent, paystackEventToVerifiedPaymentEvent, verifyPaymongoSignature, verifyPaystackSignature, type ProviderChargeQuote } from './payment-gateway-domain.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -97,10 +110,12 @@ app.use('/api', apiLimiter);
 app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf); } }));
 registerContentRoutes(app);
 registerGrowthRoutes(app);
+registerCampaignMediaRoutes(app);
 registerMarketplaceRoutes(app);
 registerPlatformRoutes(app);
 registerDashboardRoutes(app);
 registerWalletRoutes(app);
+registerMarketplaceAdRoutes(app);
 registerAvatarRoutes(app);
 registerStorePlanRoutes(app);
 registerPlatformStoreRoutes(app);
@@ -111,6 +126,7 @@ registerStoreMediaRoutes(app);
 registerBrandingMediaRoutes(app);
 registerStoreGrowthRoutes(app);
 registerEmailProviderConfigurationRoutes(app);
+registerSellerStoreIntegrationRoutes(app);
 registerProductMediaRoutes(app);
 registerShippingRoutes(app);
 registerCurrencyRoutes(app);
@@ -120,13 +136,16 @@ registerProductDiscountRoutes(app);
 registerOrderShippingRoutes(app);
 registerOrderResolutionRoutes(app);
 registerSupportRoutes(app);
+registerJimaRoutes(app);
 registerMemberAdminRoutes(app);
+registerPlatformCollaboratorRoutes(app);
 registerCarrierRoutes(app);
 registerDropshippingRoutes(app);
 registerAccountVerificationRoutes(app);
 registerProductReviewRoutes(app);
 registerLiveAttendanceRoutes(app);
 registerLiveEngagementRoutes(app);
+registerMessageRoutes(app);
 registerSocialAuthRoutes(app);
 registerOnboardingRoutes(app);
 registerLiveProviderConfigurationRoutes(app);
@@ -134,6 +153,18 @@ if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch
 if (process.env.NODE_ENV !== 'test') setInterval(() => expireDueStoreSubscriptions(prisma).catch(() => console.error('Store subscription expiry scheduler failed')), 60_000);
 if (process.env.NODE_ENV !== 'test') setInterval(() => processStoreEmailDeliveryBatch().catch(() => console.error('Store email delivery worker failed')), 5_000);
 if (process.env.NODE_ENV !== 'test') setInterval(() => processTransactionalEmailOutboxBatch().catch(() => console.error('Transactional email delivery worker failed')), 5_000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => releaseExpiredMarketplaceAdBudgets().catch(() => console.error('Marketplace ad budget expiry reconciliation failed')), 60_000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredJimaConversations().catch(() => console.error('Jima retention cleanup failed')), 60 * 60 * 1000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredMessageAttachmentDrafts().catch(() => console.error('Message draft cleanup failed')), 60 * 60 * 1000);
+if (process.env.NODE_ENV !== 'test') {
+  setTimeout(() => { void syncLiveProviderFromDatabase().then(reconcileLiveRecordings).catch(() => undefined); }, 5_000);
+  setInterval(() => { void syncLiveProviderFromDatabase().then(reconcileLiveRecordings).catch(() => undefined); }, 15_000);
+}
+if (process.env.NODE_ENV !== 'test' && env.FX_REFERENCE_FETCH_ENABLED) {
+  const refreshReferenceRates = () => refreshGlobalReferenceRates().catch(error => console.error('Reference exchange-rate refresh failed', error));
+  setTimeout(() => void refreshReferenceRates(), 1_500);
+  setInterval(() => void refreshReferenceRates(), 24 * 60 * 60 * 1000);
+}
 
 const asyncRoute = (handler: express.RequestHandler): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value);
@@ -145,7 +176,12 @@ app.get('/ready', asyncRoute(async (_req, res) => { await prisma.$queryRaw`SELEC
 
 app.post('/api/auth/register', credentialLimiter, asyncRoute(async (req, res) => {
   const input = parse(registerSchema, req.body);
-  const user = await prisma.user.create({ data: { email: input.email.toLowerCase(), name: input.name, passwordHash: await hashPassword(input.password) } });
+  const user = await prisma.$transaction(async tx => {
+    const created = await tx.user.create({ data: { email: input.email.toLowerCase(), name: input.name, passwordHash: await hashPassword(input.password) } });
+    await createUserNotification(tx, { userId: created.id, eventType: 'ACCOUNT_CREATED', title: 'Welcome to Market Lane', body: 'Your account is ready. Verify your email and complete onboarding to start exploring the marketplace.', link: '/onboarding', payloadJson: { userId: created.id } }, 'account');
+    await createRoleNotifications(tx, Role.ADMIN, { eventType: 'ACCOUNT_CREATED', title: 'New member account created', body: `${created.name} (${created.email}) created a marketplace account.`, link: '/admin/platform?section=members', payloadJson: { userId: created.id } }, 'account');
+    return created;
+  });
   const challenge = await createAccountVerificationChallenge(user.id);
   const delivery = await deliverAccountVerification(challenge);
   await createSession(user.id, res);
@@ -153,12 +189,14 @@ app.post('/api/auth/register', credentialLimiter, asyncRoute(async (req, res) =>
 }));
 app.post('/api/auth/login', credentialLimiter, asyncRoute(async (req, res) => {
   const input = parse(loginSchema, req.body);
-  const user = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() }, include: { seller: true } });
+  const user = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() }, include: { seller: true, platformCollaborator: true } });
   if (!user || !(await verifyPassword(input.password, user.passwordHash))) return res.status(401).json({ error: 'Invalid credentials' });
   const account = await prisma.$queryRaw<{ accountStatus: string }[]>`SELECT "accountStatus" FROM "User" WHERE "id" = ${user.id}`;
   if (account[0]?.accountStatus !== 'ACTIVE') return res.status(403).json({ error: 'This account is not currently available. Contact platform support.' });
   await createSession(user.id, res);
-  res.json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.emailVerifiedAt, onboardingCompletedAt: user.onboardingCompletedAt, ...(user.seller ? { sellerId: user.seller.id } : {}), ...(user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) }) });
+  const collaborator = user.platformCollaborator;
+  const platformPositionName = user.role === Role.PLATFORM_STAFF && collaborator?.enabled ? await resolvePlatformPositionName(collaborator.position) : undefined;
+  res.json({ user: safeUser({ id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.emailVerifiedAt, onboardingCompletedAt: user.onboardingCompletedAt, ...(user.seller ? { sellerId: user.seller.id } : {}), ...(user.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}), ...(user.role === Role.PLATFORM_STAFF && collaborator?.enabled ? { platformPosition: collaborator.position as import('./platform-access.js').PlatformPosition, platformPositionName, platformPermissions: collaborator.permissions } : {}) }) });
 }));
 app.post('/api/auth/logout', requireAuth, asyncRoute(async (req, res) => { const token = req.cookies?.[env.SESSION_COOKIE_NAME] as string | undefined; if (token) await prisma.session.deleteMany({ where: { tokenHash: (await import('node:crypto')).createHash('sha256').update(token).digest('hex') } }); res.clearCookie(env.SESSION_COOKIE_NAME); res.clearCookie('marketplace_csrf'); res.status(204).send(); }));
 app.get('/api/auth/me', asyncRoute(async (req, res) => { const user = await currentUser(req); res.json({ user: user ? safeUser(user) : null }); }));
@@ -170,21 +208,35 @@ app.get('/api/settings/public', asyncRoute(async (_req, res) => {
   res.json({ multiVendorEnabled: marketplace?.multiVendorEnabled ?? true, paymentMethods: methods, branding: branding?.publishedJson ?? null, languages: enabledMarketplaceLanguages(marketplace?.enabledLanguages), baseCurrency: env.CURRENCY, checkoutCurrency: env.CURRENCY, availableDisplayCurrencies, fxRatesConfigured: availableDisplayCurrencies.length > 1, subscriptionBillingEnabled: false, liveShopping: { enabled: live.effectiveEnabled, deploymentGate: live.deploymentGate, reason: live.reason } });
 }));
 
-app.get('/api/live-shopping/status', asyncRoute(async (_req, res) => res.json(await liveShoppingState())));
+app.get('/api/live-shopping/status', asyncRoute(async (_req, res) => {
+  const state = await liveShoppingState();
+  res.json({ ...state, recordingAvailable: state.readiness.configured && liveReplayStorageReady(), recordingStorageConfigured: liveReplayStorageReady() });
+}));
 app.get('/api/live-sessions', asyncRoute(async (_req, res) => {
-  await requireLiveShopping();
-  const sessions = await prisma.liveSession.findMany({ where: { status: { in: ['SCHEDULED', 'STARTING', 'LIVE', 'PAUSED'] }, seller: { is: { status: SellerStatus.APPROVED } }, OR: [{ status: { not: 'SCHEDULED' } }, { scheduledAt: { gte: new Date() } }] }, include: { seller: { include: { store: { select: { name: true, slug: true } } } }, products: { where: { product: { is: { status: ProductStatus.APPROVED } } }, orderBy: { sortOrder: 'asc' }, include: { product: { include: { inventory: true } } } } }, orderBy: { scheduledAt: 'asc' }, take: 50 });
+  const liveState = await liveShoppingState();
+  const visibleSessions: Prisma.LiveSessionWhereInput[] = [{ status: 'ENDED', recordingStatus: 'READY', replayPublishedAt: { not: null } }];
+  if (liveState.effectiveEnabled) visibleSessions.push({ status: { in: [LiveSessionStatus.SCHEDULED, LiveSessionStatus.STARTING, LiveSessionStatus.LIVE, LiveSessionStatus.PAUSED] }, OR: [{ status: { not: LiveSessionStatus.SCHEDULED } }, { scheduledAt: { gte: new Date() } }] });
+  const liveSessionWhere: Prisma.LiveSessionWhereInput = { deletedAt: null, seller: { is: { status: SellerStatus.APPROVED } }, OR: visibleSessions };
+  const sessions = await prisma.liveSession.findMany({ where: liveSessionWhere, include: { seller: { include: { store: { select: { name: true, slug: true } } } }, products: { where: { product: { is: { status: ProductStatus.APPROVED } } }, orderBy: { sortOrder: 'asc' }, include: { product: { include: { inventory: true } } } } }, orderBy: [{ scheduledAt: 'asc' }, { endedAt: 'desc' }], take: 50 });
   res.json(sessions.map(session => publicLiveSession({ ...session, products: session.products.map(link => ({ ...link, product: { ...link.product, availableStock: link.product.inventory?.quantity ?? 0 } })) })));
 }));
 app.get('/api/live-sessions/:id', asyncRoute(async (req, res) => {
-  await requireLiveShopping();
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), status: { in: ['SCHEDULED', 'STARTING', 'LIVE', 'PAUSED'] }, seller: { is: { status: SellerStatus.APPROVED } }, OR: [{ status: { not: 'SCHEDULED' } }, { scheduledAt: { gte: new Date() } }] }, include: { seller: { include: { store: { select: { name: true, slug: true } } } }, products: { where: { product: { is: { status: ProductStatus.APPROVED } } }, orderBy: { sortOrder: 'asc' }, include: { product: { include: { inventory: true } } } } } });
+  const liveState = await liveShoppingState();
+  const publicSessionOptions: Prisma.LiveSessionWhereInput[] = [{ status: LiveSessionStatus.ENDED, recordingStatus: 'READY', replayPublishedAt: { not: null } }];
+  if (liveState.effectiveEnabled) publicSessionOptions.push({ status: { in: [LiveSessionStatus.SCHEDULED, LiveSessionStatus.STARTING, LiveSessionStatus.LIVE, LiveSessionStatus.PAUSED] }, OR: [{ status: { not: LiveSessionStatus.SCHEDULED } }, { scheduledAt: { gte: new Date() } }] });
+  const sessionWhere: Prisma.LiveSessionWhereInput = { id: routeParam(req.params.id), deletedAt: null, seller: { is: { status: SellerStatus.APPROVED } }, OR: publicSessionOptions };
+  const session = await prisma.liveSession.findFirst({ where: sessionWhere, include: { seller: { include: { store: { select: { name: true, slug: true } } } }, products: { where: { product: { is: { status: ProductStatus.APPROVED } } }, orderBy: { sortOrder: 'asc' }, include: { product: { include: { inventory: true } } } } } });
   if (!session) return res.status(404).json({ error: 'Live session not found' });
   res.json(publicLiveSession({ ...session, products: session.products.map(link => ({ ...link, product: { ...link.product, availableStock: link.product.inventory?.quantity ?? 0 } })) }));
 }));
+app.get('/api/live-sessions/:id/replay', asyncRoute(async (req, res) => {
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), deletedAt: null, status: 'ENDED', recordingStatus: 'READY', replayPublishedAt: { not: null }, seller: { is: { status: SellerStatus.APPROVED } } }, select: { recordingStorageKey: true } });
+  if (!session?.recordingStorageKey) return res.status(404).json({ error: 'Published replay not found.' });
+  await streamReplayObject(req, res, session.recordingStorageKey);
+}));
 app.get('/api/live-sessions/:id/token', asyncRoute(async (req, res) => {
   await requireLiveShopping();
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), status: { in: ['STARTING', 'LIVE', 'PAUSED'] }, seller: { is: { status: SellerStatus.APPROVED } }, providerSessionRef: { not: null } }, select: { providerSessionRef: true } });
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), deletedAt: null, status: { in: ['STARTING', 'LIVE', 'PAUSED'] }, seller: { is: { status: SellerStatus.APPROVED } }, providerSessionRef: { not: null } }, select: { providerSessionRef: true } });
   if (!session?.providerSessionRef) return res.status(409).json({ error: 'This show is not ready for viewer playback.' });
   const user = await currentUser(req);
   let guestKey = req.cookies?.marketplace_live_viewer as string | undefined;
@@ -199,7 +251,7 @@ app.post('/api/live-sessions/:id/reports', requireAuth, asyncRoute(async (req, r
   await requireLiveShopping();
   const user = res.locals.user as { id: string };
   const input = parse(liveReportSchema, req.body);
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), status: { in: ['STARTING', 'LIVE', 'PAUSED'] } }, select: { id: true } });
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), deletedAt: null, status: { in: ['STARTING', 'LIVE', 'PAUSED'] } }, select: { id: true } });
   if (!session) return res.status(404).json({ error: 'Live session not found' });
   const report = await prisma.liveSessionReport.create({ data: { sessionId: session.id, reporterId: user.id, reason: input.reason } });
   res.status(201).json({ id: report.id, status: report.status });
@@ -207,7 +259,9 @@ app.post('/api/live-sessions/:id/reports', requireAuth, asyncRoute(async (req, r
 app.get('/api/seller/live-sessions', requireAuth, requireRole(Role.SELLER), asyncRoute(async (_req, res) => {
   const user = res.locals.user as { id: string; sellerId?: string };
   if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
-  const sessions = await prisma.liveSession.findMany({ where: { sellerId: user.sellerId }, include: { products: { orderBy: { sortOrder: 'asc' }, include: { product: true } } }, orderBy: { createdAt: 'desc' }, take: 100 });
+  const view = _req.query.view === undefined ? 'active' : _req.query.view;
+  if (view !== 'active' && view !== 'deleted') return res.status(400).json({ error: 'View must be active or deleted.' });
+  const sessions = await prisma.liveSession.findMany({ where: { sellerId: user.sellerId, deletedAt: view === 'deleted' ? { not: null } : null }, include: { products: { orderBy: { sortOrder: 'asc' }, include: { product: true } } }, orderBy: { createdAt: 'desc' }, take: 100 });
   res.json(sessions.map(publicLiveSession));
 }));
 app.post('/api/seller/live-sessions', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
@@ -224,7 +278,8 @@ app.post('/api/seller/live-sessions', requireAuth, requireRole(Role.SELLER), asy
 }));
 app.patch('/api/seller/live-sessions/:id', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
   const user = res.locals.user as { sellerId?: string };
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId }, include: { products: true } });
+  if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, deletedAt: null }, include: { products: true } });
   if (!session) return res.status(404).json({ error: 'Live session not found' });
   if (!['DRAFT', 'SCHEDULED'].includes(session.status)) return res.status(409).json({ error: 'Only draft or scheduled shows can be edited.' });
   const input = parse(liveSessionSchema.partial(), req.body);
@@ -234,7 +289,7 @@ app.patch('/api/seller/live-sessions/:id', requireAuth, requireRole(Role.SELLER)
   if (scheduledAt && scheduledAt <= new Date()) return res.status(400).json({ error: 'Choose a future date and time for the live show.' });
   const updated = await prisma.$transaction(async tx => {
     const changed = await tx.liveSession.updateMany({
-      where: { id: session.id, sellerId: session.sellerId, status: session.status },
+      where: { id: session.id, sellerId: session.sellerId, status: session.status, deletedAt: null },
       data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.coverImageUrl !== undefined ? { coverImageUrl: input.coverImageUrl } : {}), ...(scheduledAt !== undefined ? { scheduledAt, status: scheduledAt ? 'SCHEDULED' as const : 'DRAFT' as const } : {}), ...(input.timezone !== undefined ? { timezone: input.timezone } : {}) }
     });
     if (!changed.count) return null;
@@ -248,40 +303,127 @@ app.patch('/api/seller/live-sessions/:id', requireAuth, requireRole(Role.SELLER)
   await audit((res.locals.user as { id: string }).id, 'LIVE_SESSION_UPDATED', 'LiveSession', session.id, { previousStatus: session.status, status: updated.status, productCount: input.productIds?.length ?? session.products.length });
   res.json(publicLiveSession(updated));
 }));
+app.delete('/api/seller/live-sessions/:id', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
+  const user = res.locals.user as { id: string; sellerId?: string };
+  if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, deletedAt: null }, select: { id: true, status: true, recordingStatus: true, replayPublishedAt: true } });
+  if (!session) return res.status(404).json({ error: 'Live show not found.' });
+  if (!canDeleteLiveShow(session.status, session.recordingStatus)) return res.status(409).json({ error: ['STARTING', 'LIVE', 'PAUSED'].includes(session.status) ? 'End the broadcast before deleting this show.' : 'Wait for the replay recording to finish before deleting this show.' });
+  const deletedAt = new Date();
+  const changed = await prisma.liveSession.updateMany({
+    where: { id: session.id, sellerId: user.sellerId, status: session.status, recordingStatus: session.recordingStatus, deletedAt: null },
+    data: { deletedAt, replayPublishedAt: null, ...(session.status === 'SCHEDULED' ? { status: 'DRAFT' } : {}) }
+  });
+  if (!changed.count) return res.status(409).json({ error: 'Show state changed while deleting; refresh and retry.' });
+  await audit(user.id, 'LIVE_SESSION_DELETED', 'LiveSession', session.id, { previousStatus: session.status, replayWasPublished: Boolean(session.replayPublishedAt) });
+  res.status(204).send();
+}));
+app.post('/api/seller/live-sessions/:id/restore', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
+  const user = res.locals.user as { id: string; sellerId?: string };
+  if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
+  const id = routeParam(req.params.id);
+  const changed = await prisma.liveSession.updateMany({ where: { id, sellerId: user.sellerId, deletedAt: { not: null } }, data: { deletedAt: null } });
+  if (!changed.count) return res.status(404).json({ error: 'Deleted show not found.' });
+  await audit(user.id, 'LIVE_SESSION_RESTORED', 'LiveSession', id, {});
+  const session = await prisma.liveSession.findFirst({ where: { id, sellerId: user.sellerId, deletedAt: null }, include: { products: { orderBy: { sortOrder: 'asc' }, include: { product: true } } } });
+  if (!session) return res.status(409).json({ error: 'Show was restored but could not be reloaded. Refresh your list.' });
+  res.json(publicLiveSession(session));
+}));
 app.post('/api/seller/live-sessions/:id/transition', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
   const user = res.locals.user as { id: string; sellerId?: string };
-  const next = z.object({ status: z.enum(['SCHEDULED', 'STARTING', 'LIVE', 'PAUSED', 'ENDED', 'CANCELLED']) }).parse(req.body).status;
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId } });
+  if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
+  const next = z.object({ status: z.enum(['DRAFT', 'SCHEDULED', 'STARTING', 'LIVE', 'PAUSED', 'ENDED', 'CANCELLED']) }).parse(req.body).status;
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, deletedAt: null } });
   if (!session) return res.status(404).json({ error: 'Live session not found' });
   if (session.status === next) return res.json({ ok: true, status: session.status });
   if (!canTransitionLiveSession(session.status, next)) return res.status(409).json({ error: `Invalid live-session transition from ${session.status} to ${next}` });
   if (next === 'STARTING') {
     await requireLiveShopping();
     const providerSession = await liveProvider.createSession({ title: session.title, scheduledAt: session.scheduledAt ?? undefined });
-    const started = await prisma.liveSession.updateMany({ where: { id: session.id, status: session.status }, data: { status: 'STARTING', provider: 'LIVEKIT', providerSessionRef: providerSession.providerSessionRef, playbackRef: providerSession.playbackRef, providerStatus: providerSession.providerStatus } });
+    const started = await prisma.liveSession.updateMany({ where: { id: session.id, sellerId: user.sellerId, status: session.status, deletedAt: null }, data: { status: 'STARTING', provider: 'LIVEKIT', providerSessionRef: providerSession.providerSessionRef, playbackRef: providerSession.playbackRef, providerStatus: providerSession.providerStatus } });
     if (!started.count) { await liveProvider.endSession(providerSession.providerSessionRef); return res.status(409).json({ error: 'Live session changed; refresh and retry.' }); }
     await audit(user.id, 'LIVE_SESSION_STATUS_CHANGED', 'LiveSession', session.id, { old: session.status, new: next, provider: 'LIVEKIT' });
     return res.json({ ok: true, status: next });
   }
+  let recording: { egressId: string; status: number } | null = null;
+  let recordingStartFailed = false;
+  const recordingKey = `live-replays/${session.id}/${randomUUID()}.mp4`;
   if (next === 'LIVE') {
     await requireLiveShopping();
     if (!session.providerSessionRef || !user.sellerId || !(await liveProvider.verifyHostPublishing(session.providerSessionRef, `seller:${user.sellerId}`))) return res.status(409).json({ error: 'Start your camera and microphone before going live.' });
+    if (liveReplayStorageReady()) {
+      try { recording = await liveProvider.startRecording(session.providerSessionRef, recordingKey); }
+      catch { recordingStartFailed = true; }
+    }
   }
   if (next === 'PAUSED') await requireLiveShopping();
-  if (next === 'SCHEDULED' && !session.scheduledAt) return res.status(409).json({ error: 'Set a scheduled date and time before scheduling this show.' });
-  if (next === 'ENDED' && session.providerSessionRef) await liveProvider.endSession(session.providerSessionRef);
+  if (next === 'SCHEDULED' && !session.scheduledAt) return res.status(409).json({ error: 'Set a scheduled date and time before publishing this show.' });
+  if (next === 'SCHEDULED' && session.scheduledAt && session.scheduledAt <= new Date()) return res.status(409).json({ error: 'Choose a future date and time before publishing this show.' });
+  let recordingEndStatus: number | null = null;
+  const recordingNeedsFinalization = Boolean(session.recordingEgressId && ['STARTING', 'RECORDING', 'PROCESSING'].includes(session.recordingStatus));
+  if (next === 'ENDED' && recordingNeedsFinalization && session.recordingEgressId) {
+    try { recordingEndStatus = (await liveProvider.stopRecording(session.recordingEgressId)).status; } catch { recordingEndStatus = null; }
+  }
+  const egressComplete = recordingEndStatus === EgressStatus.EGRESS_COMPLETE;
+  const egressFailed = recordingEndStatus === EgressStatus.EGRESS_FAILED || recordingEndStatus === EgressStatus.EGRESS_ABORTED;
+  const shouldRetainRoomForEgress = next === 'ENDED' && Boolean(session.recordingEgressId) && recordingEndStatus !== null && !egressComplete && !egressFailed;
+  if (next === 'ENDED' && session.providerSessionRef && !shouldRetainRoomForEgress) await liveProvider.endSession(session.providerSessionRef);
   const endedAt = next === 'ENDED' || next === 'CANCELLED' ? new Date() : null;
-  const updated = await prisma.liveSession.updateMany({ where: { id: session.id, status: session.status }, data: { status: next, ...(endedAt ? { endedAt } : {}), ...(next === 'LIVE' ? { startedAt: new Date(), providerStatus: 'LIVE' } : {}) } });
+  const updated = await prisma.liveSession.updateMany({ where: { id: session.id, sellerId: user.sellerId, status: session.status, deletedAt: null }, data: {
+    status: next,
+    ...(endedAt ? { endedAt } : {}),
+    ...(next === 'LIVE' ? {
+      startedAt: new Date(), providerStatus: 'LIVE',
+      recordingStatus: recording ? 'STARTING' : recordingStartFailed ? 'FAILED' : 'NOT_CONFIGURED',
+      recordingEgressId: recording?.egressId ?? null,
+      recordingStorageKey: recording ? recordingKey : null,
+      recordingStartedAt: recording ? new Date() : null,
+      recordingErrorCode: recordingStartFailed ? 'EGRESS_START_FAILED' : null
+    } : {}),
+    ...(next === 'ENDED' && recordingNeedsFinalization ? { recordingStatus: shouldRetainRoomForEgress || egressComplete ? 'PROCESSING' : 'FAILED', ...(shouldRetainRoomForEgress || egressComplete ? {} : { recordingErrorCode: egressFailed ? 'EGRESS_FAILED' : 'EGRESS_STOP_FAILED' }), recordingCompletedAt: shouldRetainRoomForEgress || egressComplete ? null : new Date() } : {})
+  } });
+  if (!updated.count && recording?.egressId) await liveProvider.stopRecording(recording.egressId).catch(() => undefined);
   if (!updated.count) return res.status(409).json({ error: 'Live session changed; retry with current state' });
   await audit(user.id, 'LIVE_SESSION_STATUS_CHANGED', 'LiveSession', session.id, { old: session.status, new: next });
+  if (next === 'ENDED') void reconcileLiveRecordings().catch(() => undefined);
   res.json({ ok: true, status: next });
 }));
 app.get('/api/seller/live-sessions/:id/stream-token', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
   const user = res.locals.user as { id: string; name?: string; sellerId?: string };
   if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, status: { in: ['STARTING', 'LIVE', 'PAUSED'] }, providerSessionRef: { not: null } }, select: { providerSessionRef: true } });
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, deletedAt: null, status: { in: ['STARTING', 'LIVE', 'PAUSED'] }, providerSessionRef: { not: null } }, select: { providerSessionRef: true } });
   if (!session?.providerSessionRef) return res.status(409).json({ error: 'Start the broadcast before opening the studio.' });
   res.json({ ...(await liveProvider.issueHostToken(session.providerSessionRef, `seller:${user.sellerId}`, user.name ?? 'Seller')), role: 'host' });
+}));
+app.get('/api/seller/live-sessions/:id/replay', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
+  const user = res.locals.user as { sellerId?: string };
+  if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, deletedAt: null, status: 'ENDED', recordingStatus: 'READY' }, select: { recordingStorageKey: true } });
+  if (!session?.recordingStorageKey) return res.status(404).json({ error: 'Replay is not ready for preview.' });
+  await streamReplayObject(req, res, session.recordingStorageKey);
+}));
+app.post('/api/seller/live-sessions/:id/replay', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
+  const user = res.locals.user as { id: string; sellerId?: string };
+  if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
+  const input = z.object({ published: z.boolean() }).strict().parse(req.body);
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, deletedAt: null, status: 'ENDED', recordingStatus: 'READY', recordingStorageKey: { not: null } }, select: { id: true, recordingStorageKey: true, replayPublishedAt: true } });
+  if (!session?.recordingStorageKey) return res.status(409).json({ error: 'The replay cannot be published until its private recording is ready.' });
+  if (input.published && !(await replayObjectExists(session.recordingStorageKey))) return res.status(409).json({ error: 'The private replay file is not available in storage yet. Try again shortly.' });
+  const updated = await prisma.liveSession.updateMany({ where: { id: session.id, sellerId: user.sellerId, status: 'ENDED', recordingStatus: 'READY', recordingStorageKey: session.recordingStorageKey, replayPublishedAt: session.replayPublishedAt, deletedAt: null }, data: { replayPublishedAt: input.published ? session.replayPublishedAt ?? new Date() : null } });
+  if (!updated.count) return res.status(409).json({ error: 'Replay state changed; refresh and try again.' });
+  await audit(user.id, input.published ? 'LIVE_REPLAY_PUBLISHED' : 'LIVE_REPLAY_UNPUBLISHED', 'LiveSession', session.id, { published: input.published });
+  res.json({ id: session.id, published: input.published });
+}));
+app.delete('/api/seller/live-sessions/:id/replay', requireAuth, requireRole(Role.SELLER), asyncRoute(async (req, res) => {
+  const user = res.locals.user as { id: string; sellerId?: string };
+  if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' });
+  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), sellerId: user.sellerId, status: 'ENDED', recordingStatus: 'READY', replayPublishedAt: null, recordingStorageKey: { not: null } }, select: { id: true, recordingStorageKey: true } });
+  if (!session?.recordingStorageKey) return res.status(409).json({ error: 'Unpublish the replay before deleting it.' });
+  await removeReplayObject(session.recordingStorageKey);
+  const updated = await prisma.liveSession.updateMany({ where: { id: session.id, sellerId: user.sellerId, recordingStatus: 'READY', replayPublishedAt: null, recordingStorageKey: session.recordingStorageKey }, data: { recordingStatus: 'FAILED', recordingStorageKey: null, recordingErrorCode: 'SELLER_DELETED_REPLAY' } });
+  if (!updated.count) return res.status(409).json({ error: 'Replay state changed while deleting; refresh and try again.' });
+  await audit(user.id, 'LIVE_REPLAY_DELETED', 'LiveSession', session.id, {});
+  res.status(204).send();
 }));
 
 app.get('/api/products', asyncRoute(async (req, res) => {
@@ -300,7 +442,24 @@ app.post('/api/sellers/apply', requireAuth, asyncRoute(async (_req, res) => {
   const user = res.locals.user as { id: string; role: Role };
   const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
   if (!settings?.multiVendorEnabled) return res.status(409).json({ error: 'Multi-vendor mode is disabled' });
-  const seller = await prisma.seller.upsert({ where: { userId: user.id }, update: { status: SellerStatus.PENDING }, create: { userId: user.id } });
+  const seller = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${user.id} FOR UPDATE`;
+    const existing = await tx.seller.findUnique({ where: { userId: user.id } });
+    let result = existing;
+    let submitted = false;
+    if (!existing) {
+      result = await tx.seller.create({ data: { userId: user.id, status: SellerStatus.PENDING } });
+      submitted = true;
+    } else if (existing.status === SellerStatus.REJECTED) {
+      result = await tx.seller.update({ where: { id: existing.id }, data: { status: SellerStatus.PENDING, reason: null } });
+      submitted = true;
+    }
+    if (submitted && result) {
+      await createUserNotification(tx, { userId: user.id, eventType: 'SELLER_APPLICATION_PENDING', title: 'Seller application submitted', body: 'Your seller application is pending marketplace review. We will notify you when its status changes.', link: '/dashboard', payloadJson: { sellerId: result.id, status: result.status } }, 'account');
+      await createRoleNotifications(tx, Role.ADMIN, { eventType: 'SELLER_APPLICATION_PENDING', title: 'Seller application needs review', body: 'A new seller application is waiting in the Sellers & stores directory.', link: '/admin/platform?section=vendors', payloadJson: { sellerId: result.id } }, 'account');
+    }
+    return result!;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   res.status(201).json(seller);
 }));
 
@@ -308,6 +467,11 @@ app.post('/api/products', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asy
   const user = res.locals.user as { id: string; role: Role; sellerId?: string };
   const input = parse(productSchema, req.body);
   if (!isValidSalePrice(input.priceMinor, input.salePriceMinor)) return res.status(400).json({ error: 'Sale price must be lower than the regular price.' });
+  const wholesaleEnabled = input.wholesaleEnabled ?? false;
+  const wholesaleMinQuantity = wholesaleEnabled ? input.wholesaleMinQuantity ?? null : null;
+  const wholesaleMaxQuantity = wholesaleEnabled ? input.wholesaleMaxQuantity ?? null : null;
+  const wholesaleError = wholesaleConfigurationError({ wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity });
+  if (wholesaleError) return res.status(400).json({ error: wholesaleError, code: 'WHOLESALE_CONFIGURATION_INVALID' });
   const scopedSellerId = user.role === Role.ADMIN
     ? (await prisma.store.findFirst({ where: { isPlatformStore: true }, select: { sellerId: true } }))?.sellerId
     : user.sellerId;
@@ -317,7 +481,7 @@ app.post('/api/products', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asy
   if (user.role !== Role.ADMIN && !seller) return res.status(403).json({ error: 'Approved seller required' });
   const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
   if (seller && user.role !== Role.ADMIN && !settings?.multiVendorEnabled) return res.status(409).json({ error: 'Multi-vendor mode is disabled' });
-  const productData = { sellerId: seller?.id, name: input.name, slug: `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 7)}`, description: input.description, priceMinor: input.priceMinor, salePriceMinor: input.salePriceMinor ?? null, color: input.color ?? null, currency: seller?.store?.baseCurrency ?? env.CURRENCY, barcode: input.barcode, status: user.role === Role.ADMIN || settings?.productApprovalPolicy === ApprovalPolicy.AUTOMATIC ? ProductStatus.APPROVED : ProductStatus.PENDING, inventory: { create: { quantity: input.stock } } };
+  const productData = { sellerId: seller?.id, name: input.name, slug: `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 7)}`, description: input.description, priceMinor: input.priceMinor, salePriceMinor: input.salePriceMinor ?? null, color: input.color ?? null, currency: seller?.store?.baseCurrency ?? env.CURRENCY, barcode: input.barcode, wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity, status: user.role === Role.ADMIN || settings?.productApprovalPolicy === ApprovalPolicy.AUTOMATIC ? ProductStatus.APPROVED : ProductStatus.PENDING, inventory: { create: { quantity: input.stock } } };
   if (seller) {
     const store = seller.store ? { id: seller.store.id } : null;
     if (!store) return res.status(409).json({ error: 'Complete Store setup before adding products.' });
@@ -348,9 +512,14 @@ app.patch('/api/products/:id', requireAuth, requireRole(Role.SELLER, Role.ADMIN)
   const nextPriceMinor = input.priceMinor ?? existing.priceMinor;
   const nextSalePriceMinor = input.salePriceMinor !== undefined ? input.salePriceMinor : existing.salePriceMinor;
   if (!isValidSalePrice(nextPriceMinor, nextSalePriceMinor)) return res.status(400).json({ error: 'Sale price must be lower than the regular price.' });
+  const wholesaleEnabled = input.wholesaleEnabled ?? existing.wholesaleEnabled;
+  const wholesaleMinQuantity = wholesaleEnabled ? input.wholesaleMinQuantity !== undefined ? input.wholesaleMinQuantity : existing.wholesaleMinQuantity : null;
+  const wholesaleMaxQuantity = wholesaleEnabled ? input.wholesaleMaxQuantity !== undefined ? input.wholesaleMaxQuantity : existing.wholesaleMaxQuantity : null;
+  const wholesaleError = wholesaleConfigurationError({ wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity });
+  if (wholesaleError) return res.status(400).json({ error: wholesaleError, code: 'WHOLESALE_CONFIGURATION_INVALID' });
   const product = await prisma.$transaction(async tx => {
     const taxonomy = await validateProductCatalogSelection({ categoryId: input.categoryId !== undefined ? input.categoryId : existing.categoryId, brandId: input.brandId !== undefined ? input.brandId : existing.brandId, productTypeId: input.productTypeId !== undefined ? input.productTypeId : existing.productTypeId, featureIds: input.featureIds ?? existing.featureAssignments.map(item => item.featureId) }, tx);
-    const updated = await tx.product.update({ where: { id: existing.id }, data: { ...(input.name ? { name: input.name } : {}), ...(input.description ? { description: input.description } : {}), ...(input.priceMinor !== undefined ? { priceMinor: input.priceMinor } : {}), ...(input.salePriceMinor !== undefined ? { salePriceMinor: input.salePriceMinor } : {}), ...(input.categoryId !== undefined ? { categoryId: taxonomy.categoryId } : {}), ...(input.brandId !== undefined ? { brandId: taxonomy.brandId } : {}), ...(input.productTypeId !== undefined ? { productTypeId: taxonomy.productTypeId } : {}), ...(input.color !== undefined ? { color: input.color } : {}), ...(input.barcode !== undefined ? { barcode: input.barcode } : {}) } });
+    const updated = await tx.product.update({ where: { id: existing.id }, data: { ...(input.name ? { name: input.name } : {}), ...(input.description ? { description: input.description } : {}), ...(input.priceMinor !== undefined ? { priceMinor: input.priceMinor } : {}), ...(input.salePriceMinor !== undefined ? { salePriceMinor: input.salePriceMinor } : {}), ...(input.categoryId !== undefined ? { categoryId: taxonomy.categoryId } : {}), ...(input.brandId !== undefined ? { brandId: taxonomy.brandId } : {}), ...(input.productTypeId !== undefined ? { productTypeId: taxonomy.productTypeId } : {}), ...(input.color !== undefined ? { color: input.color } : {}), ...(input.barcode !== undefined ? { barcode: input.barcode } : {}), wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity } });
     if (input.featureIds !== undefined || input.categoryId !== undefined || input.productTypeId !== undefined) {
       await tx.productFeatureAssignment.deleteMany({ where: { productId: existing.id } });
       if (taxonomy.featureIds.length) await tx.productFeatureAssignment.createMany({ data: taxonomy.featureIds.map(featureId => ({ productId: existing.id, featureId })) });
@@ -382,7 +551,31 @@ app.patch('/api/products/:id/variants/:variantId', requireAuth, requireRole(Role
 }));
 
 app.get('/api/cart', requireAuth, asyncRoute(async (_req, res) => { const user = res.locals.user as { id: string }; const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { productType: true, inventory: true, seller: { include: { store: true } } } } } } } }); res.json(cart ?? { items: [] }); }));
-app.post('/api/cart/items', requireAuth, asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const body = z.object({ productId: z.string().cuid(), variantId: z.string().cuid().optional(), quantity: z.number().int().positive().max(99) }).parse(req.body); const product = await prisma.product.findFirst({ where: { id: body.productId, status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] }, include: { variants: true } }); if (!product) return res.status(404).json({ error: 'Product unavailable' }); const variant = body.variantId ? product.variants.find(v => v.id === body.variantId && v.status === ProductStatus.APPROVED) : null; if (body.variantId && !variant) return res.status(409).json({ error: 'Variant unavailable' }); const available = variant?.stock ?? (await prisma.inventory.findUnique({ where: { productId: product.id } }))?.quantity ?? 0; if (available < body.quantity) return res.status(409).json({ error: 'Insufficient stock' }); const cart = await prisma.cart.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id } }); const item = await prisma.cartItem.upsert({ where: { cartId_productId: { cartId: cart.id, productId: body.productId } }, update: { quantity: { increment: body.quantity }, variantId: body.variantId }, create: { cartId: cart.id, productId: body.productId, variantId: body.variantId, quantity: body.quantity } }); res.status(201).json(item); }));
+app.post('/api/cart/items', requireAuth, asyncRoute(async (req, res) => {
+  const user = res.locals.user as { id: string };
+  const body = z.object({ productId: z.string().cuid(), variantId: z.string().cuid().optional(), quantity: z.number().int().positive().max(99) }).parse(req.body);
+  const product = await prisma.product.findFirst({ where: { id: body.productId, status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] }, include: { variants: true } });
+  if (!product) return res.status(404).json({ error: 'Product unavailable' });
+  const variant = body.variantId ? product.variants.find(v => v.id === body.variantId && v.status === ProductStatus.APPROVED) : null;
+  if (body.variantId && !variant) return res.status(409).json({ error: 'Variant unavailable' });
+  const configError = wholesaleConfigurationError(product);
+  if (configError) return res.status(409).json({ error: configError, code: 'WHOLESALE_CONFIGURATION_INVALID' });
+  const available = variant?.stock ?? (await prisma.inventory.findUnique({ where: { productId: product.id } }))?.quantity ?? 0;
+  const cart = await prisma.cart.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id } });
+  const item = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "Cart" WHERE "id" = ${cart.id} FOR UPDATE`;
+    const existing = await tx.cartItem.findUnique({ where: { cartId_productId: { cartId: cart.id, productId: body.productId } } });
+    const nextQuantity = (existing?.quantity ?? 0) + body.quantity;
+    const quantityError = wholesaleQuantityError(product, nextQuantity, false);
+    if (quantityError) throw Object.assign(new Error(quantityError), { statusCode: 409, code: 'WHOLESALE_QUANTITY_INVALID' });
+    if (nextQuantity > 99) throw Object.assign(new Error('A cart line cannot exceed 99 units.'), { statusCode: 409, code: 'CART_QUANTITY_LIMIT' });
+    if (available < nextQuantity) throw Object.assign(new Error('Insufficient stock'), { statusCode: 409, code: 'INSUFFICIENT_STOCK' });
+    return existing
+      ? tx.cartItem.update({ where: { id: existing.id }, data: { quantity: nextQuantity, variantId: body.variantId } })
+      : tx.cartItem.create({ data: { cartId: cart.id, productId: body.productId, variantId: body.variantId, quantity: nextQuantity } });
+  });
+  res.status(201).json(item);
+}));
 app.patch('/api/cart/items/:productId', requireAuth, asyncRoute(async (req, res) => {
   const user = res.locals.user as { id: string };
   const qty = z.object({ quantity: z.number().int().nonnegative().max(99) }).parse(req.body).quantity;
@@ -393,6 +586,8 @@ app.patch('/api/cart/items/:productId', requireAuth, asyncRoute(async (req, res)
   if (!item) return res.status(404).json({ error: 'Cart item not found' });
   if (qty === 0) await prisma.cartItem.delete({ where: { id: item.id } });
   else {
+    const quantityError = wholesaleQuantityError(item.product, qty, false);
+    if (quantityError) return res.status(409).json({ error: quantityError, code: 'WHOLESALE_QUANTITY_INVALID' });
     const available = item.variant?.stock ?? item.product.inventory?.quantity ?? 0;
     if (qty > available) return res.status(409).json({ error: `Only ${available} available for ${item.product.name}` });
     await prisma.cartItem.update({ where: { id: item.id }, data: { quantity: qty } });
@@ -406,6 +601,8 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   const method = input.method as PaymentMethod;
   const methodSetting = await prisma.paymentMethodSettings.findUnique({ where: { method } });
   if (!methodSetting?.enabled) return res.status(409).json({ error: `${method} is disabled` });
+  if (method === PaymentMethod.PAYMONGO && !(env.PAYMONGO_SECRET_KEY?.startsWith('sk_') && !env.PAYMONGO_SECRET_KEY.toLowerCase().includes('placeholder') && env.PAYMONGO_WEBHOOK_SECRET && !env.PAYMONGO_WEBHOOK_SECRET.toLowerCase().includes('placeholder'))) return res.status(503).json({ error: 'PayMongo checkout is not configured with an API key and webhook signing secret.', code: 'PAYMONGO_NOT_CONFIGURED' });
+  if (method === PaymentMethod.PAYSTACK && !(env.PAYSTACK_SECRET_KEY?.startsWith('sk_') && !env.PAYSTACK_SECRET_KEY.toLowerCase().includes('placeholder'))) return res.status(503).json({ error: 'Paystack checkout is not configured with a server-side secret key.', code: 'PAYSTACK_NOT_CONFIGURED' });
   const chargeCurrencyCapability = await prisma.currencyCatalogEntry.findFirst({ where: { code: env.CURRENCY, active: true, checkoutEnabled: true }, select: { code: true } });
   if (!chargeCurrencyCapability) return res.status(409).json({ error: `Checkout in ${env.CURRENCY} is unavailable because the platform currency capability is disabled. Your cart is preserved.`, code: 'CHECKOUT_CURRENCY_UNAVAILABLE' });
   const liveActivationBlock = await livePaymentActivationBlock(method);
@@ -430,6 +627,10 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   const committed = await prisma.$transaction(async tx => {
     const freshCart = await tx.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { productType: true, inventory: true, seller: { include: { store: { include: { currencyOffers: true } } } } } } } } } });
     if (!freshCart?.items.length) throw Object.assign(new Error('Cart changed; refresh and try again'), { statusCode: 409, code: 'SHIPPING_CART_STALE' });
+    for (const item of freshCart.items) {
+      const quantityError = wholesaleQuantityError(item.product, item.quantity, true);
+      if (quantityError) throw Object.assign(new Error(`${item.product.name}: ${quantityError}`), { statusCode: 409, code: 'WHOLESALE_QUANTITY_INVALID' });
+    }
     const lockedChargeCurrency = await tx.$queryRaw<{ code: string }[]>`SELECT "code" FROM "CurrencyCatalogEntry" WHERE "code" = ${env.CURRENCY} AND "active" = TRUE AND "checkoutEnabled" = TRUE FOR SHARE`;
     if (!lockedChargeCurrency.length) throw Object.assign(new Error(`Checkout in ${env.CURRENCY} is unavailable because the platform currency capability is disabled. Your cart is preserved.`), { statusCode: 409, code: 'CHECKOUT_CURRENCY_UNAVAILABLE' });
     const lockedPaymentMethod = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "PaymentMethodSettings" WHERE "method" = ${method}::"PaymentMethod" AND "enabled" = TRUE FOR SHARE`;
@@ -474,6 +675,7 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
     let totalMinor = grossItemSubtotalMinor - discountMinor;
     if (!Number.isSafeInteger(totalMinor) || totalMinor < 0 || totalMinor > 2_147_483_647) throw Object.assign(new Error('Order total exceeds the supported integer minor-unit limit'), { statusCode: 409, code: 'ORDER_TOTAL_OUT_OF_RANGE' });
     const shippingBySeller = new Map<string, { snapshot: Prisma.InputJsonValue; shippingMinor: number; carrierName: string | null }>();
+    let providerChargeQuote: ProviderChargeQuote | null = null;
     const requestedDisplayCurrency = input.displayCurrency;
     const displayCurrencyEntry = requestedDisplayCurrency ? await tx.currencyCatalogEntry.findFirst({ where: { code: requestedDisplayCurrency, active: true, displayEnabled: true } }) : null;
     if (requestedDisplayCurrency && !displayCurrencyEntry) throw Object.assign(new Error('This display currency is not enabled by the platform.'), { statusCode: 409, code: 'DISPLAY_CURRENCY_UNAVAILABLE' });
@@ -483,8 +685,6 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
       for (const item of freshCart.items) {
         const sourceCurrency = item.variant?.currency ?? item.product.currency;
         const store = item.product.seller?.store;
-        if (!store && requestedDisplayCurrency !== env.CURRENCY) throw Object.assign(new Error('Platform-owned products are only available in the platform display currency.'), { statusCode: 409, code: 'DISPLAY_CURRENCY_UNAVAILABLE' });
-        if (store && requestedDisplayCurrency !== store.baseCurrency && !store.currencyOffers.some(offer => offer.currency === requestedDisplayCurrency && offer.displayEnabled)) throw Object.assign(new Error(`The Store does not offer ${requestedDisplayCurrency} for display.`), { statusCode: 409, code: 'DISPLAY_CURRENCY_NOT_OFFERED' });
         const rate = await latestDisplayRate(sourceCurrency, requestedDisplayCurrency, store?.id);
         if (!rate || rate.freshness === 'stale') throw Object.assign(new Error(`A fresh ${sourceCurrency}/${requestedDisplayCurrency} estimate is unavailable. Choose another display currency; the cart was preserved.`), { statusCode: 409, code: 'DISPLAY_RATE_UNAVAILABLE' });
         const exponentEntries = await tx.currencyCatalogEntry.findMany({ where: { code: { in: [sourceCurrency, requestedDisplayCurrency] } }, select: { code: true, minorUnitExponent: true } });
@@ -529,7 +729,6 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
           const quoteEntry = await tx.currencyCatalogEntry.findUnique({ where: { code: requestedDisplayCurrency }, select: { minorUnitExponent: true } });
           const baseEntry = await tx.currencyCatalogEntry.findUnique({ where: { code: shipment.selected.currency }, select: { minorUnitExponent: true } });
           if (!rate || rate.freshness === 'stale' || !quoteEntry || !baseEntry) throw Object.assign(new Error(`A fresh shipping estimate in ${requestedDisplayCurrency} is unavailable.`), { statusCode: 409, code: 'DISPLAY_RATE_UNAVAILABLE' });
-          if (store && requestedDisplayCurrency !== store.baseCurrency && !store.currencyOffers.some(offer => offer.currency === requestedDisplayCurrency && offer.displayEnabled)) throw Object.assign(new Error(`The Store does not offer ${requestedDisplayCurrency} for shipping display.`), { statusCode: 409, code: 'DISPLAY_CURRENCY_NOT_OFFERED' });
           const estimated = Number(convertMinorExact(BigInt(shipment.selected.shippingMinor), rate.rate, baseEntry.minorUnitExponent, quoteEntry.minorUnitExponent));
           if (!Number.isSafeInteger(estimated)) throw Object.assign(new Error('Converted shipping estimate exceeds the supported display amount.'), { statusCode: 409, code: 'DISPLAY_AMOUNT_OUT_OF_RANGE' });
           displayShippingTotalMinor += estimated;
@@ -557,14 +756,31 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
       if (eligibilityFailure) throw Object.assign(new Error(eligibilityFailure), { statusCode: 409, code: 'COD_NOT_AVAILABLE' });
       if (exceedsCodOrderLimit(totalMinor, currentSettings?.codMaxMinor)) throw Object.assign(new Error('Order is above the configured COD limit. Choose another payment method or contact the marketplace.'), { statusCode: 409, code: 'COD_ORDER_LIMIT_EXCEEDED' });
     }
+    const providerCurrency = providerCurrencyForMethod(method);
+    if (providerCurrency) {
+      const lockedProviderCurrency = await tx.$queryRaw<{ code: string }[]>`SELECT "code" FROM "CurrencyCatalogEntry" WHERE "code" = ${providerCurrency} AND "active" = TRUE AND "displayEnabled" = TRUE FOR SHARE`;
+      if (!lockedProviderCurrency.length) throw Object.assign(new Error(`${providerCurrency} is not currently activated for payment by the platform administrator.`), { statusCode: 409, code: 'PAYMENT_CURRENCY_UNAVAILABLE' });
+      const currencyEntries = await tx.currencyCatalogEntry.findMany({ where: { code: { in: [env.CURRENCY, providerCurrency] }, active: true }, select: { code: true, minorUnitExponent: true } });
+      const baseExponent = currencyEntries.find(entry => entry.code === env.CURRENCY)?.minorUnitExponent;
+      const providerExponent = currencyEntries.find(entry => entry.code === providerCurrency)?.minorUnitExponent;
+      if (baseExponent == null || providerExponent == null) throw Object.assign(new Error('Payment currency precision is not configured.'), { statusCode: 409, code: 'PAYMENT_CURRENCY_UNAVAILABLE' });
+      const rate = await latestDisplayRate(env.CURRENCY, providerCurrency);
+      if (!rate || rate.freshness === 'stale') throw Object.assign(new Error(`A current ${env.CURRENCY}/${providerCurrency} payment conversion rate is unavailable. Choose another payment method; your cart is preserved.`), { statusCode: 409, code: 'PAYMENT_RATE_UNAVAILABLE' });
+      try {
+        providerChargeQuote = createProviderChargeQuote({ provider: method as 'PAYMONGO' | 'PAYSTACK', baseCurrency: env.CURRENCY, baseAmountMinor: totalMinor, baseExponent, rate, quoteExponent: providerExponent });
+      } catch (error) {
+        throw Object.assign(new Error(error instanceof Error ? error.message : 'The provider payment amount could not be calculated safely.'), { statusCode: 409, code: 'PAYMENT_AMOUNT_OUT_OF_RANGE' });
+      }
+    }
     for (const item of freshCart.items) {
       const updated = item.variant
         ? await tx.productVariant.updateMany({ where: { id: item.variant.id, status: ProductStatus.APPROVED, stock: { gte: item.quantity } }, data: { stock: { decrement: item.quantity } } })
         : await tx.inventory.updateMany({ where: { productId: item.productId, quantity: { gte: item.quantity } }, data: { quantity: { decrement: item.quantity } } });
       if (updated.count !== 1) throw Object.assign(new Error(`Stock changed for ${item.product.name}`), { statusCode: 409, code: 'SHIPPING_CART_STALE' });
     }
+    const newOrderNumber = orderNumber();
     const created = await tx.parentOrder.create({ data: {
-      orderNumber: orderNumber(), buyerId: user.id, affiliateClickId: affiliateClick?.id,
+      orderNumber: newOrderNumber, buyerId: user.id, affiliateClickId: affiliateClick?.id,
       buyerEmail: input.buyerEmail, buyerName: input.buyerName, addressJson: input.address,
       totalMinor, currency: env.CURRENCY,
       sellerOrders: { create: await Promise.all([...freshGroups.entries()].map(async ([sellerId, items]) => {
@@ -593,18 +809,21 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
             };
           }) }
         };
-      })) }, payment: { create: { method, status: PaymentStatus.PENDING } }
+      })) }, payment: { create: {
+        method, status: PaymentStatus.PENDING,
+        ...(providerChargeQuote ? { attempts: { create: { provider: method, idempotencyKey: `checkout-${method}-${newOrderNumber}`, status: PaymentStatus.PENDING, metadata: { purpose: 'BUYER_CHECKOUT', provider: method, chargeCurrency: providerChargeQuote.currency, chargeAmountMinor: providerChargeQuote.amountMinor, baseCurrency: providerChargeQuote.baseCurrency, baseAmountMinor: providerChargeQuote.baseAmountMinor, rate: providerChargeQuote.rate, rateProvider: providerChargeQuote.rateProvider, sourceDate: providerChargeQuote.sourceDate, fetchedAt: providerChargeQuote.fetchedAt, rounding: providerChargeQuote.rounding } as Prisma.InputJsonValue } } } : {})
+      } }
     } });
-    await createUserNotification(tx, {
-      userId: user.id,
+    await notifyOrderParties(tx, {
+      orderId: created.id, orderNumber: created.orderNumber, buyerId: user.id,
+      sellerIds: [...freshGroups.keys()].filter(sellerId => sellerId !== 'platform'),
       eventType: 'ORDER_CREATED',
-      title: 'Order recorded',
-      body: `Order ${created.orderNumber} has been recorded. Check your Orders dashboard for current payment and delivery status before considering the purchase complete.`,
-      link: '/dashboard?tab=orders',
-      payloadJson: { parentOrderId: created.id, orderNumber: created.orderNumber }
-    }, 'orders');
+      buyer: { title: 'Order recorded', body: `Order ${created.orderNumber} has been recorded. Check payment and delivery status before considering the purchase complete.`, link: '/dashboard?tab=orders' },
+      seller: { title: 'New order received', body: `Order ${created.orderNumber} includes items from your Store. Review the order and payment status in your seller dashboard.`, link: '/dashboard?mode=seller&tab=orders' },
+      admin: { title: 'New marketplace order', body: `Order ${created.orderNumber} was placed and is awaiting its payment or fulfillment updates.`, link: '/admin/platform?section=orders' }
+    });
     await tx.cartItem.deleteMany({ where: { cartId: freshCart.id } });
-    return { order: created, shippingTotalMinor, discountMinor, discountCode: productDiscountCode, shippingBreakdown, displayEstimate: requestedDisplayCurrency ? { currency: requestedDisplayCurrency, itemTotalMinor: displayItemsTotalMinor, shippingTotalMinor: displayShippingTotalMinor, totalMinor: displayItemsTotalMinor + displayShippingTotalMinor, purpose: 'DISPLAY_ESTIMATE_ONLY' } : null };
+    return { order: created, shippingTotalMinor, discountMinor, discountCode: productDiscountCode, shippingBreakdown, displayEstimate: requestedDisplayCurrency ? { currency: requestedDisplayCurrency, itemTotalMinor: displayItemsTotalMinor, shippingTotalMinor: displayShippingTotalMinor, totalMinor: displayItemsTotalMinor + displayShippingTotalMinor, purpose: 'DISPLAY_ESTIMATE_ONLY' } : null, providerChargeQuote };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).catch(error => {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') throw Object.assign(new Error('Cart or shipping settings changed while checkout was being validated. Recalculate shipping and retry.'), { statusCode: 409, code: 'SHIPPING_QUOTE_STALE' });
     throw error;
@@ -612,11 +831,43 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   const order = committed.order;
   const totalMinor = order.totalMinor;
   let paymentAction: unknown = null;
+  const paymentReturnUrl = `${env.WEB_ORIGIN}/checkout?order=${encodeURIComponent(order.id)}`;
   try {
-    if (method === PaymentMethod.STRIPE) { const session = await createStripeCheckout({ id: order.id, orderNumber: order.orderNumber, totalMinor, currency: env.CURRENCY, buyerEmail: input.buyerEmail }, `${env.WEB_ORIGIN}/orders/${order.id}?payment=success`, `${env.WEB_ORIGIN}/orders/${order.id}?payment=cancelled`); await prisma.payment.update({ where: { parentId: order.id }, data: { providerRef: session.id } }); paymentAction = { provider: 'STRIPE', checkoutUrl: session.url }; }
+    if (method === PaymentMethod.STRIPE) { const session = await createStripeCheckout({ id: order.id, orderNumber: order.orderNumber, totalMinor, currency: env.CURRENCY, buyerEmail: input.buyerEmail }, paymentReturnUrl, `${env.WEB_ORIGIN}/checkout?order=${encodeURIComponent(order.id)}&payment=cancelled`); await prisma.payment.update({ where: { parentId: order.id }, data: { providerRef: session.id } }); paymentAction = { provider: 'STRIPE', checkoutUrl: session.url }; }
     if (method === PaymentMethod.PAYPAL) { const pp = await createPaypalOrder({ id: order.id, orderNumber: order.orderNumber, totalMinor, currency: env.CURRENCY }); await prisma.payment.update({ where: { parentId: order.id }, data: { providerRef: pp.id } }); paymentAction = { provider: 'PAYPAL', providerOrderId: pp.id, approvalUrl: pp.links?.find(link => link.rel === 'approve')?.href }; }
-  } catch (error) { await prisma.payment.update({ where: { parentId: order.id }, data: { status: PaymentStatus.FAILED } }); return res.status(502).json({ error: error instanceof Error ? error.message : 'Payment provider unavailable', orderId: order.id }); }
-  res.status(201).json({ orderId: order.id, orderNumber: order.orderNumber, totalMinor: order.totalMinor, shippingTotalMinor: committed.shippingTotalMinor, discountMinor: committed.discountMinor, discountCode: committed.discountCode, shippingBreakdown: committed.shippingBreakdown, currency: order.currency, displayEstimate: committed.displayEstimate, payment: paymentAction, paymentStatus: method === PaymentMethod.COD ? 'PENDING' : 'AWAITING_PROVIDER' });
+    if (method === PaymentMethod.PAYMONGO && committed.providerChargeQuote) {
+      const session = await createPaymongoCheckout({ id: order.id, orderNumber: order.orderNumber, totalMinor: committed.providerChargeQuote.amountMinor, currency: committed.providerChargeQuote.currency }, paymentReturnUrl, `${env.WEB_ORIGIN}/checkout?order=${encodeURIComponent(order.id)}&payment=cancelled`);
+      await prisma.$transaction(async tx => {
+        await tx.payment.update({ where: { parentId: order.id }, data: { providerRef: session.id } });
+        await tx.paymentAttempt.updateMany({ where: { payment: { parentId: order.id }, provider: PaymentMethod.PAYMONGO }, data: { providerRef: session.id } });
+      });
+      paymentAction = { provider: 'PAYMONGO', checkoutUrl: session.checkoutUrl };
+    }
+    if (method === PaymentMethod.PAYSTACK && committed.providerChargeQuote) {
+      const transaction = await createPaystackTransaction({ id: order.id, orderNumber: order.orderNumber, totalMinor: committed.providerChargeQuote.amountMinor, currency: committed.providerChargeQuote.currency, buyerEmail: input.buyerEmail }, paymentReturnUrl);
+      await prisma.$transaction(async tx => {
+        await tx.payment.update({ where: { parentId: order.id }, data: { providerRef: transaction.reference } });
+        await tx.paymentAttempt.updateMany({ where: { payment: { parentId: order.id }, provider: PaymentMethod.PAYSTACK }, data: { providerRef: transaction.reference } });
+      });
+      paymentAction = { provider: 'PAYSTACK', checkoutUrl: transaction.authorizationUrl };
+    }
+  } catch (error) {
+    await prisma.$transaction(async tx => {
+      const failed = await tx.payment.updateMany({ where: { parentId: order.id, status: PaymentStatus.PENDING }, data: { status: PaymentStatus.FAILED } });
+      if (failed.count) {
+        const failedOrder = await tx.parentOrder.findUnique({ where: { id: order.id }, select: { id: true, orderNumber: true, buyerId: true, sellerOrders: { select: { sellerId: true } } } });
+        if (failedOrder) await notifyOrderParties(tx, {
+          orderId: failedOrder.id, orderNumber: failedOrder.orderNumber, buyerId: failedOrder.buyerId,
+          sellerIds: failedOrder.sellerOrders.map(sellerOrder => sellerOrder.sellerId), eventType: 'PAYMENT_PROVIDER_SETUP_FAILED',
+          buyer: { title: 'Payment could not be started', body: `The payment provider could not start checkout for order ${failedOrder.orderNumber}. Your order remains recorded; retry payment or contact support.`, link: `/checkout?order=${encodeURIComponent(failedOrder.id)}` },
+          seller: { title: 'Order payment setup failed', body: `Payment checkout could not be started for order ${failedOrder.orderNumber}. The buyer has been notified.`, link: '/dashboard?mode=seller&tab=orders' },
+          admin: { title: 'Payment setup failed', body: `The provider could not start checkout for order ${failedOrder.orderNumber}.`, link: '/admin/platform?section=orders' }
+        });
+      }
+    });
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Payment provider unavailable', orderId: order.id });
+  }
+  res.status(201).json({ orderId: order.id, orderNumber: order.orderNumber, totalMinor: order.totalMinor, shippingTotalMinor: committed.shippingTotalMinor, discountMinor: committed.discountMinor, discountCode: committed.discountCode, shippingBreakdown: committed.shippingBreakdown, currency: order.currency, displayEstimate: committed.displayEstimate, payment: paymentAction, paymentCurrency: committed.providerChargeQuote?.currency ?? order.currency, paymentAmountMinor: committed.providerChargeQuote?.amountMinor ?? order.totalMinor, paymentStatus: method === PaymentMethod.COD ? 'PENDING' : 'AWAITING_PROVIDER' });
 }));
 
 app.post('/api/orders/:id/paypal-capture', requireAuth, asyncRoute(async (req, res) => {
@@ -742,6 +993,8 @@ app.post('/api/pos/sales', requireAuth, requireRole(Role.SELLER, Role.CASHIER), 
       const product = await tx.product.findFirst({ where: { id: item.productId, sellerId, status: ProductStatus.APPROVED }, include: { inventory: true } });
       if (!product) throw Object.assign(new Error('Product is not available to this seller'), { statusCode: 409 });
       if (product.currency !== env.CURRENCY || seller.store!.baseCurrency !== product.currency) throw Object.assign(new Error(`Cash POS can only accept the configured ${env.CURRENCY} Store currency.`), { statusCode: 409, code: 'CHECKOUT_CURRENCY_UNSUPPORTED' });
+      const quantityError = wholesaleQuantityError(product, item.quantity, true);
+      if (quantityError) throw Object.assign(new Error(`${product.name}: ${quantityError}`), { statusCode: 409, code: 'WHOLESALE_QUANTITY_INVALID' });
       const updated = await tx.inventory.updateMany({ where: { productId: product.id, quantity: { gte: item.quantity } }, data: { quantity: { decrement: item.quantity } } });
       if (updated.count !== 1) throw Object.assign(new Error(`Insufficient stock for ${product.name}`), { statusCode: 409 });
       products.push({ productId: product.id, quantity: item.quantity, productName: product.name, priceMinor: effectiveProductPriceMinor(product) });
@@ -790,7 +1043,64 @@ app.get('/api/admin/live-reports', requireAuth, requireRole(Role.ADMIN), asyncRo
 app.patch('/api/admin/live-reports/:id', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const id = routeParam(req.params.id); const status = z.object({ status: z.enum(['REVIEWED', 'DISMISSED']) }).parse(req.body).status; const existing = await prisma.liveSessionReport.findUnique({ where: { id }, select: { id: true, status: true } }); if (!existing) return res.status(404).json({ error: 'Live report not found' }); const report = await prisma.liveSessionReport.updateMany({ where: { id, status: existing.status }, data: { status, reviewedById: user.id, reviewedAt: new Date() } }); if (!report.count) return res.status(409).json({ error: 'Live report changed; refresh and retry.' }); await audit(user.id, 'LIVE_REPORT_REVIEWED', 'LiveSessionReport', id, { old: existing.status, status }); res.json({ id, status }); }));
 app.get('/api/admin/audit', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (_req, res) => res.json(await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { actor: { select: { email: true, name: true } } } }))));
 app.get('/api/admin/sellers', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (_req, res) => res.json(await prisma.seller.findMany({ include: { user: { select: { email: true, name: true } }, store: true }, orderBy: { createdAt: 'desc' } }))));
-app.patch('/api/admin/sellers/:id', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const input = z.object({ status: z.nativeEnum(SellerStatus), reason: z.string().trim().max(500).optional() }).parse(req.body); if ((input.status === SellerStatus.REJECTED || input.status === SellerStatus.SUSPENDED) && !input.reason) return res.status(400).json({ error: 'A reason is required for rejection or suspension' }); const seller = await prisma.$transaction(async tx => { const current = await tx.seller.findUnique({ where: { id: routeParam(req.params.id) } }); if (!current) throw Object.assign(new Error('Seller not found'), { statusCode: 404 }); const updated = await tx.seller.update({ where: { id: current.id }, data: { status: input.status, reason: input.reason } }); await tx.sellerModerationEvent.create({ data: { sellerId: updated.id, actorId: user.id, fromStatus: current.status, toStatus: updated.status, reason: input.reason } }); if (input.status === SellerStatus.APPROVED) await tx.user.update({ where: { id: updated.userId }, data: { role: Role.SELLER } }); return updated; }); await audit(user.id, `SELLER_${input.status}`, 'Seller', seller.id, { reason: input.reason }); res.json(seller); }));
+app.patch('/api/admin/sellers/:id', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => {
+  const actor = res.locals.user as { id: string };
+  const sellerId = routeParam(req.params.id);
+  const input = z.object({ status: z.nativeEnum(SellerStatus), reason: z.string().trim().max(500).optional() }).parse(req.body);
+  if ((input.status === SellerStatus.REJECTED || input.status === SellerStatus.SUSPENDED) && !input.reason) return res.status(400).json({ error: 'A reason is required for rejection or suspension' });
+  const result = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "Seller" WHERE "id" = ${sellerId} FOR UPDATE`;
+    const current = await tx.seller.findUnique({ where: { id: sellerId }, include: { user: { select: { id: true, name: true, email: true } }, store: true } });
+    if (!current) throw Object.assign(new Error('Seller not found'), { statusCode: 404 });
+    const statusChanged = current.status !== input.status;
+    const updated = statusChanged
+      ? await tx.seller.update({ where: { id: current.id }, data: { status: input.status, reason: input.reason ?? null } })
+      : current;
+    if (statusChanged) await tx.sellerModerationEvent.create({ data: { sellerId: updated.id, actorId: actor.id, fromStatus: current.status, toStatus: updated.status, reason: input.reason } });
+
+    let store = current.store;
+    let storeCreated = false;
+    if (input.status === SellerStatus.APPROVED) {
+      await tx.user.update({ where: { id: updated.userId }, data: { role: Role.SELLER } });
+      const provisioned = await provisionApprovedSellerStore(tx, { sellerId: updated.id, sellerName: current.user.name });
+      store = provisioned.store;
+      storeCreated = provisioned.created;
+    }
+    if (storeCreated) await tx.auditLog.create({ data: { actorId: actor.id, action: 'SELLER_STORE_PROVISIONED', entity: 'Store', entityId: store!.id, metadata: { sellerId: updated.id, source: 'ADMIN_APPROVAL_REPAIR' } } });
+    if (statusChanged) {
+      const approved = input.status === SellerStatus.APPROVED;
+      const title = approved ? 'Seller application approved' : input.status === SellerStatus.PENDING ? 'Seller application is pending' : input.status === SellerStatus.REJECTED ? 'Seller application was not approved' : 'Seller access suspended';
+      const body = approved
+        ? `Your seller application is approved${store ? ` and ${store.name} is ready` : ''}. Seller tools are now available.`
+        : input.status === SellerStatus.PENDING ? 'Your seller application is awaiting marketplace review.' : `Your seller application status changed to ${input.status.toLowerCase()}.${input.reason ? ` Reason: ${input.reason}` : ''}`;
+      await createUserNotification(tx, { userId: current.userId, eventType: `SELLER_${input.status}`, title, body, link: approved ? '/dashboard?mode=seller' : '/dashboard', payloadJson: { sellerId: updated.id, status: input.status, storeId: store?.id ?? null } }, 'account');
+      await createRoleNotifications(tx, Role.ADMIN, { eventType: `SELLER_${input.status}`, title: `Seller application ${input.status.toLowerCase()}`, body: `${current.user.name} (${current.user.email}) is now ${input.status.toLowerCase()}.`, link: '/admin/platform?section=vendors', payloadJson: { sellerId: updated.id, status: input.status } }, 'account');
+    } else if (storeCreated) {
+      await createUserNotification(tx, { userId: current.userId, eventType: 'SELLER_STORE_PROVISIONED', title: 'Your Store is ready', body: `${store!.name} has been provisioned. Your approved seller workspace is now available.`, link: '/dashboard?mode=seller', payloadJson: { sellerId: updated.id, storeId: store!.id } }, 'account');
+    }
+    return { seller: { ...updated, user: current.user, store }, statusChanged, storeCreated };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+  if (result.statusChanged) await audit(actor.id, `SELLER_${input.status}`, 'Seller', sellerId, { reason: input.reason, storeCreated: result.storeCreated });
+  res.json(result.seller);
+}));
+app.post('/api/admin/sellers/:id/provision-store', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => {
+  const actor = res.locals.user as { id: string };
+  const sellerId = routeParam(req.params.id);
+  const result = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "Seller" WHERE "id" = ${sellerId} FOR UPDATE`;
+    const seller = await tx.seller.findUnique({ where: { id: sellerId }, include: { user: { select: { id: true, name: true } }, store: true } });
+    if (!seller) throw Object.assign(new Error('Seller not found'), { statusCode: 404 });
+    if (seller.status !== SellerStatus.APPROVED) throw Object.assign(new Error('Only an approved seller can have a Store provisioned.'), { statusCode: 409, code: 'SELLER_NOT_APPROVED' });
+    await tx.user.update({ where: { id: seller.userId }, data: { role: Role.SELLER } });
+    const provisioned = await provisionApprovedSellerStore(tx, { sellerId: seller.id, sellerName: seller.user.name });
+    if (provisioned.created) {
+      await tx.auditLog.create({ data: { actorId: actor.id, action: 'SELLER_STORE_PROVISIONED', entity: 'Store', entityId: provisioned.store.id, metadata: { sellerId: seller.id, source: 'ADMIN_REPAIR' } } });
+      await createUserNotification(tx, { userId: seller.userId, eventType: 'SELLER_STORE_PROVISIONED', title: 'Your Store is ready', body: `${provisioned.store.name} has been provisioned. Your approved seller workspace is now available.`, link: '/dashboard?mode=seller', payloadJson: { sellerId: seller.id, storeId: provisioned.store.id } }, 'account');
+    }
+    return { store: provisioned.store, created: provisioned.created };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+  res.json(result);
+}));
 app.patch('/api/admin/products/:id', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const input = z.object({ status: z.nativeEnum(ProductStatus), reason: z.string().max(500).optional() }).parse(req.body); const product = await prisma.product.update({ where: { id: routeParam(req.params.id) }, data: { status: input.status } }); await audit(user.id, `PRODUCT_${input.status}`, 'Product', product.id, { reason: input.reason }); res.json(product); }));
 app.get('/api/seller/summary', requireAuth, requireRole(Role.SELLER, Role.CASHIER), asyncRoute(async (_req, res) => { const user = res.locals.user as { sellerId?: string }; if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' }); res.json(await sellerDashboardSummary(user.sellerId)); }));
 app.get('/api/admin/orders', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (_req, res) => res.json(await prisma.parentOrder.findMany({ include: { payment: true, sellerOrders: { include: { seller: { include: { store: true } }, items: true } } }, orderBy: { createdAt: 'desc' }, take: 100 }))));
@@ -858,6 +1168,56 @@ app.post('/api/webhooks/paypal', express.raw({ type: 'application/json' }), asyn
       if (persisted && matchesPersistedPaymentEvent(reconciliationEvent, persisted)) {
         return res.status(persisted.reviewReason ? 202 : 200).json({ received: true, reconciliation: persisted.reviewReason ? 'REVIEW_REQUIRED' : 'COMPLETE' });
       }
+    }
+    throw error;
+  }
+}));
+
+app.post('/api/webhooks/paymongo', express.raw({ type: 'application/json' }), asyncRoute(async (req, res) => {
+  const apiKey = env.PAYMONGO_SECRET_KEY;
+  const webhookSecret = env.PAYMONGO_WEBHOOK_SECRET;
+  if (!apiKey?.startsWith('sk_') || !webhookSecret) return res.status(503).json({ error: 'PayMongo webhook verification is not configured.' });
+  const rawBody = ((req as express.Request & { rawBody?: Buffer }).rawBody ?? req.body) as Buffer;
+  const headerValue = req.headers['paymongo-signature'];
+  const signature = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  const liveMode = apiKey.startsWith('sk_live_');
+  if (!verifyPaymongoSignature(rawBody, signature, webhookSecret, liveMode)) return res.status(400).json({ error: 'Invalid PayMongo signature.' });
+  let body: unknown;
+  try { body = JSON.parse(rawBody.toString('utf8')); } catch { return res.status(400).json({ error: 'Invalid PayMongo webhook payload.' }); }
+  const event = paymongoEventToVerifiedPaymentEvent(body, liveMode);
+  if (!event) return res.status(200).json({ received: true, ignored: true });
+  try {
+    const result = await prisma.$transaction(tx => reconcileVerifiedPaymentEvent(tx, event), { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    return res.status(result.reviewReason ? 202 : 200).json({ received: true, reconciliation: result.reviewReason ? 'REVIEW_REQUIRED' : 'COMPLETE' });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const persisted = await prisma.processedWebhookEvent.findUnique({ where: { provider_eventId: { provider: PaymentMethod.PAYMONGO, eventId: event.eventId } } });
+      if (persisted && !persisted.identityVerified) return res.status(202).json({ received: true, reconciliation: 'REVIEW_REQUIRED' });
+      if (persisted && matchesPersistedPaymentEvent(event, persisted)) return res.status(persisted.reviewReason ? 202 : 200).json({ received: true, reconciliation: persisted.reviewReason ? 'REVIEW_REQUIRED' : 'COMPLETE' });
+    }
+    throw error;
+  }
+}));
+
+app.post('/api/webhooks/paystack', express.raw({ type: 'application/json' }), asyncRoute(async (req, res) => {
+  const secret = env.PAYSTACK_SECRET_KEY;
+  if (!secret?.startsWith('sk_') || secret.toLowerCase().includes('placeholder')) return res.status(503).json({ error: 'Paystack webhook verification is not configured.' });
+  const rawBody = ((req as express.Request & { rawBody?: Buffer }).rawBody ?? req.body) as Buffer;
+  const headerValue = req.headers['x-paystack-signature'];
+  const signature = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  if (!verifyPaystackSignature(rawBody, signature, secret)) return res.status(400).json({ error: 'Invalid Paystack signature.' });
+  let body: unknown;
+  try { body = JSON.parse(rawBody.toString('utf8')); } catch { return res.status(400).json({ error: 'Invalid Paystack webhook payload.' }); }
+  const event = paystackEventToVerifiedPaymentEvent(body);
+  if (!event) return res.status(200).json({ received: true, ignored: true });
+  try {
+    const result = await prisma.$transaction(tx => reconcileVerifiedPaymentEvent(tx, event), { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    return res.status(result.reviewReason ? 202 : 200).json({ received: true, reconciliation: result.reviewReason ? 'REVIEW_REQUIRED' : 'COMPLETE' });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const persisted = await prisma.processedWebhookEvent.findUnique({ where: { provider_eventId: { provider: PaymentMethod.PAYSTACK, eventId: event.eventId } } });
+      if (persisted && !persisted.identityVerified) return res.status(202).json({ received: true, reconciliation: 'REVIEW_REQUIRED' });
+      if (persisted && matchesPersistedPaymentEvent(event, persisted)) return res.status(persisted.reviewReason ? 202 : 200).json({ received: true, reconciliation: persisted.reviewReason ? 'REVIEW_REQUIRED' : 'COMPLETE' });
     }
     throw error;
   }

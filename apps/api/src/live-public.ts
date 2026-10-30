@@ -4,9 +4,9 @@ function asRecord(value: unknown): PlainRecord | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as PlainRecord : null;
 }
 
-export function publicLiveSession<T extends { providerSessionRef?: string | null; playbackRef?: string | null; providerStatus?: unknown; errorMessage?: unknown }>(session: T) {
+export function publicLiveSession<T extends { id?: string; providerSessionRef?: string | null; playbackRef?: string | null; providerStatus?: unknown; errorMessage?: unknown; recordingEgressId?: string | null; recordingStorageKey?: string | null; recordingErrorCode?: string | null; recordingStatus?: string; replayPublishedAt?: Date | null }>(session: T) {
   const source = session as T & { seller?: unknown; products?: unknown };
-  const { providerSessionRef: _providerSessionRef, playbackRef, providerStatus: _providerStatus, errorMessage: _errorMessage, seller, products, ...safe } = source;
+  const { providerSessionRef: _providerSessionRef, playbackRef, providerStatus: _providerStatus, errorMessage: _errorMessage, recordingEgressId: _recordingEgressId, recordingStorageKey: _recordingStorageKey, recordingErrorCode: _recordingErrorCode, seller, products, ...safe } = source;
   const sellerRecord = asRecord(seller);
   const storeRecord = asRecord(sellerRecord?.store);
   const safeSeller = sellerRecord ? { store: storeRecord ? { name: storeRecord.name, slug: storeRecord.slug } : null } : seller;
@@ -33,13 +33,16 @@ export function publicLiveSession<T extends { providerSessionRef?: string | null
   }).filter(Boolean) : products;
   const playbackUrl = safePlaybackUrl(playbackRef);
   const realtimeAvailable = typeof playbackRef === 'string' && playbackRef.startsWith('marketplace-live-');
+  const replayAvailable = source.recordingStatus === 'READY' && Boolean(source.replayPublishedAt) && Boolean(source.id);
   return {
     ...safe,
     ...(seller !== undefined ? { seller: safeSeller } : {}),
     ...(products !== undefined ? { products: safeProducts } : {}),
-    playbackAvailable: Boolean(playbackUrl || realtimeAvailable),
+    playbackAvailable: Boolean(playbackUrl || realtimeAvailable || replayAvailable),
     realtimeAvailable,
-    ...(playbackUrl ? { playbackUrl } : {})
+    ...(playbackUrl ? { playbackUrl } : {}),
+    replayAvailable,
+    ...(replayAvailable ? { replayUrl: `/api/live-sessions/${encodeURIComponent(source.id!)}/replay` } : {})
   };
 }
 

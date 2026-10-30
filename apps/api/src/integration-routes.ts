@@ -35,7 +35,10 @@ function currentRuntime() {
     PAYPAL_CLIENT_ID: env.PAYPAL_CLIENT_ID,
     PAYPAL_CLIENT_SECRET: env.PAYPAL_CLIENT_SECRET,
     PAYPAL_WEBHOOK_ID: env.PAYPAL_WEBHOOK_ID,
-    PAYPAL_BASE_URL: env.PAYPAL_BASE_URL
+    PAYPAL_BASE_URL: env.PAYPAL_BASE_URL,
+    PAYMONGO_SECRET_KEY: env.PAYMONGO_SECRET_KEY,
+    PAYMONGO_WEBHOOK_SECRET: env.PAYMONGO_WEBHOOK_SECRET,
+    PAYSTACK_SECRET_KEY: env.PAYSTACK_SECRET_KEY
   };
 }
 
@@ -76,6 +79,15 @@ async function audit(tx: Prisma.TransactionClient, actorId: string, action: stri
 }
 
 export function registerIntegrationRoutes(app: Express) {
+  app.get('/api/admin/payment-settings', requireAuth, requireRole(...adminOnly), run(async (_req, res) => {
+    const [configured, settings] = await Promise.all([
+      prisma.paymentMethodSettings.findMany({ orderBy: { method: 'asc' } }),
+      prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { codMaxMinor: true } })
+    ]);
+    const enabledByMethod = new Map(configured.map(method => [method.method, method.enabled]));
+    res.json({ paymentMethods: Object.values(PaymentMethod).map(method => ({ method, enabled: enabledByMethod.get(method) ?? false })), codMaxMinor: settings?.codMaxMinor ?? null });
+  }));
+
   app.get('/api/admin/integrations', requireAuth, requireRole(...adminOnly), run(async (_req, res) => {
     const [configurations, methods] = await Promise.all([
       prisma.providerConfiguration.findMany({ where: { archivedAt: null }, include: { credentials: true }, orderBy: [{ context: 'asc' }, { provider: 'asc' }, { environment: 'asc' }, { createdAt: 'desc' }] }),
@@ -97,7 +109,7 @@ export function registerIntegrationRoutes(app: Express) {
   }));
 
   app.get('/api/admin/integrations/operations', requireAuth, requireRole(...adminOnly), run(async (req, res) => {
-    const providerFilter = z.enum(['ALL', 'STRIPE', 'PAYPAL']).default('ALL').parse(req.query.provider);
+    const providerFilter = z.enum(['ALL', 'STRIPE', 'PAYPAL', 'PAYMONGO', 'PAYSTACK']).default('ALL').parse(req.query.provider);
     const stateFilter = z.enum(['ALL', 'REVIEW_REQUIRED', 'PROCESSED', 'UNVERIFIED']).default('ALL').parse(req.query.state);
     const page = z.coerce.number().int().min(1).max(1000).catch(1).parse(req.query.page);
     const pageSize = 25;
@@ -131,6 +143,8 @@ export function registerIntegrationRoutes(app: Express) {
     const paypalCheckoutConfigured = Boolean(nonPlaceholder(env.PAYPAL_CLIENT_ID)
       && nonPlaceholder(env.PAYPAL_CLIENT_SECRET)
       && nonPlaceholder(env.PAYPAL_WEBHOOK_ID));
+    const paymongoCheckoutConfigured = Boolean(env.PAYMONGO_SECRET_KEY?.startsWith('sk_') && nonPlaceholder(env.PAYMONGO_WEBHOOK_SECRET));
+    const paystackCheckoutConfigured = Boolean(env.PAYSTACK_SECRET_KEY?.startsWith('sk_') && nonPlaceholder(env.PAYSTACK_SECRET_KEY));
     const storeBillingConfigured = Boolean(env.STRIPE_STORE_BILLING_SECRET_KEY?.startsWith('sk_test_') && nonPlaceholder(env.STRIPE_STORE_BILLING_WEBHOOK_SECRET));
     const walletConfigured = Boolean(stripe && env.STRIPE_SECRET_KEY?.startsWith('sk_test_') && nonPlaceholder(env.STRIPE_WEBHOOK_SECRET));
     const retryable = (provider: string, eventType: string | null, identityVerified: boolean) => identityVerified && isRetryablePaymentWebhookEvent(provider, eventType);
@@ -146,6 +160,8 @@ export function registerIntegrationRoutes(app: Express) {
       webhooks: webhookEndpointConfiguration({
         stripeCheckoutConfigured,
         paypalCheckoutConfigured,
+        paymongoCheckoutConfigured,
+        paystackCheckoutConfigured,
         storeBillingConfigured,
         storeBillingEnabled: storePlanBillingSandboxEnabled,
         walletFundingConfigured: walletConfigured,

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { env } from './config.js';
 import { emailSettingsVerified, resolvePlatformEmailSettings, verifyActiveEmailProvider, type EffectiveEmailSettings } from './store-email-provider-config.js';
+import { createSellerSmtpTransport, resolveSellerStoreEmailSettings } from './seller-store-integrations.js';
 
 const paragraphSchema = z.array(z.object({ type: z.literal('paragraph'), text: z.string().trim().min(1).max(2000).refine(value => !/[<>]/.test(value)) }).strict()).min(1).max(30);
 
@@ -52,6 +53,35 @@ export async function storeEmailProviderStatus() {
         : connectionVerified
           ? 'SMTP is configured and verified. The marketing deployment gate is enabled.'
           : 'SMTP is configured and the deployment gate is enabled. An administrator must verify the connection before subscription or campaign delivery.'
+  };
+}
+
+export async function storeEmailProviderStatusForStore(storeId: string) {
+  const sellerSettings = await resolveSellerStoreEmailSettings(storeId);
+  if (!sellerSettings) return storeEmailProviderStatus();
+  const enabled = env.STORE_EMAIL_DELIVERY_AVAILABLE && Boolean(env.STORE_EMAIL_TOKEN_SECRET)
+    && emailSettingsVerified(sellerSettings, false) && hasValidTransportSettings(sellerSettings);
+  return {
+    configured: enabled,
+    transactionalConfigured: false,
+    enabled,
+    deploymentGate: env.STORE_EMAIL_DELIVERY_AVAILABLE,
+    connectionVerified: emailSettingsVerified(sellerSettings, false),
+    verifiedAt: sellerSettings.verifiedAt?.toISOString() ?? null,
+    hostConfigured: Boolean(sellerSettings.host),
+    host: sellerSettings.host || null,
+    provider: sellerSettings.provider,
+    providerLabel: sellerSettings.providerLabel,
+    configurationSource: 'SELLER_STORE',
+    port: sellerSettings.port,
+    secureTransport: sellerSettings.secure || sellerSettings.requireTls,
+    authenticationConfigured: Boolean(sellerSettings.username && sellerSettings.password),
+    senderConfigured: Boolean(sellerSettings.senderEmail),
+    replyToConfigured: Boolean(sellerSettings.replyTo),
+    unsubscribeSigningConfigured: Boolean(env.STORE_EMAIL_TOKEN_SECRET),
+    message: enabled
+      ? 'Your verified Store SMTP is active for consent-based Store email.'
+      : 'Store SMTP is verified, but the platform email-delivery gate or unsubscribe-signing secret is not configured.'
   };
 }
 
@@ -131,14 +161,20 @@ function footer(unsubscribeUrl: string) {
   };
 }
 
-async function send(to: string, subject: string, text: string, html: string, unsubscribeUrl?: string, messageId?: string) {
-  if (!(await storeEmailProviderStatus()).enabled) throw new StoreEmailTransportError('EMAIL_PROVIDER_NOT_CONFIGURED');
+async function send(to: string, subject: string, text: string, html: string, unsubscribeUrl?: string, messageId?: string, storeId?: string) {
+  const sellerSettings = storeId ? await resolveSellerStoreEmailSettings(storeId) : null;
+  if (sellerSettings) {
+    if (!(await storeEmailProviderStatusForStore(storeId!)).enabled) throw new StoreEmailTransportError('EMAIL_PROVIDER_NOT_CONFIGURED');
+  } else if (!(await storeEmailProviderStatus()).enabled) throw new StoreEmailTransportError('EMAIL_PROVIDER_NOT_CONFIGURED');
   const headers = unsubscribeUrl ? {
     'List-Unsubscribe': `<${unsubscribeUrl}>`,
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
   } : undefined;
+  let sellerTransport: SmtpTransport | null = null;
   try {
-    const { smtp, settings } = await transport();
+    const platform = sellerSettings ? null : await transport();
+    const settings = sellerSettings ?? platform!.settings;
+    const smtp = sellerSettings ? (sellerTransport = await createSellerSmtpTransport(sellerSettings)) : platform!.smtp;
     await smtp.sendMail({
       from: { name: settings.senderName || 'Store updates', address: settings.senderEmail },
       ...(settings.replyTo ? { replyTo: settings.replyTo } : {}),
@@ -150,12 +186,13 @@ async function send(to: string, subject: string, text: string, html: string, uns
       ...(headers ? { headers } : {})
     });
   } catch (error) { throw safeTransportError(error); }
+  finally { sellerTransport?.close(); }
 }
 
-export async function sendStoreEmailConfirmation(input: { to: string; storeName: string; token: string }) {
+export async function sendStoreEmailConfirmation(input: { to: string; storeId: string; storeName: string; token: string }) {
   const confirmUrl = `${env.WEB_ORIGIN.replace(/\/$/, '')}/email/confirm?token=${encodeURIComponent(input.token)}`;
   const storeName = escapeEmailHtml(input.storeName);
-  await send(input.to, `Confirm email updates from ${input.storeName}`, `Confirm that you want to receive email updates from ${input.storeName} by opening this link: ${confirmUrl}\n\nThis link expires in 48 hours. If you did not request this, you can ignore this message.`, `<main><h1>Confirm your subscription</h1><p>Confirm that you want to receive email updates from <strong>${storeName}</strong>.</p><p><a href="${escapeEmailHtml(confirmUrl)}">Confirm email updates</a></p><p>This link expires in 48 hours. If you did not request this, you can ignore this message.</p></main>`);
+  await send(input.to, `Confirm email updates from ${input.storeName}`, `Confirm that you want to receive email updates from ${input.storeName} by opening this link: ${confirmUrl}\n\nThis link expires in 48 hours. If you did not request this, you can ignore this message.`, `<main><h1>Confirm your subscription</h1><p>Confirm that you want to receive email updates from <strong>${storeName}</strong>.</p><p><a href="${escapeEmailHtml(confirmUrl)}">Confirm email updates</a></p><p>This link expires in 48 hours. If you did not request this, you can ignore this message.</p></main>`, undefined, undefined, input.storeId);
 }
 
 /** Transactional account verification is separate from optional, consent-based Store marketing delivery. */
@@ -199,16 +236,16 @@ export async function transactionalEmailMessageId(outboxId: string) {
   return `<${outboxId}@${settings.host || 'marketplace.local'}>`;
 }
 
-export async function sendStoreEmailCampaign(input: { to: string; storeName: string; subject: string; content: unknown; unsubscribeToken: string; deliveryId: string }) {
+export async function sendStoreEmailCampaign(input: { to: string; storeId: string; storeName: string; subject: string; content: unknown; unsubscribeToken: string; deliveryId: string }) {
   const content = paragraphSchema.parse(input.content);
   const unsubscribeApiUrl = `${env.SITE_URL.replace(/\/$/, '')}/api/store-email/unsubscribe/${encodeURIComponent(input.unsubscribeToken)}`;
   const unsubscribePageUrl = `${env.WEB_ORIGIN.replace(/\/$/, '')}/email/unsubscribe?token=${encodeURIComponent(input.unsubscribeToken)}`;
   const bodyText = content.map(block => block.text).join('\n\n');
   const bodyHtml = content.map(block => `<p>${escapeEmailHtml(block.text).replaceAll('\n', '<br>')}</p>`).join('');
   const end = footer(unsubscribePageUrl);
-  const settings = await resolvePlatformEmailSettings();
+  const settings = await resolveSellerStoreEmailSettings(input.storeId) ?? await resolvePlatformEmailSettings();
   const messageId = `<${input.deliveryId}@${settings.host || 'marketplace.local'}>`;
-  await send(input.to, input.subject, `${bodyText}${end.text}`, `<main><p><strong>${escapeEmailHtml(input.storeName)}</strong></p>${bodyHtml}${end.html}</main>`, unsubscribeApiUrl, messageId);
+  await send(input.to, input.subject, `${bodyText}${end.text}`, `<main><p><strong>${escapeEmailHtml(input.storeName)}</strong></p>${bodyHtml}${end.html}</main>`, unsubscribeApiUrl, messageId, input.storeId);
 }
 
 export function closeStoreEmailTransport() {

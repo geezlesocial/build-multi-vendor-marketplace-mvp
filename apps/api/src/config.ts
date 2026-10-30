@@ -14,9 +14,9 @@ const envSchema = z.object({
   // Keep this key stable across restarts and deployments; changing it makes saved provider secrets unreadable.
   SOCIAL_LOGIN_ENCRYPTION_KEY: z.string().min(32).optional(),
   CURRENCY: z.string().length(3).default('USD'),
-  FX_REFERENCE_FETCH_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  FX_REFERENCE_FETCH_ENABLED: z.enum(['true', 'false']).default('true').transform(value => value === 'true'),
   FX_REFERENCE_API_BASE_URL: z.string().url().default('https://api.frankfurter.dev/v2'),
-  FX_REFERENCE_MAX_AGE_HOURS: z.coerce.number().int().min(24).max(72).default(36),
+  FX_REFERENCE_MAX_AGE_HOURS: z.coerce.number().int().min(24).max(72).default(72),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   // SaaS Store billing is a separate Stripe integration and remains off unless
@@ -28,13 +28,25 @@ const envSchema = z.object({
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_BASE_URL: z.string().url().default('https://api-m.sandbox.paypal.com'),
   PAYPAL_WEBHOOK_ID: z.string().optional(),
+  PAYMONGO_SECRET_KEY: z.string().optional(),
+  PAYMONGO_WEBHOOK_SECRET: z.string().optional(),
+  PAYSTACK_SECRET_KEY: z.string().optional(),
   LIVEKIT_URL: z.string().trim().url().optional(),
   LIVEKIT_API_KEY: z.string().trim().min(1).optional(),
   LIVEKIT_API_SECRET: z.string().min(1).optional(),
+  LIVE_RECORDING_STORAGE_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  LIVE_RECORDING_STORAGE_BUCKET: z.string().trim().min(1).optional(),
+  LIVE_RECORDING_STORAGE_REGION: z.string().trim().min(1).optional(),
+  LIVE_RECORDING_STORAGE_ENDPOINT: z.string().url().optional(),
+  LIVE_RECORDING_STORAGE_ACCESS_KEY_ID: z.string().trim().min(1).optional(),
+  LIVE_RECORDING_STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  LIVE_RECORDING_STORAGE_FORCE_PATH_STYLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE: liveProviderConfigurationsAvailableSchema,
   UPLOAD_DIR: z.string().default('uploads'),
   LIVE_SHOPPING_AVAILABLE: z.string().optional().default('false').transform(value => ['true', '1', 'yes', 'on'].includes(value.toLowerCase())),
   SITE_URL: z.string().url().default('http://localhost:4000'),
+  // Public DNS target configured by the hosting operator for seller custom domains.
+  CUSTOM_DOMAIN_TARGET: z.string().trim().min(1).max(253).optional(),
   CONTENT_STORAGE_DIR: z.string().default('storage/content'),
   CONTENT_OBJECT_STORAGE_AVAILABLE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   CONTENT_OBJECT_STORAGE_BUCKET: z.string().trim().min(1).optional(),
@@ -87,6 +99,9 @@ const envSchema = z.object({
   }
   if (value.CONTENT_SCANNER_AVAILABLE && !value.CONTENT_SCANNER_HOST) {
     context.addIssue({ code: 'custom', path: ['CONTENT_SCANNER_HOST'], message: 'A private ClamAV daemon host is required when the media scanner is enabled.' });
+  }
+  if (value.LIVE_RECORDING_STORAGE_AVAILABLE && (!value.LIVE_RECORDING_STORAGE_BUCKET || !value.LIVE_RECORDING_STORAGE_REGION || !value.LIVE_RECORDING_STORAGE_ACCESS_KEY_ID || !value.LIVE_RECORDING_STORAGE_SECRET_ACCESS_KEY)) {
+    context.addIssue({ code: 'custom', path: ['LIVE_RECORDING_STORAGE_BUCKET'], message: 'Live replay storage requires a bucket, region, access key, and secret key before it can be enabled.' });
   }
   // SMTP settings and marketing secrets may be supplied via the admin dashboard
   // and deployment environment respectively. Keep the API bootable while the

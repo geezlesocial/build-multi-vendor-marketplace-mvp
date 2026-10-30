@@ -1,0 +1,229 @@
+/* Shared navigation, loading, and responsive refinements for dashboard workspaces. */
+.adminMobileNav,
+.dashboardMobileJump {
+  display: none;
+}
+
+.dashboardPageHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.25rem;
+  margin: 0 0 1rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid #dce1d9;
+}
+
+.dashboardPageHeader > div {
+  min-width: 0;
+}
+
+.dashboardPageHeader h1 {
+  margin: 0.2rem 0 0.55rem;
+  text-wrap: balance;
+}
+
+.dashboardWorkspaceBadge {
+  flex: 0 0 auto;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid #d5e3d7;
+  border-radius: 999px;
+  background: #edf5ee;
+  color: #315d47;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.adminMobileNav select,
+.dashboardMobileJump select {
+  min-width: 0;
+  width: 100%;
+  min-height: 2.85rem;
+}
+
+.adminNavGroup button {
+  min-height: 2.6rem;
+}
+
+.adminNavGroup button:focus-visible,
+.dashboardTabs button:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+.adminPartialLoad {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1rem;
+}
+
+.adminPartialLoad p,
+.adminResourceUnavailable p {
+  margin: 0.2rem 0;
+}
+
+.adminPartialLoad button,
+.adminResourceUnavailable button {
+  flex: 0 0 auto;
+}
+
+.adminModuleLoading,
+.adminResourceUnavailable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #e0e7df;
+  border-radius: 0.85rem;
+  background: #fff;
+  color: #526158;
+}
+
+.adminModuleLoading[aria-busy="true"]::before {
+  width: 0.65rem;
+  height: 0.65rem;
+  flex: 0 0 0.65rem;
+  border-radius: 50%;
+  background: #5c8a6d;
+  content: "";
+  animation: adminStatusPulse 1.4s ease-in-out infinite;
+}
+
+.adminResourceUnavailable {
+  border-color: #edcf91;
+  background: #fff8e9;
+  color: #513f20;
+}
+
+.adminResourceUnavailable p {
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+}
+
+.adminResourceUnavailable small {
+  color: #68736b;
+}
+
+.adminControlMain h2 {
+  text-wrap: balance;
+}
+
+.adminControlMain .table {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.dashboardTabs {
+  scrollbar-width: thin;
+  scrollbar-color: #9caf9f #e9eee8;
+  scroll-padding-inline: 0.75rem;
+}
+
+.dashboardTabs button {
+  min-height: 2.7rem;
+}
+
+.dashboard .empty,
+.adminControlMain .empty {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+@keyframes adminStatusPulse {
+  50% { opacity: 0.35; }
+}
+
+@media (max-width: 900px) {
+  .adminControlLayout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+
+  .adminControlNav {
+    display: none;
+  }
+
+  .adminMobileNav {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid #dce5dc;
+    border-radius: 1rem;
+    background: #fff;
+    box-shadow: 0 8px 24px #23452d08;
+  }
+
+  .adminMobileNav small {
+    color: #68736b;
+    font-weight: 400;
+  }
+
+  .adminMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .dashboardPageHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .dashboardWorkspaceBadge {
+    align-self: flex-start;
+  }
+
+  .dashboardMobileJump {
+    position: sticky;
+    top: 7.5rem;
+    z-index: 2;
+    display: grid;
+    gap: 0.35rem;
+    margin: 0.75rem 0 1rem;
+    padding: 0.75rem;
+    border: 1px solid #dce5dc;
+    border-radius: 0.9rem;
+    background: #f5f5f0f5;
+    backdrop-filter: blur(8px);
+  }
+
+  .dashboardWorkspace > nav.dashboardTabs {
+    display: none;
+  }
+
+  .adminPartialLoad,
+  .adminResourceUnavailable {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .adminPartialLoad button,
+  .adminResourceUnavailable button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .adminMetricGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .adminMobileNav {
+    padding: 0.75rem;
+  }
+
+  .dashboardMobileJump {
+    top: 7rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adminModuleLoading[aria-busy="true"]::before {
+    animation: none;
+  }
+}

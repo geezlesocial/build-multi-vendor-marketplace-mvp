@@ -1,10 +1,10 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import express from 'express';
-import { Prisma, ProductStatus, Role, SellerStatus } from '@prisma/client';
+import { PaymentMethod, Prisma, ProductStatus, Role, SellerStatus } from '@prisma/client';
 import { z } from 'zod';
 import { env } from './config.js';
 import { prisma, requireAuth, requireRole } from './security.js';
-import { convertMinorExact, FrankfurterRateAdapter, isRateFresh, parseRate } from './currency-domain.js';
+import { convertMinorExact, deriveUsdPivotRate, fetchReferenceRatesWithUnsupportedFallback, FrankfurterRateAdapter, isRateFresh, parseRate } from './currency-domain.js';
 import { assertShippingSelectionsMatch, buildSellerShippingQuote, verifyCheckoutShippingQuote, type ShippingCartRecord } from './shipping-routes.js';
 import { addressSchema } from './validation.js';
 import { effectiveProductPriceMinor, effectiveUnitPriceMinor } from './product-pricing.js';
@@ -42,9 +42,52 @@ export async function latestDisplayRate(baseCurrency: string, quoteCurrency: str
     if (globalManual) return { rate: globalManual.rate.toString(), provider: 'MANUAL', sourceDate: globalManual.effectiveFrom.toISOString().slice(0, 10), fetchedAt: globalManual.createdAt.toISOString(), freshness: 'manual' as const };
   }
   const automatic = await prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency, quoteCurrency }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] });
+  const maxAge = env.FX_REFERENCE_MAX_AGE_HOURS * 60 * 60 * 1000;
+  const automaticFresh = automatic && isRateFresh(automatic.fetchedAt, now, maxAge, automatic.sourceDate);
+  if (automaticFresh) return { rate: automatic.rate.toString(), provider: automatic.provider, sourceDate: automatic.sourceDate.toISOString().slice(0, 10), fetchedAt: automatic.fetchedAt.toISOString(), freshness: 'fresh' as const };
+
+  // The automatic provider stores USD-based reference rates. Derive product/store
+  // cross-rates from those legs so non-USD listings can still show an estimate.
+  if (baseCurrency !== 'USD' || quoteCurrency !== 'USD') {
+    const [baseLeg, quoteLeg] = await Promise.all([
+      baseCurrency === 'USD' ? null : prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency: 'USD', quoteCurrency: baseCurrency }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] }),
+      quoteCurrency === 'USD' ? null : prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency: 'USD', quoteCurrency }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] })
+    ]);
+    if ((baseCurrency === 'USD' || baseLeg) && (quoteCurrency === 'USD' || quoteLeg)) {
+      const legs = [baseLeg, quoteLeg].filter((leg): leg is NonNullable<typeof leg> => leg !== null);
+      const sourceDate = legs.length ? new Date(Math.min(...legs.map(leg => leg.sourceDate.getTime()))) : now;
+      const fetchedAt = legs.length ? new Date(Math.min(...legs.map(leg => leg.fetchedAt.getTime()))) : now;
+      const fresh = legs.every(leg => isRateFresh(leg.fetchedAt, now, maxAge, leg.sourceDate));
+      const rate = deriveUsdPivotRate(baseLeg?.rate.toString() ?? '1', quoteLeg?.rate.toString() ?? '1');
+      const cross = { rate, provider: 'USD_PIVOT', sourceDate: sourceDate.toISOString().slice(0, 10), fetchedAt: fetchedAt.toISOString(), freshness: fresh ? 'fresh' as const : 'stale' as const };
+      if (fresh || !automatic) return cross;
+    }
+  }
   if (!automatic) return null;
-  const fresh = isRateFresh(automatic.fetchedAt, now, env.FX_REFERENCE_MAX_AGE_HOURS * 60 * 60 * 1000, automatic.sourceDate);
-  return { rate: automatic.rate.toString(), provider: automatic.provider, sourceDate: automatic.sourceDate.toISOString().slice(0, 10), fetchedAt: automatic.fetchedAt.toISOString(), freshness: fresh ? 'fresh' as const : 'stale' as const };
+  return { rate: automatic.rate.toString(), provider: automatic.provider, sourceDate: automatic.sourceDate.toISOString().slice(0, 10), fetchedAt: automatic.fetchedAt.toISOString(), freshness: 'stale' as const };
+}
+
+type ReferenceRefreshResult = { provider: string; requested: number; returned: number; inserted: number; unavailableCurrencies: string[] };
+let referenceRefreshInFlight: Promise<ReferenceRefreshResult> | null = null;
+
+export function refreshGlobalReferenceRates() {
+  if (!env.FX_REFERENCE_FETCH_ENABLED) return Promise.reject(fail(503, 'Automatic reference-rate refresh is disabled by deployment configuration.'));
+  if (referenceRefreshInFlight) return referenceRefreshInFlight;
+  referenceRefreshInFlight = (async () => {
+    const entries = await prisma.currencyCatalogEntry.findMany({ where: { active: true, displayEnabled: true }, select: { code: true } });
+    const quotes = entries.map(entry => entry.code).filter(code => code !== env.CURRENCY);
+    const fetched = await fetchReferenceRatesWithUnsupportedFallback(new FrankfurterRateAdapter(env.FX_REFERENCE_API_BASE_URL), env.CURRENCY, quotes);
+    const inserted = await prisma.$transaction(async tx => {
+      let count = 0;
+      for (const item of fetched.rates) {
+        const result = await tx.exchangeRateSnapshot.createMany({ data: [{ baseCurrency: item.base, quoteCurrency: item.quote, rate: item.rate, provider: 'frankfurter', sourceDate: new Date(`${item.sourceDate}T00:00:00.000Z`) }], skipDuplicates: true });
+        count += result.count;
+      }
+      return count;
+    });
+    return { provider: 'frankfurter', requested: fetched.requested, returned: fetched.rates.length, inserted, unavailableCurrencies: fetched.unavailableCurrencies };
+  })().finally(() => { referenceRefreshInFlight = null; });
+  return referenceRefreshInFlight;
 }
 
 export async function availableGlobalDisplayCurrencies() {
@@ -146,6 +189,16 @@ export function registerCurrencyRoutes(app: Express) {
       }
     });
     const entries = await prisma.currencyCatalogEntry.findMany({ where: { active: true, displayEnabled: true }, orderBy: [{ region: 'asc' }, { name: 'asc' }] });
+    let globallyAvailable = new Set(await availableGlobalDisplayCurrencies());
+    let rateRefreshError: string | null = null;
+    if (env.FX_REFERENCE_FETCH_ENABLED && entries.some(entry => entry.code !== env.CURRENCY) && !entries.some(entry => entry.code !== env.CURRENCY && globallyAvailable.has(entry.code))) {
+      try {
+        await refreshGlobalReferenceRates();
+        globallyAvailable = new Set(await availableGlobalDisplayCurrencies());
+      } catch {
+        rateRefreshError = 'Current reference rates are temporarily unavailable. You can still place an order in the platform currency.';
+      }
+    }
     const lines = cart?.items ?? [];
     const chargeCurrency = await prisma.currencyCatalogEntry.findFirst({ where: { code: env.CURRENCY, active: true, checkoutEnabled: true }, select: { code: true } });
     const checkoutCompatible = Boolean(chargeCurrency) && lines.every(item => {
@@ -155,21 +208,32 @@ export function registerCurrencyRoutes(app: Express) {
     });
     const displayCurrencies = [] as { code: string; name: string; symbol: string; minorUnitExponent: number }[];
     for (const candidate of entries) {
+      if (!globallyAvailable.has(candidate.code)) continue;
       let supported = true;
       for (const item of lines) {
         const store = item.product.seller?.store;
         const sourceCurrency = item.variant?.currency ?? item.product.currency;
-        if (!store) {
-          if (candidate.code !== env.CURRENCY) { supported = false; break; }
-          continue;
-        }
-        const offered = candidate.code === store.baseCurrency || store.currencyOffers.some(offer => offer.currency === candidate.code);
-        const rate = offered ? await latestDisplayRate(sourceCurrency, candidate.code, store.id) : null;
+        const rate = await latestDisplayRate(sourceCurrency, candidate.code, store?.id);
         if (!rate || rate.freshness === 'stale') { supported = false; break; }
       }
       if (supported) displayCurrencies.push({ code: candidate.code, name: candidate.name, symbol: candidate.symbol, minorUnitExponent: candidate.minorUnitExponent });
     }
-    res.json({ checkoutCurrency: env.CURRENCY, checkoutCompatible, checkoutCurrencies: checkoutCompatible ? [env.CURRENCY] : [], displayCurrencies, error: checkoutCompatible ? null : 'The cart contains a listing currency that the configured buyer payment methods cannot charge. The cart is preserved; contact the Store or choose compatible items.' });
+    const methodSettings = await prisma.paymentMethodSettings.findMany({ where: { enabled: true, method: { in: [PaymentMethod.PAYMONGO, PaymentMethod.PAYSTACK] } }, select: { method: true } });
+    const enabledMethods = new Set(methodSettings.map(item => item.method));
+    const gatewayDefinitions = [
+      { method: PaymentMethod.PAYMONGO, code: 'PHP', configured: Boolean(env.PAYMONGO_SECRET_KEY?.startsWith('sk_') && !env.PAYMONGO_SECRET_KEY.toLowerCase().includes('placeholder') && env.PAYMONGO_WEBHOOK_SECRET && !env.PAYMONGO_WEBHOOK_SECRET.toLowerCase().includes('placeholder')) },
+      { method: PaymentMethod.PAYSTACK, code: 'NGN', configured: Boolean(env.PAYSTACK_SECRET_KEY?.startsWith('sk_') && !env.PAYSTACK_SECRET_KEY.toLowerCase().includes('placeholder')) }
+    ];
+    const paymentCurrencies = [] as { method: string; code: string; name: string; symbol: string; minorUnitExponent: number }[];
+    if (checkoutCompatible && cart?.items.length) {
+      for (const gateway of gatewayDefinitions) {
+        if (!enabledMethods.has(gateway.method) || !gateway.configured) continue;
+        const currency = entries.find(entry => entry.code === gateway.code && entry.active && entry.displayEnabled);
+        const rate = currency ? await latestDisplayRate(env.CURRENCY, currency.code) : null;
+        if (currency && rate && rate.freshness !== 'stale') paymentCurrencies.push({ method: gateway.method, code: currency.code, name: currency.name, symbol: currency.symbol, minorUnitExponent: currency.minorUnitExponent });
+      }
+    }
+    res.json({ checkoutCurrency: env.CURRENCY, checkoutCompatible, checkoutCurrencies: checkoutCompatible ? [env.CURRENCY] : [], displayCurrencies, paymentCurrencies, error: !checkoutCompatible ? 'The cart contains a listing currency that the configured buyer payment methods cannot charge. The cart is preserved; contact the Store or choose compatible items.' : rateRefreshError });
   }));
 
   app.post('/api/currency/cart-estimate', requireAuth, run(async (req, res) => {
@@ -199,8 +263,6 @@ export function registerCurrencyRoutes(app: Express) {
       if (item.variant && item.variant.currency !== item.product.currency) return res.status(409).json({ error: `The selected variant currency for ${item.product.name} no longer matches the listing.` });
       const store = item.product.seller?.store;
       if (item.product.sellerId && (!store || store.baseCurrency !== item.product.currency)) return res.status(409).json({ error: `Store currency settings do not match ${item.product.name}.` });
-      if (store && input.displayCurrency !== store.baseCurrency && !store.currencyOffers.some(offer => offer.currency === input.displayCurrency && offer.displayEnabled)) return res.status(409).json({ error: `${store.name} does not offer ${input.displayCurrency} for display.` });
-      if (!store && input.displayCurrency !== env.CURRENCY) return res.status(409).json({ error: `Platform products are displayed in ${env.CURRENCY}.` });
       sourceCurrencies.add(source);
     }
     const exponentRows = await prisma.currencyCatalogEntry.findMany({ where: { code: { in: [...sourceCurrencies, input.displayCurrency] }, active: true }, select: { code: true, minorUnitExponent: true } });
@@ -215,18 +277,22 @@ export function registerCurrencyRoutes(app: Express) {
       const sourceExponent = exponents.get(sourceCurrency);
       if (!rate || rate.freshness === 'stale' || sourceExponent === undefined) return res.status(409).json({ error: `No current reference rate is available for ${sourceCurrency}/${input.displayCurrency}; no estimate is shown.` });
       const estimatedAmountMinorBig = convertMinorExact(BigInt(baseMinor), rate.rate, sourceExponent, target.minorUnitExponent);
-      if (estimatedAmountMinorBig > 2_147_483_647n) return res.status(409).json({ error: 'The display estimate exceeds the supported amount range.' });
+      const estimatedUnitAmountMinorBig = convertMinorExact(BigInt(effectiveUnitPriceMinor(item)), rate.rate, sourceExponent, target.minorUnitExponent);
+      if (estimatedAmountMinorBig > 2_147_483_647n || estimatedUnitAmountMinorBig > 2_147_483_647n) return res.status(409).json({ error: 'The display estimate exceeds the supported amount range.' });
       const estimatedAmountMinor = Number(estimatedAmountMinorBig);
       displayMerchandiseMinor += estimatedAmountMinor;
-      snapshots.push({ productId: item.productId, quantity: item.quantity, sourceAmountMinor: baseMinor, sourceCurrency, estimatedAmountMinor, targetCurrency: input.displayCurrency, rate: rate.rate, provider: rate.provider, sourceDate: rate.sourceDate, fetchedAt: rate.fetchedAt, freshness: rate.freshness, rounding: 'HALF_UP', purpose: 'DISPLAY_ESTIMATE_ONLY' });
+      snapshots.push({ cartItemId: item.id, productId: item.productId, quantity: item.quantity, sourceUnitAmountMinor: effectiveUnitPriceMinor(item), sourceAmountMinor: baseMinor, sourceCurrency, estimatedUnitAmountMinor: Number(estimatedUnitAmountMinorBig), estimatedAmountMinor, targetCurrency: input.displayCurrency, rate: rate.rate, provider: rate.provider, sourceDate: rate.sourceDate, fetchedAt: rate.fetchedAt, freshness: rate.freshness, rounding: 'HALF_UP', purpose: 'DISPLAY_ESTIMATE_ONLY' });
     }
     const shippingItems = cart.items.filter(item => item.product.productType.requiresShipping);
     const sellerIds = [...new Set(shippingItems.map(item => item.product.sellerId).filter((id): id is string => Boolean(id)))];
+    const hasAddress = Boolean(input.address);
+    const hasShippingQuote = Boolean(input.shippingQuoteToken);
+    if (hasAddress !== hasShippingQuote) return res.status(400).json({ error: 'A delivery address and its current shipping quote must be provided together.' });
     let chargeShippingMinor = 0;
     let displayShippingMinor = 0;
     const shippingSnapshots: Record<string, unknown>[] = [];
-    if (sellerIds.length) {
-      if (!input.address || !input.shippingQuoteToken) return res.status(409).json({ error: 'Calculate shipping before viewing a complete converted order estimate.' });
+    const complete = sellerIds.length === 0 || hasShippingQuote;
+    if (sellerIds.length && input.address && input.shippingQuoteToken) {
       const verified = verifyCheckoutShippingQuote({ token: input.shippingQuoteToken, userId: user.id, address: input.address, items: shippingItems as ShippingCartRecord[] });
       const selections = Object.fromEntries(verified.selections.map(selection => [selection.sellerId, selection.serviceId]));
       const current = await prisma.$transaction(tx => buildSellerShippingQuote(tx, user.id, input.address!, shippingItems as ShippingCartRecord[], selections));
@@ -235,7 +301,6 @@ export function registerCurrencyRoutes(app: Express) {
       for (const shipment of current.shipments) {
         const sellerItems = cart.items.filter(item => item.product.sellerId === shipment.sellerId);
         const store = sellerItems[0]?.product.seller?.store;
-        if (store && input.displayCurrency !== store.baseCurrency && !store.currencyOffers.some(offer => offer.currency === input.displayCurrency && offer.displayEnabled)) return res.status(409).json({ error: `${store.name} does not offer ${input.displayCurrency} for shipping display.` });
         const rate = await latestDisplayRate(env.CURRENCY, input.displayCurrency, store?.id);
         const sourceExponent = exponents.get(env.CURRENCY);
         if (!rate || rate.freshness === 'stale' || sourceExponent === undefined) return res.status(409).json({ error: `No current shipping estimate rate is available for ${env.CURRENCY}/${input.displayCurrency}.` });
@@ -245,16 +310,13 @@ export function registerCurrencyRoutes(app: Express) {
         shippingSnapshots.push({ storeId: store?.id, serviceId: shipment.selected.serviceId, sourceAmountMinor: shipment.selected.shippingMinor, sourceCurrency: env.CURRENCY, estimatedAmountMinor: Number(estimate), targetCurrency: input.displayCurrency, rate: rate.rate, provider: rate.provider, sourceDate: rate.sourceDate, fetchedAt: rate.fetchedAt, freshness: rate.freshness, rounding: 'HALF_UP', purpose: 'DISPLAY_ESTIMATE_ONLY' });
       }
     }
-    res.json({ displayCurrency: input.displayCurrency, displayMerchandiseMinor, displayShippingMinor, displayTotalMinor: displayMerchandiseMinor + displayShippingMinor, chargeCurrency: env.CURRENCY, chargeMerchandiseMinor: cart.items.reduce((sum, item) => sum + effectiveUnitPriceMinor(item) * item.quantity, 0) - (appliedDiscount?.quote.discountMinor ?? 0), discountMinor: appliedDiscount?.quote.discountMinor ?? 0, chargeShippingMinor, rates: snapshots, shippingRates: shippingSnapshots, note: `Reference-rate estimate only. Actual order and provider charge remain in ${env.CURRENCY}; final provider conversion, if any, is authoritative.` });
+    res.json({ displayCurrency: input.displayCurrency, complete, incompleteReason: complete ? null : 'Shipping is not included yet. Calculate delivery to view the estimated full order total.', displayMerchandiseMinor, displayShippingMinor, displayTotalMinor: displayMerchandiseMinor + displayShippingMinor, chargeCurrency: env.CURRENCY, chargeMerchandiseMinor: cart.items.reduce((sum, item) => sum + effectiveUnitPriceMinor(item) * item.quantity, 0) - (appliedDiscount?.quote.discountMinor ?? 0), discountMinor: appliedDiscount?.quote.discountMinor ?? 0, chargeShippingMinor, items: snapshots, rates: snapshots, shippingRates: shippingSnapshots, note: `Reference-rate estimate only. The platform order and seller accounting remain in ${env.CURRENCY}; a selected local-currency provider charge is quoted separately and recalculated at checkout.` });
   }));
 
   app.get('/api/stores/:slug/currencies', run(async (req, res) => {
     const store = await prisma.store.findFirst({ where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } }, include: { currencyOffers: { where: { displayEnabled: true }, include: { currencyEntry: true } } } });
     if (!store) return res.status(404).json({ error: 'Store not found' });
-    const entries = [
-      await prisma.currencyCatalogEntry.findUnique({ where: { code: store.baseCurrency } }),
-      ...store.currencyOffers.map(offer => offer.currencyEntry)
-    ].filter((entry, index, all) => entry && all.findIndex(item => item?.code === entry.code) === index);
+    const entries = await prisma.currencyCatalogEntry.findMany({ where: { active: true, displayEnabled: true }, orderBy: [{ region: 'asc' }, { name: 'asc' }] });
     const currencies = await Promise.all(entries.map(async entry => {
       const rate = await latestDisplayRate(store.baseCurrency, entry!.code, store.id);
       const usable = rate !== null && rate.freshness !== 'stale';
@@ -272,8 +334,7 @@ export function registerCurrencyRoutes(app: Express) {
       include: { currencyOffers: { where: { displayEnabled: true } }, seller: { include: { products: { where: { status: ProductStatus.APPROVED }, select: { id: true, priceMinor: true, salePriceMinor: true, currency: true } } } } }
     });
     if (!store) return res.status(404).json({ error: 'Store not found.' });
-    if (currency !== store.baseCurrency && !store.currencyOffers.some(offer => offer.currency === currency)) return res.status(409).json({ error: 'This Store has not offered that display currency.' });
-    const target = await prisma.currencyCatalogEntry.findFirst({ where: { code: currency, ...(currency === store.baseCurrency ? {} : { active: true, displayEnabled: true }) } });
+    const target = await prisma.currencyCatalogEntry.findFirst({ where: { code: currency, active: true, displayEnabled: true } });
     if (!target) return res.status(409).json({ error: 'This currency is not enabled for display.' });
     const currencies = await prisma.currencyCatalogEntry.findMany({ where: { code: { in: [...new Set([store.baseCurrency, ...store.seller.products.map(product => product.currency)])] }, active: true }, select: { code: true, minorUnitExponent: true } });
     const exponent = new Map(currencies.map(entry => [entry.code, entry.minorUnitExponent]));
@@ -319,20 +380,9 @@ export function registerCurrencyRoutes(app: Express) {
   }));
 
   app.post('/api/admin/fx/refresh', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
-    if (!env.FX_REFERENCE_FETCH_ENABLED) return res.status(503).json({ error: 'Automatic reference-rate refresh is disabled by deployment configuration.' });
-    const entries = await prisma.currencyCatalogEntry.findMany({ where: { active: true, displayEnabled: true }, select: { code: true } });
-    const quotes = entries.map(entry => entry.code).filter(code => code !== env.CURRENCY);
-    const rates = await new FrankfurterRateAdapter(env.FX_REFERENCE_API_BASE_URL).fetchRates(env.CURRENCY, quotes);
-    const created = await prisma.$transaction(async tx => {
-      let count = 0;
-      for (const item of rates) {
-        const result = await tx.exchangeRateSnapshot.createMany({ data: [{ baseCurrency: item.base, quoteCurrency: item.quote, rate: item.rate, provider: 'frankfurter', sourceDate: new Date(`${item.sourceDate}T00:00:00.000Z`) }], skipDuplicates: true });
-        count += result.count;
-      }
-      await tx.auditLog.create({ data: { actorId: actor(res).id, action: 'REFERENCE_FX_REFRESHED', entity: 'ExchangeRateSnapshot', metadata: { requested: quotes.length, returned: rates.length, inserted: count, provider: 'frankfurter' } } });
-      return count;
-    });
-    res.json({ provider: 'frankfurter', requested: quotes.length, returned: rates.length, inserted: created, note: 'Daily reference estimates only; not payment or settlement rates.' });
+    const result = await refreshGlobalReferenceRates();
+    await prisma.auditLog.create({ data: { actorId: actor(res).id, action: 'REFERENCE_FX_REFRESHED', entity: 'ExchangeRateSnapshot', metadata: result } });
+    res.json({ ...result, note: 'Daily reference estimates only; not payment or settlement rates.' });
   }));
 
   app.post('/api/admin/fx/manual-rates', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {

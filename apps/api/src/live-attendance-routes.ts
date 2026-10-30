@@ -29,8 +29,8 @@ export function registerLiveAttendanceRoutes(app: Express) {
     const now = new Date();
     const result = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "LiveSession" WHERE "id" = ${sessionId} FOR SHARE`;
-      const session = await tx.liveSession.findUnique({ where: { id: sessionId }, select: { id: true, status: true, providerSessionRef: true, playbackRef: true } });
-      if (!session || session.status !== LiveSessionStatus.LIVE) throw fail(404, 'This live session is not currently broadcasting.');
+      const session = await tx.liveSession.findUnique({ where: { id: sessionId }, select: { id: true, status: true, deletedAt: true, providerSessionRef: true, playbackRef: true } });
+      if (!session || session.deletedAt || session.status !== LiveSessionStatus.LIVE) throw fail(404, 'This live session is not currently broadcasting.');
       if (!session.providerSessionRef || !session.playbackRef) throw fail(409, 'Attendance rewards require a provider-backed live playback session.');
       if (input.playing && !(await liveProvider.verifyViewerPlayback(session.providerSessionRef, `viewer:${user.id}`))) throw fail(409, 'Playback could not be verified by the live provider. Keep the show playing and retry.');
       const attendance = await tx.liveSessionAttendance.upsert({

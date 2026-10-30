@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 
 type DatabaseTransaction = Prisma.TransactionClient;
 
@@ -13,6 +13,8 @@ export type NotificationDraft = {
 };
 
 export type NotificationCategory = 'orders' | 'support' | 'account';
+
+export type NotificationBroadcast = Omit<NotificationDraft, 'userId'>;
 
 /** Persist the in-app event and, when enabled, its transactional email in the same DB transaction. */
 export async function createUserNotification(tx: DatabaseTransaction, draft: NotificationDraft, category: NotificationCategory) {
@@ -44,4 +46,19 @@ export async function createUserNotifications(tx: DatabaseTransaction, drafts: A
     }];
   });
   if (outboxRows.length) await tx.emailOutbox.createMany({ data: outboxRows });
+}
+
+/** Fan out a lifecycle alert to active users with the requested platform role. */
+export async function createRoleNotifications(
+  tx: DatabaseTransaction,
+  role: Role,
+  draft: NotificationBroadcast,
+  category: NotificationCategory,
+  excludedUserIds: string[] = []
+) {
+  const recipients = await tx.user.findMany({
+    where: { role, accountStatus: 'ACTIVE', ...(excludedUserIds.length ? { id: { notIn: excludedUserIds } } : {}) },
+    select: { id: true }
+  });
+  await createUserNotifications(tx, recipients.map(({ id }) => ({ draft: { ...draft, userId: id }, category })));
 }
