@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectNoHorizontalOverflow } from './layout-assertions.js';
 import { PrismaClient } from '@prisma/client';
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
@@ -154,12 +155,12 @@ test('buyer and seller workspaces fit a narrow mobile viewport without horizonta
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page, 'seller.local@example.test');
   await page.goto('/dashboard');
-  const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   const viewportWidth = await page.evaluate(() => document.documentElement.clientWidth);
-  expect(pageWidth).toBeLessThanOrEqual(viewportWidth);
+  await expectNoHorizontalOverflow(page);
   await page.getByRole('button', { name: 'Seller view' }).click();
   await expect(page.getByRole('heading', { name: 'Seller dashboard' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewportWidth);
+  expect(await page.evaluate(() => document.documentElement.clientWidth)).toBe(viewportWidth);
+  await expectNoHorizontalOverflow(page);
 });
 
 test('member homepage cart summary refreshes with the shared cart-change event', async ({ page }) => {

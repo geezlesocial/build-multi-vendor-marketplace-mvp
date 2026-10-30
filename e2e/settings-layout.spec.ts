@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectNoHorizontalOverflow } from './layout-assertions.js';
 
 async function signInAsBuyer(page: Page) {
   const response = await page.request.post('/api/auth/login', {
@@ -44,7 +45,7 @@ test('settings cards and controls are balanced on desktop', async ({ page }) => 
   expect(Math.abs(personalization!.y - notifications!.y)).toBeLessThanOrEqual(2);
   expect(personalization!.x + personalization!.width).toBeLessThanOrEqual(notifications!.x);
 
-  for (const label of ['Language', 'Display currency']) {
+  for (const label of ['Language', 'Default currency for estimates']) {
     const select = page.getByLabel(label);
     const box = await select.boundingBox();
     expect(box).not.toBeNull();
@@ -79,11 +80,8 @@ test('settings sections stack without horizontal overflow on mobile', async ({ p
   await page.goto('/settings');
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
 
-  const dimensions = await page.evaluate(() => ({
-    clientWidth: document.documentElement.clientWidth,
-    scrollWidth: document.documentElement.scrollWidth
-  }));
-  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+  const dimensions = await page.evaluate(() => ({ clientWidth: document.documentElement.clientWidth }));
+  await expectNoHorizontalOverflow(page);
 
   const cards = page.locator('.settingsGrid > .settingsCard');
   const cardHeadings = ['Language and currency', 'Security', 'Personalization', 'Notifications'];
@@ -101,7 +99,7 @@ test('settings sections stack without horizontal overflow on mobile', async ({ p
     expect(box!.width).toBeLessThanOrEqual(dimensions.clientWidth - 32);
   }
 
-  for (const label of ['Language', 'Display currency']) {
+  for (const label of ['Language', 'Default currency for estimates']) {
     const select = page.getByLabel(label);
     const box = await select.boundingBox();
     expect(box).not.toBeNull();

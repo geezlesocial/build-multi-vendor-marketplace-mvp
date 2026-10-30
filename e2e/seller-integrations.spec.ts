@@ -1,12 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
+import { logRateLimitResponses, rateLimitFailureDetails } from './http-diagnostics.js';
 
 const sellerEmail = 'seller.local@example.test';
 const buyerEmail = 'buyer.local@example.test';
 const password = 'LocalDemoOnly-ChangeMe-123!';
 
 async function signIn(page: Page, email: string) {
+  logRateLimitResponses(page);
   const response = await page.request.post('/api/auth/login', { data: { email, password } });
-  expect(response.ok(), `Synthetic fixture login failed with ${response.status()}.`).toBeTruthy();
+  expect(response.ok(), `Synthetic fixture login failed with ${response.status()}. ${rateLimitFailureDetails(response)}`).toBeTruthy();
 }
 
 test('seller integrations preserve seller plan gates and grant the official admin Store premium access', async ({ page, browser }) => {

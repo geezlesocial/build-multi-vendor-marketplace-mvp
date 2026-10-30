@@ -279,8 +279,18 @@ test('store display estimates, checkout currency, COD eligibility and commission
     const collected = await admin.page.request.post(`/api/orders/${order.id}/cod-collect`, { data: {}, headers: await csrf(admin.page) });
     expect(collected.ok(), await collected.text()).toBeTruthy();
     const ledger = await prisma.sellerCommissionLedgerEntry.findMany({ where: { sellerOrder: { parentId: order.id } } });
-    expect(ledger).toHaveLength(1);
-    expect(ledger[0]).toMatchObject({ sellerId: sellers[0]!.seller.id, entryType: 'ACCRUAL', amountMinor: 350, eligibleBaseMinor: 3500, currency: 'USD' });
+    expect(ledger).toHaveLength(order.sellerOrders.length);
+    expect(new Set(ledger.map(entry => entry.sellerId))).toEqual(new Set(sellers.map(store => store.seller.id)));
+    for (const sellerOrder of order.sellerOrders) {
+      const item = sellerOrder.items[0]!;
+      expect(ledger.find(entry => entry.sellerOrderId === sellerOrder.id && entry.orderItemId === item.id)).toMatchObject({
+        sellerId: sellerOrder.sellerId,
+        entryType: 'ACCRUAL',
+        amountMinor: 350,
+        eligibleBaseMinor: 3500,
+        currency: 'USD'
+      });
+    }
     const sellerLedger = await sellerAccounts[0]!.page.request.get('/api/seller/commissions');
     expect(sellerLedger.ok()).toBeTruthy();
     expect((await sellerLedger.json() as { entries: { sellerId: string }[] }).entries.every(entry => entry.sellerId === sellers[0]!.seller.id)).toBe(true);

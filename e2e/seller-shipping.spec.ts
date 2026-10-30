@@ -2,6 +2,7 @@ import { expect, test, type Browser, type BrowserContext, type Page } from '@pla
 import { PrismaClient, ProductStatus, Role, SellerStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
+import { logRateLimitResponses, rateLimitFailureDetails } from './http-diagnostics.js';
 
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required; seller-shipping tests may only use the guarded disposable database.');
@@ -16,8 +17,9 @@ async function csrf(page: Page) {
   return { 'x-csrf-token': cookie!.value };
 }
 async function login(page: Page, email: string) {
+  logRateLimitResponses(page);
   const response = await page.request.post('/api/auth/login', { data: { email, password } });
-  expect(response.ok(), await response.text()).toBeTruthy();
+  expect(response.ok(), `${await response.text()} (${rateLimitFailureDetails(response)})`).toBeTruthy();
 }
 async function openAccount(browser: Browser, email: string): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext();
