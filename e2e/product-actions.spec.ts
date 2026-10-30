@@ -237,9 +237,10 @@ test('product cards share, save, buy now, and let members handle messages and no
   await expect(page.locator('.messagesProductContext')).toContainText('Regarding this listing');
   await expect(page.locator('.messagesProductContext')).toContainText(product.name);
   const messageBubble = page.locator('.messageBubble').filter({ hasText: `${messageMarker}: Seller quick reply` });
-  const loveReaction = messageBubble.getByRole('button', { name: /^Love/ });
+  const loveReaction = messageBubble.getByRole('button', { name: 'Love, 1' });
+  await expect(loveReaction).toHaveAttribute('aria-pressed', 'true');
   await loveReaction.click();
-  await expect(messageBubble.getByRole('button', { name: 'Love, 1' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(messageBubble.getByRole('button', { name: 'Love', exact: true })).toHaveAttribute('aria-pressed', 'false');
 
   const filePicker = page.locator('.messagesComposer input[type="file"]');
   await filePicker.setInputFiles([
