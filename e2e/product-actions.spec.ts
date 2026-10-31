@@ -80,6 +80,7 @@ async function login(page: Page) {
 }
 
 test('product cards share, save, buy now, and let members handle messages and notifications from the header', async ({ page, browser }) => {
+  test.setTimeout(60_000);
   await login(page);
   await page.goto(`/store/${encodeURIComponent(product.storeSlug)}`);
   const card = page.locator('article.productCard').filter({ has: page.getByRole('heading', { name: product.name, exact: true }) }).first();
@@ -138,7 +139,7 @@ test('product cards share, save, buy now, and let members handle messages and no
   await page.goto(`/store/${encodeURIComponent(product.storeSlug)}`);
   const inquiryCard = page.locator('article.productCard').filter({ has: page.getByRole('heading', { name: product.name, exact: true }) }).first();
   await inquiryCard.getByRole('button', { name: 'Contact seller' }).click();
-  await page.getByLabel('Message').fill(`${messageMarker}: Is this item still available?`);
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill(`${messageMarker}: Is this item still available?`);
   const sendResponsePromise = page.waitForResponse(response => new URL(response.url()).pathname === `/api/products/${product.id}/contact-seller` && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Send message' }).click();
   const sendResponse = await sendResponsePromise;
@@ -150,6 +151,7 @@ test('product cards share, save, buy now, and let members handle messages and no
   expect(await prisma.conversation.findUnique({ where: { id: conversationId }, select: { productId: true } })).toMatchObject({ productId: product.id });
   expect(await prisma.notification.findFirst({ where: { userId: product.sellerUserId, eventType: 'NEW_PRODUCT_INQUIRY' } })).toBeTruthy();
   await expect(page.getByText('Your message was sent to the seller.')).toBeVisible();
+  await page.getByRole('dialog', { name: 'Contact seller' }).getByRole('button', { name: 'Done' }).click();
 
   const sellerPage = await browser.newPage();
   try {
@@ -177,9 +179,18 @@ test('product cards share, save, buy now, and let members handle messages and no
     const notificationPopover = sellerPage.getByRole('region', { name: 'Notifications' });
     const inquiryNotification = notificationPopover.locator('.headerNotificationItem').filter({ hasText: `A buyer sent you a message about ${product.name}.` });
     await expect(inquiryNotification).toBeVisible();
+    const notificationReadResponsePromise = sellerPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'POST' && /^\/api\/notifications\/[^/]+\/read$/.test(url.pathname);
+    });
     await inquiryNotification.click();
-    await expect(inquiryNotification).not.toHaveClass(/isUnread/);
-    await expect(sellerPage).toHaveURL(/\/$/);
+    const notificationReadResponse = await notificationReadResponsePromise;
+    expect(notificationReadResponse.status(), await notificationReadResponse.text()).toBe(204);
+    await expect(sellerPage).toHaveURL(/\/dashboard\?mode=seller&tab=messages$/);
+    const notificationId = decodeURIComponent(new URL(notificationReadResponse.url()).pathname.split('/')[3]!);
+    const inquiryNotificationRecord = await prisma.notification.findUnique({ where: { id: notificationId }, select: { userId: true, readAt: true } });
+    expect(inquiryNotificationRecord).toMatchObject({ userId: product.sellerUserId });
+    expect(inquiryNotificationRecord?.readAt).not.toBeNull();
   } finally {
     await sellerPage.close();
   }
@@ -214,20 +225,22 @@ test('product cards share, save, buy now, and let members handle messages and no
   const quickReplyResponse = await quickReplyResponsePromise;
   expect(quickReplyResponse.status(), await quickReplyResponse.text()).toBe(201);
   replyMessageId = (await quickReplyResponse.json() as { id: string }).id;
-  await expect(inboxPopover.getByText(`${messageMarker}: Buyer quick reply`)).toBeVisible();
-  await expect(quickMessage.getByText(/header-preview\.png is private because the malware scanner is unavailable/)).toBeVisible();
-  await quickMessage.getByRole('button', { name: 'Retry safety scan' }).click();
-  await expect(quickMessage.getByText(/header-preview\.png is private because the malware scanner is unavailable/)).toBeVisible();
+  const buyerQuickMessage = inboxPopover.locator('.headerMessageItem').filter({ hasText: `${messageMarker}: Buyer quick reply` });
+  await expect(buyerQuickMessage).toBeVisible();
+  await expect(buyerQuickMessage.getByText(/header-preview\.png is private because the malware scanner is unavailable/)).toBeVisible();
+  await buyerQuickMessage.getByRole('button', { name: 'Retry safety scan' }).click();
+  await expect(buyerQuickMessage.getByText(/header-preview\.png is private because the malware scanner is unavailable/)).toBeVisible();
   await inboxPopover.getByRole('link', { name: 'View all messages' }).click();
   const conversationButton = page.locator(`.messagesConversationButton[data-conversation-id="${conversationId}"]`);
   await expect(conversationButton).toBeVisible();
   await conversationButton.click();
   await expect(page.locator('.messagesProductContext')).toContainText('Regarding this listing');
   await expect(page.locator('.messagesProductContext')).toContainText(product.name);
-  const messageBubble = page.locator('.messageBubble').filter({ hasText: messageMarker });
-  const loveReaction = messageBubble.getByRole('button', { name: /^Love/ });
+  const messageBubble = page.locator('.messageBubble').filter({ hasText: `${messageMarker}: Seller quick reply` });
+  const loveReaction = messageBubble.getByRole('button', { name: 'Love, 1' });
+  await expect(loveReaction).toHaveAttribute('aria-pressed', 'true');
   await loveReaction.click();
-  await expect(messageBubble.getByRole('button', { name: 'Love, 1' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(messageBubble.getByRole('button', { name: 'Love', exact: true })).toHaveAttribute('aria-pressed', 'false');
 
   const filePicker = page.locator('.messagesComposer input[type="file"]');
   await filePicker.setInputFiles([

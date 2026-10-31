@@ -2,6 +2,7 @@ import { PrismaClient, ProductStatus, Role, SellerStatus } from '@prisma/client'
 import { expect, test, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
+import { expectNoHorizontalOverflow } from './layout-assertions.js';
 
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL must point to the disposable browser-test database.');
@@ -95,7 +96,7 @@ test('new signup is guided through persistent onboarding before entering the mem
   expect(initial.stores.length).toBeGreaterThanOrEqual(2);
   expect(initial.stores.length).toBeLessThanOrEqual(8);
   expect(initial.currencies.length).toBeGreaterThan(0);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
+  await expectNoHorizontalOverflow(page);
 
   const followButtons = page.getByRole('button', { name: 'Follow', exact: true });
   await followButtons.nth(0).click();
@@ -128,7 +129,7 @@ test('new signup is guided through persistent onboarding before entering the mem
 
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Good to see you, New' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
+  await expectNoHorizontalOverflow(page);
 
   await page.getByRole('button', { name: /New Onboarding Member, account menu/ }).click();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();

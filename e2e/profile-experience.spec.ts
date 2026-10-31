@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import { expectNoHorizontalOverflow } from './layout-assertions.js';
+import { logRateLimitResponses, rateLimitFailureDetails } from './http-diagnostics.js';
 
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for profile browser tests.');
@@ -12,14 +14,16 @@ function uniqueEmail(label: string) { return `${label}-${Date.now()}-${Math.rand
 test.afterAll(async () => { await prisma.$disconnect(); });
 
 async function login(page: Page, email: string, localPassword = 'LocalDemoOnly-ChangeMe-123!') {
+  logRateLimitResponses(page);
   const response = await page.request.post('/api/auth/login', { data: { email, password: localPassword } });
-  expect(response.ok(), await response.text()).toBeTruthy();
+  expect(response.ok(), `${await response.text()} (${rateLimitFailureDetails(response)})`).toBeTruthy();
 }
 
 async function register(page: Page, name = 'Avatar Test Member') {
+  logRateLimitResponses(page);
   const email = uniqueEmail('profile');
   const response = await page.request.post('/api/auth/register', { data: { email, name, password } });
-  expect(response.status(), await response.text()).toBe(201);
+  expect(response.status(), `${await response.text()} (${rateLimitFailureDetails(response)})`).toBe(201);
   const user = (await response.json()).user as { id: string; name: string };
   await prisma.user.update({ where: { id: user.id }, data: { onboardingCompletedAt: new Date() } });
   return { email, user };
@@ -221,7 +225,7 @@ test('mobile account navigation remains usable without horizontal overflow', asy
   await page.getByRole('button', { name: 'Local Buyer, account menu' }).click();
   const menu = page.locator('#account-menu');
   await expect(menu.getByRole('link', { name: 'Profile and settings' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expectNoHorizontalOverflow(page);
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
 });

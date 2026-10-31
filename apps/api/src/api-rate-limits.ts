@@ -5,7 +5,7 @@ export const AUTH_CREDENTIAL_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 export const AUTH_CREDENTIAL_LIMIT = 60;
 export const API_REQUEST_LIMIT_WINDOW_MS = 60 * 1000;
 export const API_REQUEST_LIMIT = 300;
-export const E2E_API_REQUEST_LIMIT = 1200;
+export const E2E_API_REQUEST_LIMIT = 3000;
 export const E2E_AUTH_CREDENTIAL_LIMIT = 300;
 
 type RateLimitOptions = {

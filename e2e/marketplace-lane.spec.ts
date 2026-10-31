@@ -31,7 +31,7 @@ test('guest can search labeled public catalog results and open a product', async
   await expect(page).toHaveURL(/\/products\//);
 });
 
-test('account preferences persist without allowing unconfigured currency conversion', async ({ page }) => {
+test('account preferences accept only configured display currencies without changing checkout currency', async ({ page }) => {
   await login(page, 'buyer.local@example.test');
   const headers = await csrfHeaders(page);
   await page.request.patch('/api/account/preferences', { data: { language: 'en' }, headers });
@@ -42,11 +42,23 @@ test('account preferences persist without allowing unconfigured currency convers
     await language.selectOption('fil');
     await expect(page.getByRole('heading', { name: 'Mga setting' })).toBeVisible();
 
-    const rejected = await page.request.patch('/api/account/preferences', { data: { displayCurrency: 'EUR' }, headers });
-    expect(rejected.status()).toBe(409);
+    const availability = await page.request.get('/api/account/preferences');
+    expect(availability.ok(), await availability.text()).toBeTruthy();
+    const available = await availability.json() as { baseCurrency: string; availableDisplayCurrencies: string[] };
+    const eur = await page.request.patch('/api/account/preferences', { data: { displayCurrency: 'EUR' }, headers });
+    if (available.availableDisplayCurrencies.includes('EUR')) {
+      expect(eur.status(), await eur.text()).toBe(200);
+      expect(await eur.json()).toMatchObject({ baseCurrency: available.baseCurrency, preference: { displayCurrency: 'EUR' } });
+    } else {
+      expect(eur.status()).toBe(409);
+    }
+    const unconfigured = await page.request.patch('/api/account/preferences', { data: { displayCurrency: 'ZZZ' }, headers });
+    expect(unconfigured.status()).toBe(409);
     const saved = await page.request.get('/api/account/preferences');
     expect(saved.ok()).toBeTruthy();
-    expect((await saved.json()).preference.language).toBe('fil');
+    const savedPreference = await saved.json();
+    expect(savedPreference.preference.language).toBe('fil');
+    expect(savedPreference.baseCurrency).toBe(available.baseCurrency);
 
     const buyerAvailability = await page.request.get('/api/admin/platform/availability');
     expect(buyerAvailability.status()).toBe(403);

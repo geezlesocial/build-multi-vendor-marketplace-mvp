@@ -1,9 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectNoHorizontalOverflow } from './layout-assertions.js';
+import { logRateLimitResponses, rateLimitFailureDetails } from './http-diagnostics.js';
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
 async function login(page: Page) {
+  logRateLimitResponses(page);
   const response = await page.request.post('/api/auth/login', { data: { email: 'buyer.local@example.test', password } });
-  expect(response.ok(), `Synthetic fixture login failed with ${response.status()}.`).toBeTruthy();
+  expect(response.ok(), `Synthetic fixture login failed with ${response.status()}. ${rateLimitFailureDetails(response)}`).toBeTruthy();
 }
 async function csrf(page: Page) {
   const cookie = (await page.context().cookies()).find(item => item.name === 'marketplace_csrf');
@@ -54,12 +57,11 @@ test('map picker stays usable on mobile with a manual-address fallback and no ge
   await page.route('https://tile.openstreetmap.org/**', route => route.abort());
   await login(page);
   await page.goto('/dashboard?mode=buyer');
-  await page.getByRole('button', { name: 'Addresses' }).click();
+  await page.locator('#buyer-dashboard-section-jump').selectOption('addresses');
   await expect(page.getByLabel('Street address')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Attribution and tile-use policy' })).toBeVisible();
   expect(await page.evaluate(() => (window as Window & { __geoRequests: number }).__geoRequests)).toBe(0);
-  const viewportWidth = await page.evaluate(() => document.documentElement.clientWidth);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewportWidth);
+  await expectNoHorizontalOverflow(page);
   await expect(page.getByRole('button', { name: 'Use my location' })).toBeVisible();
   await page.getByRole('button', { name: 'Use my location' }).click();
   await expect(page.getByText('Map point selected: 14.59950, 120.98420', { exact: true })).toBeVisible();
