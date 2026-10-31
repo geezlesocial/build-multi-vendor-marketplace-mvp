@@ -39,7 +39,10 @@ async function uploadAvatar(page: Page) {
   // Some callers have just saved the profile on this route. Avoid a redundant
   // same-URL navigation, which can abort while the SPA is still settling.
   const current = new URL(page.url());
-  if (current.pathname !== '/settings') await page.goto('/settings#profile');
+  if (current.pathname !== '/settings') {
+    await page.goto('/settings#profile', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  }
   await page.locator('input[type="file"]').setInputFiles({ name: 'profile.png', mimeType: 'image/png', buffer: validPng });
   const response = page.waitForResponse(item => item.url().endsWith('/api/account/avatar/uploads') && item.request().method() === 'POST');
   await page.getByRole('button', { name: 'Upload photo' }).click();
