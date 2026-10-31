@@ -209,13 +209,13 @@ jobs:
           echo "WALLET_FUNDING_SANDBOX_ID=$sandbox_id" >> "$GITHUB_ENV"
           echo "DATABASE_URL=postgresql://marketplace_test:local-only-disposable-password@127.0.0.1:${STAGING_TEST_DB_PORT}/${database_name}?schema=public" >> "$GITHUB_ENV"
           echo "E2E_DATABASE_URL=postgresql://marketplace_test:local-only-disposable-password@127.0.0.1:${STAGING_TEST_DB_PORT}/${database_name}?schema=public" >> "$GITHUB_ENV"
-          docker compose --profile session-services up -d postgres mailpit clamav
+          docker compose -f docker-compose.staging-test.yml --profile session-services up -d postgres mailpit clamav
           for attempt in $(seq 1 60); do
-            if docker compose exec -T postgres pg_isready -U marketplace_test -d postgres >/dev/null 2>&1; then break; fi
+            if docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d postgres >/dev/null 2>&1; then break; fi
             sleep 2
           done
-          docker compose exec -T postgres pg_isready -U marketplace_test -d postgres
-          docker compose exec -T postgres createdb -U marketplace_test "$database_name"
+          docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d postgres
+          docker compose -f docker-compose.staging-test.yml exec -T postgres createdb -U marketplace_test "$database_name"
 
       - name: Apply migrations and seed only the disposable database
         run: |
@@ -235,4 +235,4 @@ jobs:
 
       - name: Destroy the disposable Compose environment
         if: always()
-        run: docker compose --profile session-services down --volumes --remove-orphans
+        run: docker compose -f docker-compose.staging-test.yml --profile session-services down --volumes --remove-orphans
