@@ -2,6 +2,9 @@ name: Marketplace full E2E stability
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - fix/marketplace-release-completion
 
 permissions:
   contents: read
