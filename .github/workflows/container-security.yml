@@ -167,6 +167,7 @@ jobs:
     permissions:
       contents: read
     env:
+      DATABASE_URL: postgresql://synthetic:synthetic@127.0.0.1:55439/not-used?schema=public
       PASSWORD_PEPPER: workflow-test-only-not-a-secret-0123456789
       CONTENT_SCAN_REQUIRED: 'true'
       STORE_EMAIL_DELIVERY_AVAILABLE: 'false'
