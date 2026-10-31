@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
 import { OrderStatus, ProductStatus, Role, SellerStatus } from '@prisma/client';
 import { z } from 'zod';
-import { audit, hashPassword, prisma, requireAuth, requireRole, tokenHash, verifyPassword } from './security.js';
+import { audit, hashPassword, prisma, requireAuth, requireRole, safeUser, tokenHash, verifyPassword, type AuthUser } from './security.js';
 import { env } from './config.js';
 import { accountPreferencesSchema, displayCurrencyAvailable, enabledMarketplaceLanguages } from './marketplace-domain.js';
 import { liveShoppingState } from './live-domain.js';
@@ -122,8 +122,12 @@ export function registerDashboardRoutes(app: Express) {
 
   app.patch('/api/account/profile', requireAuth, run(async (req, res) => {
     const user = actor(res); const input = z.object({ name: z.string().trim().min(2).max(100) }).strict().parse(req.body);
-    const updated = await prisma.user.update({ where: { id: user.id }, data: { name: input.name }, select: { id: true, email: true, name: true, role: true, avatarMediaId: true } });
-    res.json({ id: updated.id, email: updated.email, name: updated.name, role: updated.role, ...(updated.avatarMediaId ? { avatarUrl: '/api/account/avatar' } : {}) });
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { name: input.name }, select: { name: true } });
+    // Return the complete safe session identity. The web client replaces its
+    // current session user with this response, so returning a partial user can
+    // drop onboarding, seller, or staff authorization fields and trigger the
+    // wrong shell/redirect immediately after a successful profile edit.
+    res.json(safeUser({ ...(res.locals.user as AuthUser), name: updated.name }));
   }));
 
   app.get('/api/account/preferences', requireAuth, run(async (_req, res) => {
