@@ -1,11 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
-import { MarketplaceProductAdPlacement, MarketplaceProductAdStatus, PrismaClient } from '@prisma/client';
+import { MarketplaceProductAdPlacement, MarketplaceProductAdStatus } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
 
 const e2eDatabaseUrl = process.env.E2E_DATABASE_URL;
 if (!e2eDatabaseUrl) throw new Error('E2E_DATABASE_URL is required; marketplace-ad placement tests use only the guarded disposable database.');
 validateE2EDatabaseURL(e2eDatabaseUrl);
-const prisma = new PrismaClient({ datasources: { db: { url: e2eDatabaseUrl } } });
+const prisma = createTestPrismaClient(e2eDatabaseUrl);
 const password = 'LocalDemoOnly-ChangeMe-123!';
 
 async function login(page: Page, email: string) {

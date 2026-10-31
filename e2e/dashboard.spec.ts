@@ -1,11 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoHorizontalOverflow } from './layout-assertions.js';
-import { PrismaClient } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for dashboard browser tests.');
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 test.afterAll(async () => { await prisma.$disconnect(); });
 
 async function login(page: Page, email: string) {

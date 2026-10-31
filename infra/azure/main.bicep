@@ -480,7 +480,10 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = if (deployApplication
           name: 'web'
           image: webImage
           env: [
-            { name: 'API_UPSTREAM', value: 'http://${apiInternalFqdn}' }
+            // ACA HTTP ingress terminates TLS at the Envoy edge. The internal FQDN is
+            // HTTPS-only when allowInsecure is false; Nginx validates its managed cert.
+            { name: 'API_UPSTREAM', value: 'https://${apiInternalFqdn}' }
+            { name: 'DNS_RESOLVER', value: '168.63.129.16' }
           ]
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
           volumeMounts: [{ volumeName: 'temporary-files', mountPath: '/tmp' }]
@@ -555,7 +558,7 @@ resource migrationPreflightJob 'Microsoft.App/jobs@2024-03-01' = if (deployAppli
       manualTriggerConfig: { parallelism: 1, replicaCompletionCount: 1 }
     }
     template: {
-      containers: [{ name: 'migration-preflight', image: migratorImage, command: ['npm', 'exec', '--workspace=apps/api', '--', 'prisma', 'migrate', 'status', '--schema', 'prisma/schema.prisma'], env: [{ name: 'DATABASE_URL', secretRef: 'database-url' }, { name: 'NODE_ENV', value: 'production' }] }]
+      containers: [{ name: 'migration-preflight', image: migratorImage, command: ['../../node_modules/.bin/prisma', 'migrate', 'status', '--config', 'prisma.config.ts'], env: [{ name: 'DATABASE_URL', secretRef: 'database-url' }, { name: 'NODE_ENV', value: 'production' }] }]
     }
   }
   dependsOn: [vaultRole, acrPullRoleAssignment]
@@ -576,7 +579,7 @@ resource migrationDeployJob 'Microsoft.App/jobs@2024-03-01' = if (deployApplicat
       manualTriggerConfig: { parallelism: 1, replicaCompletionCount: 1 }
     }
     template: {
-      containers: [{ name: 'migration-deploy', image: migratorImage, command: ['npm', 'exec', '--workspace=apps/api', '--', 'prisma', 'migrate', 'deploy', '--schema', 'prisma/schema.prisma'], env: [{ name: 'DATABASE_URL', secretRef: 'database-url' }, { name: 'NODE_ENV', value: 'production' }] }]
+      containers: [{ name: 'migration-deploy', image: migratorImage, command: ['../../node_modules/.bin/prisma', 'migrate', 'deploy', '--config', 'prisma.config.ts'], env: [{ name: 'DATABASE_URL', secretRef: 'database-url' }, { name: 'NODE_ENV', value: 'production' }] }]
     }
   }
   dependsOn: [vaultRole, acrPullRoleAssignment]

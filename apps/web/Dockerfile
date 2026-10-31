@@ -4,10 +4,17 @@ FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586
 WORKDIR /workspace
 RUN apk add --no-cache openssl
 COPY package.json package-lock.json ./
+COPY .npmrc .npmrc
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY packages/migrator/package.json packages/migrator/package.json
 COPY apps/api/prisma apps/api/prisma
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    set -eu; attempt=1; \
+    until npm ci --registry=https://registry.npmjs.org/ --fetch-retries=5 --fetch-timeout=120000 --no-audit --fund=false; do \
+      if [ "$attempt" -ge 3 ]; then exit 1; fi; \
+      sleep "$((attempt * 5))"; attempt=$((attempt + 1)); \
+    done
 COPY apps/web apps/web
 COPY tsconfig.base.json ./tsconfig.base.json
 RUN npm run build --workspace=apps/web

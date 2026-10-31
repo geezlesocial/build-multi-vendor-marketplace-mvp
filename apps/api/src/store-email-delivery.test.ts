@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const smtp = { verify: vi.fn(), sendMail: vi.fn(), close: vi.fn() };
   const env = {
+    DATABASE_URL: 'postgresql://test:test@127.0.0.1:55439/marketplace_test?schema=public',
     STORE_EMAIL_SMTP_HOST: 'smtp.test.invalid', STORE_EMAIL_SMTP_PORT: 587, STORE_EMAIL_SMTP_SECURE: false,
     STORE_EMAIL_SMTP_REQUIRE_TLS: true, STORE_EMAIL_SMTP_USER: 'test-user', STORE_EMAIL_SMTP_PASSWORD: 'not-a-real-secret',
     STORE_EMAIL_FROM: 'noreply@example.test', STORE_EMAIL_REPLY_TO: undefined,

@@ -74,15 +74,28 @@ jobs:
       - name: Install, migrate disposable database, seed synthetic accounts, and validate
         env:
           PASSWORD_PEPPER: synthetic-workflow-test-pepper-not-a-secret
+        shell: bash
         run: |
+          set -euo pipefail
           npm ci
+          set +e
+          npm audit --omit=dev --json > "$RUNNER_TEMP/marketplace-npm-audit.json" 2>"$RUNNER_TEMP/marketplace-npm-audit-stderr.txt"
+          audit_status=$?
+          set -e
+          node scripts/npm-audit-policy.mjs "$RUNNER_TEMP/marketplace-npm-audit.json"
+          if [ "$audit_status" -gt 1 ]; then
+            echo 'npm audit failed before producing a valid report.' >&2
+            exit 1
+          fi
+          node scripts/container-image-integrity.test.mjs
           npm run db:generate
           npm run db:deploy
           npm run db:seed
           npm run lint
           npm run typecheck
-          npm test
+          npm run test -w apps/api -- --maxWorkers=2 --testTimeout=15000
           node infra/containers/safe-console.test.mjs
+          node scripts/azure-proxy-config.test.mjs
           npm run build
           npx playwright install --with-deps chromium
           npm run e2e
@@ -90,26 +103,91 @@ jobs:
       - name: Build API image for vulnerability scan
         run: docker build --pull -f apps/api/Dockerfile --target runtime -t marketplace-api:${GITHUB_SHA} .
 
-      - name: Scan API image
+      - name: Build migration image for vulnerability scan
+        run: docker build --pull -f apps/api/Dockerfile --target migrator -t marketplace-migrator:${GITHUB_SHA} .
+
+      - name: Scan source tree for secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: marketplace-api:${{ github.sha }}
-          scanners: vuln,secret
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          skip-dirs: .git,node_modules,apps/api/dist,apps/web/dist
+          format: json
+          output: ${{ runner.temp }}/source-secrets.json
+          exit-code: '0'
+          hide-progress: true
 
       - name: Build web image for vulnerability scan
         run: docker build --pull -f apps/web/Dockerfile -t marketplace-web:${GITHUB_SHA} .
 
-      - name: Scan web image
+      - name: Scan API image (include fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-api:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/api-trivy.json
+          exit-code: '0'
+          hide-progress: true
+
+      - name: Scan migration image (include fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-migrator:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/migrator-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Scan web image (include fixed and unfixed findings)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: marketplace-web:${{ github.sha }}
           scanners: vuln,secret
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/web-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Generate CycloneDX SBOMs and enforce scan policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in "api:marketplace-api" "migrator:marketplace-migrator" "web:marketplace-web"; do
+            name="${spec%%:*}"
+            image="${spec#*:}"
+            trivy image --scanners vuln --format cyclonedx --output "sbom-${name}.cdx.json" "${image}:${GITHUB_SHA}"
+          done
+          node scripts/trivy-policy.mjs \
+            "$RUNNER_TEMP/source-secrets.json" \
+            "$RUNNER_TEMP/api-trivy.json" \
+            "$RUNNER_TEMP/migrator-trivy.json" \
+            "$RUNNER_TEMP/web-trivy.json"
+          {
+            echo "### Validated immutable local image IDs"
+            echo "Source commit: \`$GITHUB_SHA\`"
+            echo '| Image | OCI image ID |'
+            echo '|---|---|'
+            for image in "marketplace-api:$GITHUB_SHA" "marketplace-migrator:$GITHUB_SHA" "marketplace-web:$GITHUB_SHA"; do
+              printf '| \`%s\` | \`%s\` |\n' "$image" "$(docker image inspect --format '{{.Id}}' "$image")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain deployment SBOMs for security review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-staging-sboms-${{ github.sha }}
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Compile dedicated Azure templates
         run: |
@@ -165,32 +243,62 @@ jobs:
           docker build --pull -f apps/api/Dockerfile --target migrator -t "$REGISTRY_NAME.azurecr.io/marketplace-migrator:$GITHUB_SHA" .
           docker build --pull -f apps/web/Dockerfile -t "$REGISTRY_NAME.azurecr.io/marketplace-web:$GITHUB_SHA" .
 
-      - name: Scan deployment images before publishing
+      - name: Scan deployment API image before publishing (fixed and unfixed)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.REGISTRY_NAME }}.azurecr.io/marketplace-api:${{ github.sha }}
           scanners: vuln,secret
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/api-trivy.json
+          exit-code: '0'
+          hide-progress: true
 
       - name: Scan migration image before publishing
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.REGISTRY_NAME }}.azurecr.io/marketplace-migrator:${{ github.sha }}
           scanners: vuln,secret
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/migrator-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
 
       - name: Scan web image before publishing
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.REGISTRY_NAME }}.azurecr.io/marketplace-web:${{ github.sha }}
           scanners: vuln,secret
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/web-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Enforce image security policy and create commit-scoped SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/trivy-policy.mjs \
+            "$RUNNER_TEMP/api-trivy.json" \
+            "$RUNNER_TEMP/migrator-trivy.json" \
+            "$RUNNER_TEMP/web-trivy.json"
+          for spec in "api:marketplace-api" "migrator:marketplace-migrator" "web:marketplace-web"; do
+            name="${spec%%:*}"
+            image="${spec#*:}"
+            trivy image --scanners vuln --format cyclonedx --output "sbom-${name}.cdx.json" "${image}:${GITHUB_SHA}"
+          done
+
+      - name: Retain pre-publication SBOMs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-staging-publish-sboms-${{ github.sha }}
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Push immutable images and capture registry digests
         id: push

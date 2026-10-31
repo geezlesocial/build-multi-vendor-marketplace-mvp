@@ -100,8 +100,8 @@ services:
     image: axllent/mailpit:v1.27.8@sha256:6abc8e633df15eaf785cfcf38bae48e66f64beecdc03121e249d0f9ec15f0707
     profiles: [session-services]
     ports:
-      - "127.0.0.1:8025:8025"
-      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:${STAGING_TEST_MAILPIT_API_PORT:-8025}:8025"
+      - "127.0.0.1:${STAGING_TEST_MAILPIT_PORT:-1025}:1025"
     networks: [marketplace-test]
 
   clamav:
@@ -109,6 +109,8 @@ services:
     profiles: [session-services]
     mem_limit: 4g
     cpus: 1.5
+    ports:
+      - "127.0.0.1:${STAGING_TEST_CLAMAV_PORT:-13310}:3310"
     networks: [marketplace-test]
 
 networks:

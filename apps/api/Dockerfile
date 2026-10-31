@@ -4,30 +4,75 @@ FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586
 WORKDIR /workspace
 RUN apk add --no-cache openssl
 COPY package.json package-lock.json ./
+COPY .npmrc .npmrc
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY packages/migrator/package.json packages/migrator/package.json
 COPY apps/api/prisma apps/api/prisma
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    set -eu; attempt=1; \
+    until npm ci --registry=https://registry.npmjs.org/ --fetch-retries=5 --fetch-timeout=120000 --no-audit --fund=false; do \
+      if [ "$attempt" -ge 3 ]; then exit 1; fi; \
+      sleep "$((attempt * 5))"; attempt=$((attempt + 1)); \
+    done
 COPY apps/api apps/api
 COPY tsconfig.base.json ./tsconfig.base.json
-RUN npm exec --workspace=apps/api -- prisma generate --schema prisma/schema.prisma \
+# Client generation only needs a syntactically valid datasource URL; never inject
+# a real database credential into an image build or build cache.
+RUN DATABASE_URL='postgresql://127.0.0.1:5432/marketplace?schema=public' \
+    npm exec --workspace=apps/api -- prisma generate --schema prisma/schema.prisma \
     && npm run build --workspace=apps/api
 
 # Dedicated image target for the one-shot deployment migration job.
 # Normal API startup never runs migrations.
-FROM dependencies AS migrator
-ENV NODE_ENV=production
-USER node
-CMD ["npm", "exec", "--workspace=apps/api", "--", "prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"]
-
 FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS production-dependencies
 WORKDIR /workspace
 RUN apk add --no-cache openssl
 COPY package.json package-lock.json ./
+COPY .npmrc .npmrc
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY packages/migrator/package.json packages/migrator/package.json
 COPY apps/api/prisma apps/api/prisma
-RUN npm ci --omit=dev --workspace=apps/api --include-workspace-root
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    set -eu; attempt=1; \
+    until npm ci --omit=dev --workspace=apps/api --include-workspace-root --registry=https://registry.npmjs.org/ --fetch-retries=5 --fetch-timeout=120000 --no-audit --fund=false; do \
+      if [ "$attempt" -ge 3 ]; then exit 1; fi; \
+      sleep "$((attempt * 5))"; attempt=$((attempt + 1)); \
+    done
+
+# Keep the Prisma CLI in a dedicated migration dependency graph, not the API
+# runtime. The CLI is a production dependency of this isolated workspace only.
+FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS migrator-dependencies
+WORKDIR /workspace
+RUN apk add --no-cache openssl
+COPY package.json package-lock.json ./
+COPY .npmrc .npmrc
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/migrator/package.json packages/migrator/package.json
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    set -eu; attempt=1; \
+    until npm ci --omit=dev --workspace=apps/api --workspace=packages/migrator --include-workspace-root --registry=https://registry.npmjs.org/ --fetch-retries=5 --fetch-timeout=120000 --no-audit --fund=false; do \
+      if [ "$attempt" -ge 3 ]; then exit 1; fi; \
+      sleep "$((attempt * 5))"; attempt=$((attempt + 1)); \
+    done
+
+# The one-shot image carries only the API runtime dependencies, the Prisma CLI,
+# Prisma config, and migration SQL; normal API startup never migrates.
+FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS migrator
+ENV NODE_ENV=production \
+    HOME=/tmp \
+    TMPDIR=/tmp
+WORKDIR /workspace/apps/api
+RUN apk add --no-cache openssl \
+    && addgroup -S -g 10001 marketplace \
+    && adduser -S -D -H -u 10001 -G marketplace marketplace
+COPY --from=migrator-dependencies --chown=marketplace:marketplace /workspace/node_modules /workspace/node_modules
+COPY --chown=marketplace:marketplace apps/api/prisma ./prisma
+COPY --chown=marketplace:marketplace apps/api/prisma.config.ts ./prisma.config.ts
+USER 10001:10001
+CMD ["/workspace/node_modules/.bin/prisma", "migrate", "deploy", "--config", "/workspace/apps/api/prisma.config.ts"]
 
 FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS runtime
 ENV NODE_ENV=production \
@@ -45,6 +90,7 @@ COPY --from=dependencies --chown=marketplace:marketplace /workspace/apps/api/dis
 COPY --chown=marketplace:marketplace package.json ./package.json
 COPY --chown=marketplace:marketplace apps/api/package.json ./apps/api/package.json
 COPY --chown=marketplace:marketplace apps/api/runtime/safe-console.cjs ./apps/api/runtime/safe-console.cjs
+COPY --chown=marketplace:marketplace apps/api/runtime/structured-logger.cjs ./apps/api/runtime/structured-logger.cjs
 USER 10001:10001
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \

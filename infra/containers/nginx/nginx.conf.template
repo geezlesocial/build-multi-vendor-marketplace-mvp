@@ -30,19 +30,10 @@ http {
         default $http_x_forwarded_proto;
         ''      $scheme;
     }
-    map $http_x_forwarded_host $marketplace_forwarded_host {
-        default $http_x_forwarded_host;
-        ''      $host;
+    map $marketplace_forwarded_proto $marketplace_forwarded_port {
+        https 443;
+        default 80;
     }
-    map $http_x_forwarded_port $marketplace_forwarded_port {
-        default $http_x_forwarded_port;
-        ''      $server_port;
-    }
-    map $http_x_forwarded_for $marketplace_forwarded_for {
-        default $http_x_forwarded_for;
-        ''      $remote_addr;
-    }
-
     server {
         listen 8080;
         root /usr/share/nginx/html;

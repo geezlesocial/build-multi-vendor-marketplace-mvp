@@ -2,10 +2,16 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import type { Request, Response, NextFunction } from 'express';
 import { PrismaClient, Role } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { env } from './config.js';
 import { hasPlatformPermission, PLATFORM_POSITION_LABELS, requiredPlatformPermission, type PlatformPosition } from './platform-access.js';
 
-export const prisma = new PrismaClient();
+const databaseUrl = new URL(env.DATABASE_URL);
+const databaseSchema = databaseUrl.searchParams.get('schema') ?? 'public';
+databaseUrl.searchParams.delete('schema');
+if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(databaseSchema)) throw new Error('DATABASE_URL schema must be a safe PostgreSQL identifier');
+const adapter = new PrismaPg({ connectionString: databaseUrl.toString(), options: `-c search_path=${databaseSchema}` });
+export const prisma = new PrismaClient({ adapter });
 
 function passwordDigest(password: string) {
   return crypto.createHmac('sha256', env.PASSWORD_PEPPER).update(password, 'utf8').digest('base64url');
