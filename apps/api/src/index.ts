@@ -1232,6 +1232,9 @@ app.post('/api/webhooks/paystack', express.raw({ type: 'application/json' }), as
   }
 }));
 
+// Keep unknown API routes as API responses instead of Express's default HTML 404.
+app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
+
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (error instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: error.flatten() });
   const apiError = error as Record<string, unknown>;
