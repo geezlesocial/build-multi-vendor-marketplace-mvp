@@ -17,8 +17,7 @@ jobs:
     permissions:
       contents: read
     env:
-      DATABASE_URL: postgresql://synthetic:synthetic@127.0.0.1:55439/not-used?schema=public
-      PASSWORD_PEPPER: workflow-test-only-not-a-secret-0123456789
+      DATABASE_URL: postgresql://127.0.0.1:5432/not-used?schema=public
       CONTENT_SCAN_REQUIRED: 'true'
       LIVE_SHOPPING_AVAILABLE: 'false'
       WALLET_FUNDING_PROVIDER_READY: 'false'
@@ -34,6 +33,22 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+
+      - name: Generate ephemeral validation values
+        shell: bash
+        run: |
+          set -euo pipefail
+          db_password="$(openssl rand -hex 32)"
+          app_pepper="$(openssl rand -hex 32)"
+          echo "::add-mask::$db_password"
+          echo "::add-mask::$app_pepper"
+          {
+            echo "STAGING_TEST_DB_PASSWORD=$db_password"
+            echo "STAGING_TEST_PASSWORD_PEPPER=$app_pepper"
+            echo "STAGING_TEST_DB_NAME=marketplace_config_validation"
+            echo "STAGING_TEST_CONTAINER_DATABASE_URL=postgresql://marketplace_test:${db_password}@postgres:5432/marketplace_config_validation?schema=public"
+            echo "PASSWORD_PEPPER=$app_pepper"
+          } >> "$GITHUB_ENV"
 
       - name: Install exact lockfile graph
         run: npm ci --no-audit --fund=false
@@ -61,7 +76,7 @@ jobs:
 
       - name: Test proxy TLS/header configuration and redacted diagnostics
         run: |
-          node scripts/azure-proxy-config.test.mjs
+          node infra/containers/nginx-proxy-config.test.mjs
           node infra/containers/safe-console.test.mjs
 
       - name: Validate staging Compose configuration
@@ -162,13 +177,12 @@ jobs:
           retention-days: 14
 
   local-service-integration:
-    name: Isolated Mailpit and ClamAV integration
+    name: Container network, Mailpit, ClamAV, and proxy integration
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
-      DATABASE_URL: postgresql://synthetic:synthetic@127.0.0.1:55439/not-used?schema=public
-      PASSWORD_PEPPER: workflow-test-only-not-a-secret-0123456789
+      DATABASE_URL: postgresql://127.0.0.1:5432/not-used?schema=public
       CONTENT_SCAN_REQUIRED: 'true'
       STORE_EMAIL_DELIVERY_AVAILABLE: 'false'
       LIVE_SHOPPING_AVAILABLE: 'false'
@@ -190,13 +204,27 @@ jobs:
           node-version: 22.23.4
           cache: npm
 
+      - name: Generate ephemeral validation values
+        shell: bash
+        run: |
+          set -euo pipefail
+          db_password="$(openssl rand -hex 32)"
+          app_pepper="$(openssl rand -hex 32)"
+          echo "::add-mask::$db_password"
+          echo "::add-mask::$app_pepper"
+          {
+            echo "STAGING_TEST_DB_PASSWORD=$db_password"
+            echo "STAGING_TEST_PASSWORD_PEPPER=$app_pepper"
+            echo "PASSWORD_PEPPER=$app_pepper"
+          } >> "$GITHUB_ENV"
+
       - name: Install and build isolated integration harness
         run: |
           npm ci --no-audit --fund=false
           npm run db:generate
           npm run build
 
-      - name: Start only disposable database and local test services
+      - name: Create a unique disposable database and start local-only dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -204,22 +232,63 @@ jobs:
           database_name="wallet_funding_e2e_${sandbox_id}"
           export STAGING_TEST_DB_NAME="$database_name"
           export COMPOSE_PROJECT_NAME="marketplace-services-${sandbox_id}"
+          container_database_url="postgresql://marketplace_test:${STAGING_TEST_DB_PASSWORD}@postgres:5432/${database_name}?schema=public"
+          host_database_url="postgresql://marketplace_test:${STAGING_TEST_DB_PASSWORD}@127.0.0.1:${STAGING_TEST_DB_PORT}/${database_name}?schema=public"
+          export STAGING_TEST_CONTAINER_DATABASE_URL="$container_database_url"
           echo "STAGING_TEST_DB_NAME=$database_name" >> "$GITHUB_ENV"
           echo "COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME" >> "$GITHUB_ENV"
+          echo "STAGING_TEST_CONTAINER_DATABASE_URL=$container_database_url" >> "$GITHUB_ENV"
           echo "WALLET_FUNDING_SANDBOX_ID=$sandbox_id" >> "$GITHUB_ENV"
-          echo "DATABASE_URL=postgresql://marketplace_test:local-only-disposable-password@127.0.0.1:${STAGING_TEST_DB_PORT}/${database_name}?schema=public" >> "$GITHUB_ENV"
-          echo "E2E_DATABASE_URL=postgresql://marketplace_test:local-only-disposable-password@127.0.0.1:${STAGING_TEST_DB_PORT}/${database_name}?schema=public" >> "$GITHUB_ENV"
-          docker compose -f docker-compose.staging-test.yml --profile session-services up -d postgres mailpit clamav
+          echo "DATABASE_URL=$host_database_url" >> "$GITHUB_ENV"
+          echo "E2E_DATABASE_URL=$host_database_url" >> "$GITHUB_ENV"
+          docker compose -f docker-compose.staging-test.yml --profile session-services up -d postgres mailpit
+          ready=false
           for attempt in $(seq 1 60); do
-            if docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d postgres >/dev/null 2>&1; then break; fi
+            if docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d postgres >/dev/null 2>&1; then ready=true; break; fi
             sleep 2
           done
+          if [[ "$ready" != true ]]; then
+            docker compose -f docker-compose.staging-test.yml ps
+            docker compose -f docker-compose.staging-test.yml logs --no-color postgres
+            exit 1
+          fi
           docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d "$database_name"
 
-      - name: Apply migrations and seed only the disposable database
+      - name: Apply migrations in the isolated migrator container and seed the disposable database
         run: |
-          npm run db:deploy
+          docker compose -f docker-compose.staging-test.yml --profile migrations run --build --rm migrator
           npm run db:seed
+
+      - name: Start the API and Nginx web containers on the private Compose network
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.staging-test.yml --profile session-services up -d --build api web clamav
+          ready=false
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/healthz >/dev/null && \
+               curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null; then ready=true; break; fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            docker compose -f docker-compose.staging-test.yml ps
+            docker compose -f docker-compose.staging-test.yml logs --no-color --tail=100 api web postgres clamav
+            exit 1
+          fi
+          curl --fail --silent --show-error http://127.0.0.1:${STAGING_TEST_WEB_PORT}/healthz
+          curl --fail --silent --show-error http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null
+
+      - name: Verify actual API-container SMTP and ClamAV network paths
+        run: node scripts/staging-container-network-smoke.mjs
+
+      - name: Verify same-origin proxy routing and secure session behavior
+        env:
+          STAGING_SMOKE_BASE_URL: http://127.0.0.1:${{ env.STAGING_TEST_WEB_PORT }}
+        run: node scripts/staging-proxy-smoke.mjs
+
+      - name: Verify production web image in a real browser
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test --config=playwright.container.config.ts
 
       - name: Verify Mailpit capture, real ClamAV verdicts, quarantine, and cleanup
         env:
