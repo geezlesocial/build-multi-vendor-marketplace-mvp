@@ -66,6 +66,14 @@ test('live watch supports reactions, share/embed, repost, and shoppable product 
 
   await page.goto(`/live/${sessionId}`);
   await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible({ timeout: 15_000 });
+  const playerMount = page.locator('.liveWatchMount');
+  await expect(playerMount).toHaveCount(1);
+  const playerMountElement = await playerMount.elementHandle();
+  expect(playerMountElement).not.toBeNull();
+  const expectPlayerStillMounted = async () => {
+    await expect(playerMount).toHaveCount(1);
+    expect(await playerMountElement!.evaluate(element => element.isConnected && element === document.querySelector('.liveWatchMount'))).toBe(true);
+  };
   await capture(page, '01-live-viewer.png');
   sessionProducts.push({ productId: 'product-2', featured: false, shopFeatured: true, shopSortOrder: 1, shopPinned: false, product: { id: 'product-2', name: 'Freshly tagged item', description: 'Added during the show.', priceMinor: 1800, salePriceMinor: null, currency: 'USD', availableStock: 4 } });
   await expect(page.getByRole('button', { name: /Freshly tagged item/ })).toBeVisible({ timeout: 15_000 });
@@ -108,9 +116,11 @@ test('live watch supports reactions, share/embed, repost, and shoppable product 
   await page.getByRole('button', { name: /Canvas Tote/ }).click();
   const productDialog = page.getByRole('dialog', { name: 'Canvas Tote' });
   await expect(productDialog).toBeVisible();
+  await expectPlayerStillMounted();
   await capture(page, '04-shoppable-product-popup.png');
   await productDialog.getByRole('button', { name: 'Add to cart' }).click();
   await expect(productDialog.getByRole('status').filter({ hasText: 'Added to your cart.' })).toBeVisible();
+  await expectPlayerStillMounted();
   await capture(page, '05-added-to-cart.png');
   await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
 
@@ -122,12 +132,14 @@ test('live watch supports reactions, share/embed, repost, and shoppable product 
   await expect(cartReview.getByText('$98.00')).toBeVisible();
   await expect(cartReview.getByText(/includes every item listed below, including items that were already in your cart/i)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
+  await expectPlayerStillMounted();
   await cartReview.getByRole('button', { name: 'Continue with all cart items' }).click();
   const checkoutDialog = page.getByRole('dialog', { name: 'Complete your order' });
   await expect(checkoutDialog).toBeVisible();
   const checkoutFrame = page.frameLocator('iframe[title="Secure checkout while watching live shopping"]');
   await expect(checkoutFrame.getByRole('heading', { name: 'Complete your order' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
+  await expectPlayerStillMounted();
   await capture(page, '06-secure-checkout-keeps-live-open.png');
   await expect(checkoutFrame.getByRole('button', { name: 'Place order' })).toBeDisabled();
   await expect(checkoutFrame.getByText(/calculate a covered shipping option/i)).toBeVisible();
@@ -182,6 +194,28 @@ test('live video embed fails closed when video is unavailable and renders withou
   await expect(page.locator('.liveEmbedUnavailable')).toHaveText('This show is offline or its replay is private.');
   await expect(page.locator('.liveEmbedMount')).toHaveCount(0);
   await expect(page.locator('header, footer')).toHaveCount(0);
+});
+
+test('published replay uses the shared site header and footer exactly once', async ({ page }) => {
+  let chromeKind = '';
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    const json = (body: unknown) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (url.pathname === '/api/auth/me') return json({ user: null });
+    if (url.pathname === '/api/platform/branding') return json({ platformName: 'Market Lane', shortName: 'Market Lane', logoMediaId: null, alternateLogoMediaId: null, faviconMediaId: null, defaultAvatarMediaId: null });
+    if (url.pathname === '/api/site-chrome/public') { chromeKind = url.searchParams.get('kind') ?? ''; return json({ configuration: null, publishedVersion: null, footerSuppressed: false, scope: 'PLATFORM', brand: null }); }
+    if (url.pathname === '/api/live-sessions/published-replay') return json({
+      id: 'published-replay', title: 'Published test replay', status: 'ENDED', replayAvailable: true, replayUrl: '/content/live-replays/synthetic.mp4', products: [], seller: { store: { name: 'Replay Store' } }
+    });
+    return json({});
+  });
+
+  await page.goto('/live/published-replay');
+  await expect(page.getByRole('heading', { name: 'Published test replay' })).toBeVisible();
+  await expect(page.locator('header')).toHaveCount(1);
+  await expect(page.locator('footer')).toHaveCount(1);
+  await expect(page.locator('.livePublicReplayMeta')).toContainText('Replay Store');
+  expect(chromeKind).toBe('SHOP');
 });
 
 test('seller product picker searches product names and previews image, price, stock, and six-item limit', async ({ page }) => {

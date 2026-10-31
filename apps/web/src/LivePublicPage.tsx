@@ -47,7 +47,7 @@ export function LivePublicPage({ sessionId }: { sessionId: string }) {
   }
   if (session.status === 'ENDED' && session.replayAvailable && session.replayUrl) {
     return <main className="livePublicReplayPage">
-      <header><a href="/" className="liveWatchBrand">Market Lane <span>Live replay</span></a></header>
+      <p className="livePublicReplayMeta">Live replay · {session.seller?.store?.name ?? 'Market Lane'}</p>
       <section className="livePublicReplayCard">
         <p className="eyebrow">Published replay · {session.seller?.store?.name ?? 'Independent store'}</p>
         <h1>{session.title}</h1>

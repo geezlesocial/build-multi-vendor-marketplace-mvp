@@ -114,7 +114,7 @@
 .livePublicStatus { display: grid; align-content: center; justify-items: start; gap: .8rem; width: min(50rem, calc(100% - 2rem)); min-height: 65vh; margin: 2rem auto; }
 .livePublicStatus h1 { margin: 0; }
 .livePublicReplayPage { min-height: 80vh; padding: clamp(1rem, 4vw, 3rem); background: #f5f6f1; }
-.livePublicReplayPage > header { width: min(70rem, 100%); margin: 0 auto 1rem; }
+.livePublicReplayMeta { width: min(70rem, 100%); margin: 0 auto 1rem; color: #536258; font-size: .85rem; font-weight: 700; }
 .livePublicReplayCard { display: grid; gap: 1rem; width: min(70rem, 100%); margin: 0 auto; padding: clamp(1rem, 3vw, 2rem); border: 1px solid #dce5dd; border-radius: 1rem; background: #fff; }
 .livePublicReplayCard h1,
 .livePublicReplayCard p { margin: 0; }
