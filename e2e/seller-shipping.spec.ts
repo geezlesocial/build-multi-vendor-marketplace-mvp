@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import { PrismaClient, ProductStatus, Role, SellerStatus } from '@prisma/client';
+import { ProductStatus, Role, SellerStatus } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import { randomUUID } from 'node:crypto';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
 import { logRateLimitResponses, rateLimitFailureDetails } from './http-diagnostics.js';
@@ -7,7 +8,7 @@ import { logRateLimitResponses, rateLimitFailureDetails } from './http-diagnosti
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required; seller-shipping tests may only use the guarded disposable database.');
 validateE2EDatabaseURL(databaseUrl);
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 const password = 'LocalDemoOnly-ChangeMe-123!';
 const address = { line1: '1 Test Street', city: 'Test City', region: 'TS', postalCode: '1000', country: 'US' };
 

@@ -86,6 +86,7 @@ See `docs/SELLER_SHIPPING.md` for zone matching, discount precedence, immutable 
 See `docs/DROPSHIPPING.md` for supplier onboarding, plan gating, encrypted credentials, and importer limitations.
 See `docs/SOCIAL_LOGIN_SETUP.md` for admin-managed Google, LinkedIn, Facebook, and X sign-in, the Scrolith OIDC limitation, callback setup, and account-page customization.
 See `docs/MEMBER_ONBOARDING.md` for the new-member flow, eligibility and currency policy, legacy-account backfill, and onboarding endpoints.
+See `docs/LOCAL_CONTAINER_STAGING.md` for a disposable PostgreSQL 17, API, Nginx, Mailpit, and ClamAV integration setup; Azure deployment remains deferred.
 
 ## Growth modules
 

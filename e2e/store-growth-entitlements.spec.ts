@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PrismaClient, Role, SellerStatus, ProductStatus } from '@prisma/client';
+import { Role, SellerStatus, ProductStatus } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { isDisposableWalletFundingDatabaseUrl } from '../apps/api/src/wallet-safety.js';
@@ -16,7 +17,7 @@ if (!isDisposableWalletFundingDatabaseUrl(databaseUrl, sandboxId)) {
 }
 if (!process.env.PASSWORD_PEPPER) throw new Error('PASSWORD_PEPPER is required for isolated Store growth fixtures.');
 
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 const apiOrigin = `http://127.0.0.1:${Number(process.env.E2E_API_PORT ?? 4000)}`;
 let store: { id: string; slug: string };
 let product: { id: string; slug: string };

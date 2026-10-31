@@ -1,0 +1,419 @@
+name: Marketplace staging (manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Validation never contacts Azure. Deployment modes require protected environment approval.
+        type: choice
+        required: true
+        default: validate-only
+        options:
+          - validate-only
+          - publish-and-preflight
+          - apply-migrations-and-rollout
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-staging-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate code and container images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PASSWORD_PEPPER: ci-test-only-placeholder-pepper-123456
+      CONTENT_SCAN_REQUIRED: 'true'
+      SITE_URL: http://127.0.0.1:4000
+      WEB_ORIGIN: http://127.0.0.1:5173
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: marketplace
+          POSTGRES_PASSWORD: marketplace
+          POSTGRES_DB: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U marketplace -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: npm
+
+      - name: Create isolated per-run disposable browser database
+        shell: bash
+        env:
+          PGPASSWORD: marketplace
+        run: |
+          sandbox_id="$(printf '%s:%s' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | sha256sum | cut -c1-32)"
+          database_name="wallet_funding_e2e_${sandbox_id}"
+          createdb --host=127.0.0.1 --port=55432 --username=marketplace "$database_name"
+          {
+            echo "WALLET_FUNDING_SANDBOX_ID=${sandbox_id}"
+            echo "DATABASE_URL=postgresql://marketplace:marketplace@127.0.0.1:55432/${database_name}?schema=public"
+            echo "E2E_DATABASE_URL=postgresql://marketplace:marketplace@127.0.0.1:55432/${database_name}?schema=public"
+          } >> "$GITHUB_ENV"
+
+      - name: Install, migrate disposable database, seed synthetic accounts, and validate
+        env:
+          PASSWORD_PEPPER: synthetic-workflow-test-pepper-not-a-secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          set +e
+          npm audit --omit=dev --json > "$RUNNER_TEMP/marketplace-npm-audit.json" 2>"$RUNNER_TEMP/marketplace-npm-audit-stderr.txt"
+          audit_status=$?
+          set -e
+          node scripts/npm-audit-policy.mjs "$RUNNER_TEMP/marketplace-npm-audit.json"
+          if [ "$audit_status" -gt 1 ]; then
+            echo 'npm audit failed before producing a valid report.' >&2
+            exit 1
+          fi
+          node scripts/container-image-integrity.test.mjs
+          npm run db:generate
+          npm run db:deploy
+          npm run db:seed
+          npm run lint
+          npm run typecheck
+          npm run test -w apps/api -- --maxWorkers=2 --testTimeout=15000
+          node infra/containers/safe-console.test.mjs
+          node scripts/azure-proxy-config.test.mjs
+          npm run build
+          npx playwright install --with-deps chromium
+          npm run e2e
+
+      - name: Build API image for vulnerability scan
+        run: docker build --pull -f apps/api/Dockerfile --target runtime -t marketplace-api:${GITHUB_SHA} .
+
+      - name: Build migration image for vulnerability scan
+        run: docker build --pull -f apps/api/Dockerfile --target migrator -t marketplace-migrator:${GITHUB_SHA} .
+
+      - name: Scan source tree for secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          skip-dirs: .git,node_modules,apps/api/dist,apps/web/dist
+          format: json
+          output: ${{ runner.temp }}/source-secrets.json
+          exit-code: '0'
+          hide-progress: true
+
+      - name: Build web image for vulnerability scan
+        run: docker build --pull -f apps/web/Dockerfile -t marketplace-web:${GITHUB_SHA} .
+
+      - name: Scan API image (include fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-api:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/api-trivy.json
+          exit-code: '0'
+          hide-progress: true
+
+      - name: Scan migration image (include fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-migrator:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/migrator-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Scan web image (include fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-web:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/web-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Generate CycloneDX SBOMs and enforce scan policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in "api:marketplace-api" "migrator:marketplace-migrator" "web:marketplace-web"; do
+            name="${spec%%:*}"
+            image="${spec#*:}"
+            trivy image --scanners vuln --format cyclonedx --output "sbom-${name}.cdx.json" "${image}:${GITHUB_SHA}"
+          done
+          node scripts/trivy-policy.mjs \
+            "$RUNNER_TEMP/source-secrets.json" \
+            "$RUNNER_TEMP/api-trivy.json" \
+            "$RUNNER_TEMP/migrator-trivy.json" \
+            "$RUNNER_TEMP/web-trivy.json"
+          {
+            echo "### Validated immutable local image IDs"
+            echo "Source commit: \`$GITHUB_SHA\`"
+            echo '| Image | OCI image ID |'
+            echo '|---|---|'
+            for image in "marketplace-api:$GITHUB_SHA" "marketplace-migrator:$GITHUB_SHA" "marketplace-web:$GITHUB_SHA"; do
+              printf '| \`%s\` | \`%s\` |\n' "$image" "$(docker image inspect --format '{{.Id}}' "$image")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain deployment SBOMs for security review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-staging-sboms-${{ github.sha }}
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Compile dedicated Azure templates
+        run: |
+          az bicep build --file infra/azure/main.bicep --stdout > /dev/null
+          az bicep build --file infra/azure/resource-group.bicep --stdout > /dev/null
+
+  publish:
+    name: Publish immutable images and run read-only migration preflight
+    needs: validate
+    if: ${{ github.ref == 'refs/heads/main' && (inputs.action == 'publish-and-preflight' || inputs.action == 'apply-migrations-and-rollout') }}
+    runs-on: ubuntu-latest
+    environment: marketplace-staging
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      api_digest: ${{ steps.push.outputs.api_digest }}
+      web_digest: ${{ steps.push.outputs.web_digest }}
+      migrator_digest: ${{ steps.push.outputs.migrator_digest }}
+    env:
+      AZURE_CLIENT_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_SUBSCRIPTION_ID }}
+      RESOURCE_GROUP: rg-marketplace-staging
+      REGISTRY_NAME: ${{ vars.MARKETPLACE_STAGING_ACR_NAME }}
+    steps:
+      - name: Check out exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Azure OIDC login
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Assert exact dedicated target
+        shell: bash
+        run: |
+          test "$RESOURCE_GROUP" = 'rg-marketplace-staging'
+          test -n "$REGISTRY_NAME"
+          test -n "$AZURE_SUBSCRIPTION_ID"
+          actual_group=$(az group show --name "$RESOURCE_GROUP" --query name --output tsv)
+          test "$actual_group" = 'rg-marketplace-staging'
+          test "$GITHUB_REF" = 'refs/heads/main'
+
+      - name: Build images with immutable commit tags
+        shell: bash
+        run: |
+          docker build --pull -f apps/api/Dockerfile --target runtime -t "$REGISTRY_NAME.azurecr.io/marketplace-api:$GITHUB_SHA" .
+          docker build --pull -f apps/api/Dockerfile --target migrator -t "$REGISTRY_NAME.azurecr.io/marketplace-migrator:$GITHUB_SHA" .
+          docker build --pull -f apps/web/Dockerfile -t "$REGISTRY_NAME.azurecr.io/marketplace-web:$GITHUB_SHA" .
+
+      - name: Scan deployment API image before publishing (fixed and unfixed)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY_NAME }}.azurecr.io/marketplace-api:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/api-trivy.json
+          exit-code: '0'
+          hide-progress: true
+
+      - name: Scan migration image before publishing
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY_NAME }}.azurecr.io/marketplace-migrator:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/migrator-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Scan web image before publishing
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY_NAME }}.azurecr.io/marketplace-web:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/web-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Enforce image security policy and create commit-scoped SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/trivy-policy.mjs \
+            "$RUNNER_TEMP/api-trivy.json" \
+            "$RUNNER_TEMP/migrator-trivy.json" \
+            "$RUNNER_TEMP/web-trivy.json"
+          for spec in "api:marketplace-api" "migrator:marketplace-migrator" "web:marketplace-web"; do
+            name="${spec%%:*}"
+            image="${spec#*:}"
+            trivy image --scanners vuln --format cyclonedx --output "sbom-${name}.cdx.json" "${image}:${GITHUB_SHA}"
+          done
+
+      - name: Retain pre-publication SBOMs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-staging-publish-sboms-${{ github.sha }}
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Push immutable images and capture registry digests
+        id: push
+        shell: bash
+        run: |
+          az acr login --name "$REGISTRY_NAME"
+          docker push "$REGISTRY_NAME.azurecr.io/marketplace-api:$GITHUB_SHA"
+          docker push "$REGISTRY_NAME.azurecr.io/marketplace-migrator:$GITHUB_SHA"
+          docker push "$REGISTRY_NAME.azurecr.io/marketplace-web:$GITHUB_SHA"
+          echo "api_digest=$(az acr repository show --name "$REGISTRY_NAME" --image "marketplace-api:$GITHUB_SHA" --query digest --output tsv)" >> "$GITHUB_OUTPUT"
+          echo "migrator_digest=$(az acr repository show --name "$REGISTRY_NAME" --image "marketplace-migrator:$GITHUB_SHA" --query digest --output tsv)" >> "$GITHUB_OUTPUT"
+          echo "web_digest=$(az acr repository show --name "$REGISTRY_NAME" --image "marketplace-web:$GITHUB_SHA" --query digest --output tsv)" >> "$GITHUB_OUTPUT"
+
+      - name: Update only the dedicated preflight job image
+        shell: bash
+        run: |
+          az containerapp job update --name mpstg-migration-preflight --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY_NAME.azurecr.io/marketplace-migrator@${{ steps.push.outputs.migrator_digest }}" --output none
+
+      - name: Start and await read-only migration status job
+        shell: bash
+        run: |
+          execution=$(az containerapp job start --name mpstg-migration-preflight --resource-group "$RESOURCE_GROUP" --query name --output tsv)
+          test -n "$execution"
+          for attempt in $(seq 1 60); do
+            status=$(az containerapp job execution show --name mpstg-migration-preflight --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" --query properties.status --output tsv)
+            case "$status" in
+              Succeeded) exit 0 ;;
+              Failed|Stopped|Cancelled) echo "Migration preflight did not succeed ($status). No migration was applied." >&2; exit 1 ;;
+              *) sleep 10 ;;
+            esac
+          done
+          echo 'Migration preflight timed out. No migration was applied.' >&2
+          exit 1
+
+  migrate:
+    name: Apply staging migrations only after separate approval
+    needs: publish
+    if: ${{ inputs.action == 'apply-migrations-and-rollout' }}
+    runs-on: ubuntu-latest
+    environment: marketplace-staging-migrations
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_SUBSCRIPTION_ID }}
+      RESOURCE_GROUP: rg-marketplace-staging
+      REGISTRY_NAME: ${{ vars.MARKETPLACE_STAGING_ACR_NAME }}
+    steps:
+      - name: Set up Azure OIDC login
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Start the separately approved migration job
+        shell: bash
+        run: |
+          test "$RESOURCE_GROUP" = 'rg-marketplace-staging'
+          az containerapp job update --name mpstg-migration-deploy --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY_NAME.azurecr.io/marketplace-migrator@${{ needs.publish.outputs.migrator_digest }}" --output none
+          execution=$(az containerapp job start --name mpstg-migration-deploy --resource-group "$RESOURCE_GROUP" --query name --output tsv)
+          test -n "$execution"
+          for attempt in $(seq 1 90); do
+            status=$(az containerapp job execution show --name mpstg-migration-deploy --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" --query properties.status --output tsv)
+            case "$status" in
+              Succeeded) exit 0 ;;
+              Failed|Stopped|Cancelled) echo "Migration job failed ($status); stop rollout and follow the restore runbook." >&2; exit 1 ;;
+              *) sleep 10 ;;
+            esac
+          done
+          echo 'Migration job timed out; stop rollout and inspect the protected staging diagnostics.' >&2
+          exit 1
+
+  rollout:
+    name: Roll out immutable images and verify staging
+    needs: [publish, migrate]
+    if: ${{ inputs.action == 'apply-migrations-and-rollout' && needs.migrate.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: marketplace-staging
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.MARKETPLACE_STAGING_AZURE_SUBSCRIPTION_ID }}
+      RESOURCE_GROUP: rg-marketplace-staging
+      REGISTRY_NAME: ${{ vars.MARKETPLACE_STAGING_ACR_NAME }}
+      WEB_HOSTNAME: ${{ vars.MARKETPLACE_STAGING_WEB_HOSTNAME }}
+    steps:
+      - name: Set up Azure OIDC login
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update only the dedicated Marketplace staging app images
+        shell: bash
+        run: |
+          test "$RESOURCE_GROUP" = 'rg-marketplace-staging'
+          az containerapp update --name mpstg-api --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY_NAME.azurecr.io/marketplace-api@${{ needs.publish.outputs.api_digest }}" --output none
+          az containerapp update --name mpstg-web --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY_NAME.azurecr.io/marketplace-web@${{ needs.publish.outputs.web_digest }}" --output none
+
+      - name: Verify public proxy and authenticated API health
+        shell: bash
+        run: |
+          test -n "$WEB_HOSTNAME"
+          test "${WEB_HOSTNAME##*.}" = 'azurecontainerapps.io'
+          curl --fail --silent --show-error --retry 12 --retry-delay 10 "https://$WEB_HOSTNAME/healthz"
+          curl --fail --silent --show-error --retry 12 --retry-delay 10 "https://$WEB_HOSTNAME/health"
+          curl --fail --silent --show-error "https://$WEB_HOSTNAME/api/auth/me" | jq -e '.user == null'

@@ -1,11 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PrismaClient } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import { expectNoHorizontalOverflow } from './layout-assertions.js';
 import { logRateLimitResponses, rateLimitFailureDetails } from './http-diagnostics.js';
 
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for profile browser tests.');
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 
 const password = 'Profile-E2E-Only-Password-42!';
 const validPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAYAAAAMJL+VAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAJUlEQVQ4jWPwKI/6T0vMMGqBx2gQeYymIo/RjFY+WlSUD/LSFAAuzCQu+qkxfwAAAABJRU5ErkJggg==', 'base64');
@@ -36,7 +36,10 @@ async function csrfHeaders(page: Page) {
 }
 
 async function uploadAvatar(page: Page) {
-  await page.goto('/settings#profile');
+  // Some callers have just saved the profile on this route. Avoid a redundant
+  // same-URL navigation, which can abort while the SPA is still settling.
+  const current = new URL(page.url());
+  if (current.pathname !== '/settings') await page.goto('/settings#profile');
   await page.locator('input[type="file"]').setInputFiles({ name: 'profile.png', mimeType: 'image/png', buffer: validPng });
   const response = page.waitForResponse(item => item.url().endsWith('/api/account/avatar/uploads') && item.request().method() === 'POST');
   await page.getByRole('button', { name: 'Upload photo' }).click();

@@ -16,7 +16,7 @@ if (!runIdentity || process.env.DATABASE_URL !== databaseUrl || !database.databa
 const [
   { prisma, tokenHash }, { registerAvatarRoutes }, { registerStoreMediaRoutes }, { registerBrandingMediaRoutes },
   { registerContentRoutes }, { registerProductMediaRoutes }, { registerStoreContentRoutes }, { registerPlatformRoutes },
-  { scanQuarantinedMedia, MediaScannerError },
+  { scanQuarantinedMedia, MediaScannerError, ClamAvScanner },
   { env }, { Role, SellerStatus, MediaKind, MediaPurpose, MediaScanStatus, MediaUploadStatus, Prisma }, sharpModule
 ] = await Promise.all([
   import('../apps/api/src/security.ts'), import('../apps/api/src/avatar-routes.ts'),
@@ -231,6 +231,27 @@ test('private uploads validate, scan idempotently, fail closed, and preserve app
   const missingScanner = await scanQuarantinedMedia({ assetId: noScannerId, bytes: validPng, scanner: null });
   assert.equal(missingScanner.scanStatus, MediaScanStatus.QUARANTINED);
   assert.equal(missingScanner.scanErrorCode, 'SCANNER_UNAVAILABLE');
+
+  if (process.env.STAGING_TEST_CLAMAV_HOST) {
+    const realScanId = crypto.randomUUID();
+    const eicar = Buffer.from('X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*', 'ascii');
+    const key = `test-private/${realScanId}.txt`;
+    await prisma.mediaAsset.create({ data: {
+      id: realScanId, storageKey: key, originalName: 'harmless-antivirus-test-fixture.txt', safeName: 'harmless-antivirus-test-fixture.txt',
+      kind: MediaKind.DOCUMENT, detectedMime: 'text/plain', sizeBytes: eicar.length,
+      checksum: crypto.createHash('sha256').update(eicar).digest('hex'), uploaderId: admin.id,
+      purpose: MediaPurpose.PLATFORM_CONTENT, storageProvider: 'OBJECT', uploadStatus: MediaUploadStatus.COMPLETE,
+      scanStatus: MediaScanStatus.QUARANTINED
+    } });
+    mediaIds.push(realScanId);
+    storage.objects.set(key, { bytes: eicar, contentType: 'text/plain' });
+    assert.equal((await call('buyer', 'GET', `/content-media/${realScanId}`)).status, 404, 'unscanned test media must remain inaccessible');
+    const realScanner = new ClamAvScanner(process.env.STAGING_TEST_CLAMAV_HOST, Number(process.env.STAGING_TEST_CLAMAV_PORT ?? 13310), 15_000);
+    const realVerdict = await scanQuarantinedMedia({ assetId: realScanId, bytes: eicar, scanner: realScanner, actorId: admin.id });
+    assert.equal(realVerdict.scanStatus, MediaScanStatus.REJECTED, 'actual ClamAV infection verdict must persist as rejected media');
+    assert.equal(realVerdict.scanErrorCode, 'MALWARE_DETECTED');
+    assert.equal((await call('buyer', 'GET', `/content-media/${realScanId}`)).status, 404, 'infected media must remain inaccessible after the real scan');
+  }
 
   // Exercise the stale-attempt compare-and-set with deterministic barriers: the
   // newer clean result completes first, then a late infected result must not win.

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { validateE2EDatabaseURL } from './e2e-database-url.mjs';
+import { createTestPrismaClient } from './prisma-test-client.mjs';
 
 const databaseUrl = process.env.WALLET_FUNDING_TARGET_OWNERSHIP_TEST_DATABASE_URL;
 const sandboxId = process.env.WALLET_FUNDING_SANDBOX_ID;
@@ -15,10 +16,9 @@ process.env.DOTENV_CONFIG_PATH = 'C:\\wallet-funding-test-env-file-must-not-exis
 process.env.DATABASE_URL = databaseUrl;
 process.env.NODE_ENV = 'test';
 
-const { PrismaClient } = await import('@prisma/client');
-const clientA = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
-const clientB = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
-const monitor = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const clientA = createTestPrismaClient(databaseUrl);
+const clientB = createTestPrismaClient(databaseUrl);
+const monitor = createTestPrismaClient(databaseUrl);
 
 function deferred() {
   let resolve;

@@ -1,8 +1,13 @@
 import { PrismaClient, ProductStatus, Role, SellerStatus, PaymentMethod } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import bcrypt from 'bcryptjs';
 import { env } from '../src/config.js';
 
-const prisma = new PrismaClient();
+const databaseUrl = new URL(env.DATABASE_URL);
+const databaseSchema = databaseUrl.searchParams.get('schema') ?? 'public';
+databaseUrl.searchParams.delete('schema');
+if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(databaseSchema)) throw new Error('DATABASE_URL schema must be a safe PostgreSQL identifier');
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl.toString(), options: `-c search_path=${databaseSchema}` }) });
 
 async function main() {
   const passwordHash = await bcrypt.hash(`LocalDemoOnly-ChangeMe-123!${env.PASSWORD_PEPPER}`, 12);

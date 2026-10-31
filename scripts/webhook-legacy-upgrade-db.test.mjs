@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { validateE2EDatabaseURL } from './e2e-database-url.mjs';
+import { createTestPrismaClient } from './prisma-test-client.mjs';
 
 const databaseUrl = process.env.WALLET_FUNDING_TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('WALLET_FUNDING_TEST_DATABASE_URL is required for the guarded webhook migration regression.');
@@ -38,8 +39,7 @@ process.env.CLUB_COINS_HARD_DISABLED = 'true';
 process.env.LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE = 'false';
 
 test('historical Stripe and PayPal events are safely replayed after the legacy webhook migrations', async () => {
-  const { PrismaClient } = await import('@prisma/client');
-  const prisma = new PrismaClient();
+  const prisma = createTestPrismaClient(databaseUrl);
   const tempDir = mkdtempSync(path.join(os.tmpdir(), `marketplace-webhook-upgrade-${identity}-`));
   try {
     const initial = await prisma.$queryRaw`SELECT to_regclass('public."_prisma_migrations"') IS NULL AS empty`;
@@ -59,9 +59,16 @@ test('historical Stripe and PayPal events are safely replayed after the legacy w
     for (const name of beforeIdentityMigrations) cpSync(path.join(sourcePrismaDir, 'migrations', name), path.join(migrationsPath, name), { recursive: true });
 
     function deployFromTemp() {
-      const child = spawnSync(process.execPath, [prismaCli, 'migrate', 'deploy', '--schema', schemaPath], {
+      const child = spawnSync(process.execPath, [
+        prismaCli, 'migrate', 'deploy', '--config', path.join(rootDir, 'apps', 'api', 'prisma.config.ts'), '--schema', schemaPath
+      ], {
         cwd: tempDir,
-        env: { ...process.env, DATABASE_URL: databaseUrl, DOTENV_CONFIG_PATH: path.join(tempDir, 'not-present.env') },
+        env: {
+          ...process.env,
+          DATABASE_URL: databaseUrl,
+          PRISMA_MIGRATIONS_PATH: migrationsPath,
+          DOTENV_CONFIG_PATH: path.join(tempDir, 'not-present.env')
+        },
         encoding: 'utf8',
         windowsHide: true
       });

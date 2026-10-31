@@ -1,0 +1,8 @@
+{
+  "name": "@marketplace/prisma-migrator",
+  "private": true,
+  "version": "0.1.0",
+  "dependencies": {
+    "prisma": "7.10.1"
+  }
+}
