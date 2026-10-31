@@ -27,7 +27,11 @@ $env:STAGING_TEST_WEB_PORT = '5174'
 $env:STAGING_TEST_MAILPIT_API_PORT = '18025'
 $env:STAGING_TEST_MAILPIT_PORT = '11025'
 $env:STAGING_TEST_CLAMAV_PORT = '13310'
-$testDbUrl = "postgresql://marketplace_test:local-only-disposable-password@127.0.0.1:$($env:STAGING_TEST_DB_PORT)/$($env:STAGING_TEST_DB_NAME)?schema=public"
+$env:STAGING_TEST_DB_PASSWORD = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+$env:STAGING_TEST_PASSWORD_PEPPER = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+$env:PASSWORD_PEPPER = $env:STAGING_TEST_PASSWORD_PEPPER
+$testDbUrl = "postgresql://marketplace_test:$($env:STAGING_TEST_DB_PASSWORD)@127.0.0.1:$($env:STAGING_TEST_DB_PORT)/$($env:STAGING_TEST_DB_NAME)?schema=public"
+$env:STAGING_TEST_CONTAINER_DATABASE_URL = "postgresql://marketplace_test:$($env:STAGING_TEST_DB_PASSWORD)@postgres:5432/$($env:STAGING_TEST_DB_NAME)?schema=public"
 $env:DATABASE_URL = $testDbUrl
 $env:E2E_DATABASE_URL = $testDbUrl
 
@@ -76,7 +80,7 @@ When finished, confirm the project name is the unique `marketplace-local-<run id
 
 ```powershell
 docker compose -f docker-compose.staging-test.yml --profile migrations --profile session-services down --volumes --remove-orphans
-Remove-Item Env:DATABASE_URL, Env:E2E_DATABASE_URL, Env:WALLET_FUNDING_SANDBOX_ID -ErrorAction SilentlyContinue
+Remove-Item Env:DATABASE_URL, Env:E2E_DATABASE_URL, Env:PASSWORD_PEPPER, Env:STAGING_TEST_DB_PASSWORD, Env:STAGING_TEST_PASSWORD_PEPPER, Env:STAGING_TEST_CONTAINER_DATABASE_URL, Env:STAGING_TEST_DB_NAME, Env:STAGING_TEST_DB_PORT, Env:STAGING_TEST_API_PORT, Env:STAGING_TEST_WEB_PORT, Env:STAGING_TEST_MAILPIT_API_PORT, Env:STAGING_TEST_MAILPIT_PORT, Env:STAGING_TEST_CLAMAV_PORT, Env:WALLET_FUNDING_SANDBOX_ID, Env:COMPOSE_PROJECT_NAME -ErrorAction SilentlyContinue
 ```
 
 The `down --volumes` command destroys the disposable Compose project and its temporary data. Do not run it with an unset or unverified `COMPOSE_PROJECT_NAME`. For full browser regressions against the same disposable database, use `npm run e2e` with separate API/web ports or use the manual `Marketplace full E2E stability` workflow, which creates a fresh PostgreSQL database for each of three runs.

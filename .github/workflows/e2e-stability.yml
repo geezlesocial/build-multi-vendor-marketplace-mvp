@@ -18,8 +18,8 @@ jobs:
       matrix:
         pass: [1, 2, 3]
     env:
-      PASSWORD_PEPPER: e2e-stability-only-placeholder-pepper-123456
       CONTENT_SCAN_REQUIRED: 'true'
+      DATABASE_URL: postgresql://marketplace@127.0.0.1:55432/postgres?schema=public
       SITE_URL: http://127.0.0.1:4000
       WEB_ORIGIN: http://127.0.0.1:5173
     services:
@@ -27,7 +27,7 @@ jobs:
         image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
         env:
           POSTGRES_USER: marketplace
-          POSTGRES_PASSWORD: local-only-disposable-password
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: postgres
         ports:
           - 55432:5432
@@ -48,17 +48,25 @@ jobs:
           node-version: 22.23.4
           cache: npm
 
+      - name: Generate ephemeral application test pepper
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_pepper="$(openssl rand -hex 32)"
+          echo "::add-mask::$app_pepper"
+          echo "PASSWORD_PEPPER=$app_pepper" >> "$GITHUB_ENV"
+
       - name: Create a unique disposable E2E database
         shell: bash
         run: |
           set -euo pipefail
           sandbox_id="$(printf '%s:%s:%s' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" '${{ matrix.pass }}' | sha256sum | cut -c1-32)"
           database_name="wallet_funding_e2e_${sandbox_id}"
-          PGPASSWORD=local-only-disposable-password createdb --host=127.0.0.1 --port=55432 --username=marketplace "$database_name"
+          createdb --host=127.0.0.1 --port=55432 --username=marketplace "$database_name"
           {
             echo "WALLET_FUNDING_SANDBOX_ID=${sandbox_id}"
-            echo "DATABASE_URL=postgresql://marketplace:local-only-disposable-password@127.0.0.1:55432/${database_name}?schema=public"
-            echo "E2E_DATABASE_URL=postgresql://marketplace:local-only-disposable-password@127.0.0.1:55432/${database_name}?schema=public"
+            echo "DATABASE_URL=postgresql://marketplace@127.0.0.1:55432/${database_name}?schema=public"
+            echo "E2E_DATABASE_URL=postgresql://marketplace@127.0.0.1:55432/${database_name}?schema=public"
           } >> "$GITHUB_ENV"
 
       - name: Install exact lockfile graph

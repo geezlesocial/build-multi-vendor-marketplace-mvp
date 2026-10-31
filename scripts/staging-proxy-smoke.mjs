@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 
 const baseUrl = process.env.STAGING_SMOKE_BASE_URL ?? 'http://127.0.0.1:5174';
 const htmlMarker = '<div id="root">';
@@ -34,7 +35,7 @@ const csrfChecked = await request('/api/auth/logout', {
 assert.equal(csrfChecked.status, 401, 'Matching CSRF token should pass CSRF and then require authentication');
 
 const smokeEmail = `proxy-smoke-${Date.now()}@example.test`;
-const smokePassword = 'ProxySmoke-Only-Password-2026!';
+const smokePassword = randomBytes(32).toString('base64url');
 const signup = await request('/api/auth/register', {
   method: 'POST',
   headers: {
