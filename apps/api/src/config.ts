@@ -6,6 +6,9 @@ import { liveProviderConfigurationsAvailableSchema } from './provider-configurat
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().positive().default(4000),
+  // Keep 0 by default. Set to 1 only when the API is reachable exclusively
+  // through the single, controlled same-origin reverse proxy.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(1).default(0),
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   DATABASE_URL: z.string().min(1),
   SESSION_COOKIE_NAME: z.string().default('marketplace_session'),

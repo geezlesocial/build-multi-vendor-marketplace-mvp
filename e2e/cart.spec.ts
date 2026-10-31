@@ -1,10 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PrismaClient } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import { randomUUID } from 'node:crypto';
 
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for cart browser tests.');
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 
 const password = 'LocalDemoOnly-ChangeMe-123!';
 const buyerEmail = 'buyer.local@example.test';
@@ -147,7 +147,14 @@ test('buyer sees the COD confirmation after checkout empties the cart', async ({
   await page.request.patch(`/api/cart/items/${product.id}`, { data: { quantity: 0 }, headers });
 
   await page.goto('/');
+  const addResponsePromise = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/cart/items' && response.request().method() === 'POST';
+  });
   await page.getByRole('button', { name: 'Add to cart' }).first().click();
+  const addResponse = await addResponsePromise;
+  expect(addResponse.status(), await addResponse.text()).toBe(201);
+  await expect(page.locator('.cartButton b')).toHaveText('1');
   const cartLink = page.getByRole('link', { name: /Cart/ });
   await expect(cartLink).toHaveAttribute('href', '/checkout');
   await cartLink.click();

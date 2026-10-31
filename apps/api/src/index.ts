@@ -1,5 +1,6 @@
 import express from 'express';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { diagnostics } from './diagnostics.js';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -83,6 +84,14 @@ import { providerCurrencyForMethod, createProviderChargeQuote, paymongoEventToVe
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', env.TRUST_PROXY_HOPS);
+app.use((req, res, next) => {
+  const providedId = req.get('x-request-id') ?? '';
+  const trustedProxyId = env.TRUST_PROXY_HOPS === 1 && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(providedId);
+  const correlationId = trustedProxyId ? providedId : randomUUID();
+  res.setHeader('x-request-id', correlationId);
+  diagnostics.runWithRequestContext(correlationId, next);
+});
 app.use(helmet({ contentSecurityPolicy: { directives: { imgSrc: ["'self'", 'data:', 'https:', 'https://*.cjdropshipping.com', 'https://*.aliyuncs.com'], mediaSrc: ["'self'", 'https:'] } } }));
 app.use(cors({ origin: env.WEB_ORIGIN, credentials: true }));
 app.use(cookieParser());
@@ -149,19 +158,19 @@ registerMessageRoutes(app);
 registerSocialAuthRoutes(app);
 registerOnboardingRoutes(app);
 registerLiveProviderConfigurationRoutes(app);
-if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => console.error(error instanceof Error ? error.message : 'Content scheduler failed')), 60_000);
-if (process.env.NODE_ENV !== 'test') setInterval(() => expireDueStoreSubscriptions(prisma).catch(() => console.error('Store subscription expiry scheduler failed')), 60_000);
-if (process.env.NODE_ENV !== 'test') setInterval(() => processStoreEmailDeliveryBatch().catch(() => console.error('Store email delivery worker failed')), 5_000);
-if (process.env.NODE_ENV !== 'test') setInterval(() => processTransactionalEmailOutboxBatch().catch(() => console.error('Transactional email delivery worker failed')), 5_000);
-if (process.env.NODE_ENV !== 'test') setInterval(() => releaseExpiredMarketplaceAdBudgets().catch(() => console.error('Marketplace ad budget expiry reconciliation failed')), 60_000);
-if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredJimaConversations().catch(() => console.error('Jima retention cleanup failed')), 60 * 60 * 1000);
-if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredMessageAttachmentDrafts().catch(() => console.error('Message draft cleanup failed')), 60 * 60 * 1000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => diagnostics.logOperationalError('CONTENT_SCHEDULER_FAILED', error)), 60_000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => expireDueStoreSubscriptions(prisma).catch(error => diagnostics.logOperationalError('STORE_SUBSCRIPTION_EXPIRY_FAILED', error)), 60_000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => processStoreEmailDeliveryBatch().catch(error => diagnostics.logOperationalError('STORE_EMAIL_DELIVERY_WORKER_FAILED', error)), 5_000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => processTransactionalEmailOutboxBatch().catch(error => diagnostics.logOperationalError('TRANSACTIONAL_EMAIL_DELIVERY_WORKER_FAILED', error)), 5_000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => releaseExpiredMarketplaceAdBudgets().catch(error => diagnostics.logOperationalError('MARKETPLACE_AD_BUDGET_RECONCILIATION_FAILED', error)), 60_000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredJimaConversations().catch(error => diagnostics.logOperationalError('JIMA_RETENTION_CLEANUP_FAILED', error)), 60 * 60 * 1000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredMessageAttachmentDrafts().catch(error => diagnostics.logOperationalError('MESSAGE_DRAFT_CLEANUP_FAILED', error)), 60 * 60 * 1000);
 if (process.env.NODE_ENV !== 'test') {
-  setTimeout(() => { void syncLiveProviderFromDatabase().then(reconcileLiveRecordings).catch(() => undefined); }, 5_000);
-  setInterval(() => { void syncLiveProviderFromDatabase().then(reconcileLiveRecordings).catch(() => undefined); }, 15_000);
+  setTimeout(() => { void syncLiveProviderFromDatabase().then(reconcileLiveRecordings).catch(error => diagnostics.logOperationalError('LIVE_PROVIDER_SYNC_FAILED', error)); }, 5_000);
+  setInterval(() => { void syncLiveProviderFromDatabase().then(reconcileLiveRecordings).catch(error => diagnostics.logOperationalError('LIVE_PROVIDER_SYNC_FAILED', error)); }, 15_000);
 }
 if (process.env.NODE_ENV !== 'test' && env.FX_REFERENCE_FETCH_ENABLED) {
-  const refreshReferenceRates = () => refreshGlobalReferenceRates().catch(error => console.error('Reference exchange-rate refresh failed', error));
+  const refreshReferenceRates = () => refreshGlobalReferenceRates().catch(error => diagnostics.logOperationalError('REFERENCE_EXCHANGE_RATE_REFRESH_FAILED', error));
   setTimeout(() => void refreshReferenceRates(), 1_500);
   setInterval(() => void refreshReferenceRates(), 24 * 60 * 60 * 1000);
 }
@@ -1240,7 +1249,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
     if (apiError.liveShoppingState !== undefined) body.liveShopping = apiError.liveShoppingState;
     return res.status(statusCode).json(body);
   }
-  console.error(error instanceof Error ? error.message : 'Unhandled error');
+  diagnostics.logOperationalError('HTTP_REQUEST_FAILED', error);
   res.status(500).json({ error: 'Internal server error' });
 });
 

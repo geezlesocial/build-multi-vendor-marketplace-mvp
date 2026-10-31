@@ -1,0 +1,261 @@
+name: Marketplace container security (non-deploying)
+
+on:
+  pull_request:
+  push:
+    branches:
+      - infra/marketplace-azure-staging-prep
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-scan:
+    name: Audit, build, and scan immutable local images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: postgresql://synthetic:synthetic@127.0.0.1:55439/not-used?schema=public
+      PASSWORD_PEPPER: workflow-test-only-not-a-secret-0123456789
+      CONTENT_SCAN_REQUIRED: 'true'
+      LIVE_SHOPPING_AVAILABLE: 'false'
+      WALLET_FUNDING_PROVIDER_READY: 'false'
+      MONEY_MOVEMENT_HARD_DISABLED: 'true'
+    steps:
+      - name: Check out exact source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: npm
+
+      - name: Install exact lockfile graph
+        run: npm ci --no-audit --fund=false
+
+      - name: Audit production dependency graph (machine-readable)
+        shell: bash
+        run: |
+          set +e
+          npm audit --omit=dev --json > "$RUNNER_TEMP/marketplace-npm-audit.json" 2>"$RUNNER_TEMP/marketplace-npm-audit-stderr.txt"
+          set -e
+          node scripts/npm-audit-policy.mjs "$RUNNER_TEMP/marketplace-npm-audit.json"
+
+      - name: Verify lock integrity and pinned base images
+        run: node scripts/container-image-integrity.test.mjs
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Lint, typecheck, unit test, and build
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run test -w apps/api -- --maxWorkers=2 --testTimeout=15000
+          npm run build
+
+      - name: Test proxy TLS/header configuration and redacted diagnostics
+        run: |
+          node scripts/azure-proxy-config.test.mjs
+          node infra/containers/safe-console.test.mjs
+
+      - name: Validate staging Compose configuration
+        run: docker compose -f docker-compose.staging-test.yml config --quiet
+
+      - name: Build API runtime image from this commit
+        run: docker build --pull -f apps/api/Dockerfile --target runtime -t marketplace-api:${GITHUB_SHA} .
+
+      - name: Build isolated Prisma migration image from this commit
+        run: docker build --pull -f apps/api/Dockerfile --target migrator -t marketplace-migrator:${GITHUB_SHA} .
+
+      - name: Build React/Nginx web image from this commit
+        run: docker build --pull -f apps/web/Dockerfile -t marketplace-web:${GITHUB_SHA} .
+
+      - name: Scan source tree for secrets (report stays on ephemeral runner)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          skip-dirs: .git,node_modules,apps/api/dist,apps/web/dist
+          format: json
+          output: ${{ runner.temp }}/source-secrets.json
+          exit-code: '0'
+          hide-progress: true
+
+      - name: Scan API runtime image (fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-api:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/api-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Scan Prisma migration image (fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-migrator:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/migrator-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Scan React/Nginx image (fixed and unfixed findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: marketplace-web:${{ github.sha }}
+          scanners: vuln,secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: ${{ runner.temp }}/web-trivy.json
+          exit-code: '0'
+          hide-progress: true
+          skip-setup-trivy: true
+
+      - name: Generate CycloneDX SBOMs for every deployable image
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in "api:marketplace-api" "migrator:marketplace-migrator" "web:marketplace-web"; do
+            name="${spec%%:*}"
+            image="${spec#*:}"
+            trivy image --scanners vuln --format cyclonedx --output "sbom-${name}.cdx.json" "${image}:${GITHUB_SHA}"
+          done
+
+      - name: Enforce no HIGH/CRITICAL or secret findings and record local immutable image IDs
+        shell: bash
+        run: |
+          node scripts/trivy-policy.mjs \
+            "$RUNNER_TEMP/source-secrets.json" \
+            "$RUNNER_TEMP/api-trivy.json" \
+            "$RUNNER_TEMP/migrator-trivy.json" \
+            "$RUNNER_TEMP/web-trivy.json"
+          {
+            echo "### Local image identity"
+            echo "Source commit: \`$GITHUB_SHA\`"
+            echo '| Image tag | Local immutable OCI image ID |'
+            echo '|---|---|'
+            for image in "marketplace-api:$GITHUB_SHA" "marketplace-migrator:$GITHUB_SHA" "marketplace-web:$GITHUB_SHA"; do
+              printf '| `%s` | `%s` |\n' "$image" "$(docker image inspect --format '{{.Id}}' "$image")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain SBOMs for security review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-container-sboms-${{ github.sha }}
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+          retention-days: 14
+
+  local-service-integration:
+    name: Container network, Mailpit, ClamAV, and proxy integration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: postgresql://synthetic:synthetic@127.0.0.1:55439/not-used?schema=public
+      PASSWORD_PEPPER: workflow-test-only-not-a-secret-0123456789
+      CONTENT_SCAN_REQUIRED: 'true'
+      STORE_EMAIL_DELIVERY_AVAILABLE: 'false'
+      LIVE_SHOPPING_AVAILABLE: 'false'
+      WALLET_FUNDING_PROVIDER_READY: 'false'
+      MONEY_MOVEMENT_HARD_DISABLED: 'true'
+      STAGING_TEST_DB_PORT: '55439'
+      STAGING_TEST_MAILPIT_API_PORT: '18025'
+      STAGING_TEST_MAILPIT_PORT: '11025'
+      STAGING_TEST_CLAMAV_PORT: '13310'
+    steps:
+      - name: Check out exact source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.4
+          cache: npm
+
+      - name: Install and build isolated integration harness
+        run: |
+          npm ci --no-audit --fund=false
+          npm run db:generate
+          npm run build
+
+      - name: Create a unique disposable database and start local-only dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox_id="$(printf '%s:%s' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | sha256sum | cut -c1-32)"
+          database_name="wallet_funding_e2e_${sandbox_id}"
+          export STAGING_TEST_DB_NAME="$database_name"
+          export COMPOSE_PROJECT_NAME="marketplace-services-${sandbox_id}"
+          echo "STAGING_TEST_DB_NAME=$database_name" >> "$GITHUB_ENV"
+          echo "COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME" >> "$GITHUB_ENV"
+          echo "WALLET_FUNDING_SANDBOX_ID=$sandbox_id" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgresql://marketplace_test:local-only-disposable-password@127.0.0.1:${STAGING_TEST_DB_PORT}/${database_name}?schema=public" >> "$GITHUB_ENV"
+          echo "E2E_DATABASE_URL=postgresql://marketplace_test:local-only-disposable-password@127.0.0.1:${STAGING_TEST_DB_PORT}/${database_name}?schema=public" >> "$GITHUB_ENV"
+          docker compose -f docker-compose.staging-test.yml --profile session-services up -d postgres mailpit clamav
+          for attempt in $(seq 1 60); do
+            if docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d postgres >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d "$database_name"
+
+      - name: Apply migrations in the isolated migrator container and seed the disposable database
+        run: |
+          docker compose -f docker-compose.staging-test.yml --profile migrations run --build --rm migrator
+          npm run db:seed
+
+      - name: Start the API and Nginx web containers on the private Compose network
+        run: |
+          docker compose -f docker-compose.staging-test.yml --profile session-services up -d --build api web
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/healthz >/dev/null && \
+               curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/healthz
+          curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null
+
+      - name: Verify actual API-container SMTP and ClamAV network paths
+        run: node scripts/staging-container-network-smoke.mjs
+
+      - name: Verify same-origin proxy routing and secure session behavior
+        env:
+          STAGING_SMOKE_BASE_URL: http://127.0.0.1:${{ env.STAGING_TEST_WEB_PORT }}
+        run: node scripts/staging-proxy-smoke.mjs
+
+      - name: Verify production web image in a real browser
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test --config=playwright.container.config.ts
+
+      - name: Verify Mailpit capture, real ClamAV verdicts, quarantine, and cleanup
+        env:
+          STAGING_TEST_CLAMAV_HOST: 127.0.0.1
+          STAGING_TEST_CLAMAV_PORT: ${{ env.STAGING_TEST_CLAMAV_PORT }}
+          STAGING_TEST_MAILPIT_HOST: 127.0.0.1
+          STAGING_TEST_MAILPIT_PORT: ${{ env.STAGING_TEST_MAILPIT_PORT }}
+          STAGING_TEST_MAILPIT_API: http://127.0.0.1:${{ env.STAGING_TEST_MAILPIT_API_PORT }}
+        run: |
+          node scripts/staging-services-smoke.mjs
+          node --import tsx scripts/media-scanning-api.test.mjs
+
+      - name: Destroy the disposable Compose environment
+        if: always()
+        run: docker compose -f docker-compose.staging-test.yml --profile session-services down --volumes --remove-orphans

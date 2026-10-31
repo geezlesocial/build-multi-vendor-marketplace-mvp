@@ -31,7 +31,7 @@ The ad schema is extended by `20261030110000_marketplace_ads_per_view_billing`, 
 ```powershell
 npm run db:generate
 npm run db:deploy
-npm exec --workspace=apps/api -- prisma migrate status --schema prisma/schema.prisma
+npm exec --workspace=apps/api -- prisma migrate status --config apps/api/prisma.config.ts
 ```
 
 These commands do not seed or reset the database. Start/restart the dev app after generation and migration, sign in with a verified buyer or approved seller, activate the eWallet, and open `/ads`. An admin must enable ad submissions and set the policy first.

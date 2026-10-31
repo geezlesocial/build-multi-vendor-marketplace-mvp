@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { Prisma, PrismaClient, Role, SellerStatus } from '@prisma/client';
+import { Prisma, Role, SellerStatus } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import bcrypt from 'bcryptjs';
 import Stripe from 'stripe';
 import { randomUUID } from 'node:crypto';
@@ -14,7 +15,7 @@ const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!pepper) throw new Error('PASSWORD_PEPPER is required for disposable billing fixtures.');
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required; no default database is permitted.');
 validateE2EDatabaseURL(databaseUrl);
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 
 async function signIn(page: Page, email: string, password = demoPassword) {
   const response = await page.request.post('/api/auth/login', { data: { email, password } });
