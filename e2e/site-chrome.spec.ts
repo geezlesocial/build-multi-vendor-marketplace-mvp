@@ -41,7 +41,11 @@ async function setColor(page: Page, label: string, color: string) {
 }
 
 test('admin can customize, preview, publish and serve responsive site chrome', async ({ page }) => {
+  test.setTimeout(60_000);
   await login(page, adminEmail);
+  const secondTab = await page.context().newPage();
+  await secondTab.goto('/');
+  await expect(secondTab.locator('.topbar')).toBeVisible();
   const originalResponse = await page.request.get('/api/admin/site-chrome');
   expect(originalResponse.ok(), await originalResponse.text()).toBeTruthy();
   const originalRecord = await prisma.siteChromeConfiguration.findUnique({ where: { id: 'platform' } });
@@ -76,6 +80,8 @@ test('admin can customize, preview, publish and serve responsive site chrome', a
     await expect(page.locator('.siteChromeFooter')).toContainText(footerTitle);
     await expect(page.locator('.siteChromeFooter svg.siteChromeSocialIcon[data-platform="INSTAGRAM"]')).toBeVisible();
     await expect(page.getByRole('link', { name: /Cart/ })).toBeVisible();
+    await expect(secondTab.locator('.siteChromeHeader .platformBrandName')).toHaveText(headerTitle);
+    await expect(secondTab.locator('.siteChromeFooter')).toContainText(footerTitle);
 
     await page.goto('/admin/platform?section=chrome');
     await page.getByRole('tab', { name: 'Page visibility' }).click();
@@ -86,6 +92,8 @@ test('admin can customize, preview, publish and serve responsive site chrome', a
     await page.goto('/');
     await expect(page.locator('.siteChromeFooter')).toHaveCount(0);
     await expect(page.locator('.platformLegalDisclosure')).toBeVisible();
+    await expect(secondTab.locator('.siteChromeFooter')).toHaveCount(0);
+    await expect(secondTab.locator('.platformLegalDisclosure')).toBeVisible();
 
     await page.goto('/admin/platform?section=chrome');
     await page.getByRole('tab', { name: 'Page visibility' }).click();
@@ -95,6 +103,7 @@ test('admin can customize, preview, publish and serve responsive site chrome', a
     await expect(page.getByRole('status').filter({ hasText: 'Published. Open marketplace pages refresh' })).toBeVisible();
     await page.goto('/');
     await expect(page.locator('.siteChromeFooter')).toBeVisible();
+    await expect(secondTab.locator('.siteChromeFooter')).toBeVisible();
     for (const width of [320, 390, 768, 1024] as const) {
       await page.setViewportSize({ width, height: 900 });
       await expect(page.locator('.siteChromeHeader')).toBeVisible();
@@ -105,6 +114,7 @@ test('admin can customize, preview, publish and serve responsive site chrome', a
       expect(footerWidth.scroll, `custom footer should not overflow at ${width}px`).toBeLessThanOrEqual(footerWidth.client + 1);
     }
   } finally {
+    await secondTab.close();
     await prisma.siteChromeRevision.deleteMany({ where: { configurationId: 'platform' } });
     await prisma.siteChromeConfiguration.deleteMany({ where: { id: 'platform' } });
   }
@@ -373,12 +383,16 @@ test('paid seller chrome is tenant-scoped, entitlement-gated, revision-safe, and
     expect((await secondStateResponse.json() as { eligible: boolean }).eligible).toBe(false);
     const secondAttempt = await secondPage.request.put('/api/seller/site-chrome', { data: { expectedVersion: 0, configuration: firstConfiguration }, headers: await csrfHeaders(secondPage) });
     expect(secondAttempt.status()).toBe(403);
+    await secondPage.goto('/');
+    const defaultPlatformBrand = (await secondPage.locator('.topbar .platformBrandName').textContent())?.trim();
+    expect(defaultPlatformBrand).toBeTruthy();
     await secondPage.goto(`/store/${otherStore.slug}`);
     await expect(secondPage.locator('.siteChromeHeader')).toHaveCount(0);
-    await expect(secondPage.locator('.topbar .platformBrandName')).toHaveText(/Market Lane/i);
+    await expect(secondPage.locator('.topbar .platformBrandName')).toHaveText(defaultPlatformBrand!);
 
     await page.goto('/');
     await expect(page.locator('.siteChromeHeader')).toHaveCount(0);
+    await expect(page.locator('.topbar .platformBrandName')).toHaveText(defaultPlatformBrand!);
     await expect(page.locator('.topbar .platformBrandName')).toHaveText(/Market Lane/i);
   } finally {
     await staffPage?.close();
