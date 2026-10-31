@@ -189,6 +189,8 @@ jobs:
       WALLET_FUNDING_PROVIDER_READY: 'false'
       MONEY_MOVEMENT_HARD_DISABLED: 'true'
       STAGING_TEST_DB_PORT: '55439'
+      STAGING_TEST_API_PORT: '4001'
+      STAGING_TEST_WEB_PORT: '5174'
       STAGING_TEST_MAILPIT_API_PORT: '18025'
       STAGING_TEST_MAILPIT_PORT: '11025'
       STAGING_TEST_CLAMAV_PORT: '13310'
@@ -261,14 +263,21 @@ jobs:
 
       - name: Start the API and Nginx web containers on the private Compose network
         run: |
+          set -euo pipefail
           docker compose -f docker-compose.staging-test.yml --profile session-services up -d --build api web clamav
+          ready=false
           for attempt in $(seq 1 90); do
             if curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/healthz >/dev/null && \
-               curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null; then break; fi
+               curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null; then ready=true; break; fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/healthz
-          curl --fail --silent http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null
+          if [[ "$ready" != true ]]; then
+            docker compose -f docker-compose.staging-test.yml ps
+            docker compose -f docker-compose.staging-test.yml logs --no-color --tail=100 api web postgres clamav
+            exit 1
+          fi
+          curl --fail --silent --show-error http://127.0.0.1:${STAGING_TEST_WEB_PORT}/healthz
+          curl --fail --silent --show-error http://127.0.0.1:${STAGING_TEST_WEB_PORT}/ready >/dev/null
 
       - name: Verify actual API-container SMTP and ClamAV network paths
         run: node scripts/staging-container-network-smoke.mjs
