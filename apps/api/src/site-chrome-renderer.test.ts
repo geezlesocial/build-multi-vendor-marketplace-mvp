@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSiteChrome } from './site-chrome-domain.js';
 import { renderSiteChromeFooter, renderSiteChromeHeader, siteChromeStyles } from './site-chrome-renderer.js';
+import { renderSiteChromeSocialIcon } from './site-chrome-social-icons.js';
 
 describe('server-rendered site chrome', () => {
   const brand = { title: 'A <Market>', tagline: 'Independent stores', path: '/' };
@@ -32,8 +33,25 @@ describe('server-rendered site chrome', () => {
     };
     expect(renderSiteChromeFooter(configuration, brand, false)).toContain('Studio &amp; Co');
     expect(renderSiteChromeFooter(configuration, brand, false)).toContain('aria-label="Social links"');
+    expect(renderSiteChromeFooter(configuration, brand, false)).toContain('<svg class="siteChromeSocialIcon" data-platform="WEBSITE"');
+    expect(renderSiteChromeFooter(configuration, brand, false)).toContain('focusable="false"');
+    expect(renderSiteChromeFooter(configuration, brand, false)).not.toContain('<span aria-hidden="true">↗</span>');
     expect(renderSiteChromeFooter(configuration, brand, true)).toBe('');
     expect(renderSiteChromeHeader(defaultSiteChrome(), brand)).toContain('A &lt;Market&gt;');
+  });
+
+  it('renders a curated safe SVG mark for every supported social platform', () => {
+    const platforms = ['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'X', 'YOUTUBE', 'TIKTOK', 'WHATSAPP', 'PINTEREST', 'WEBSITE', 'OTHER'];
+    for (const platform of platforms) {
+      const icon = renderSiteChromeSocialIcon(platform);
+      expect(icon).toContain(`data-platform="${platform}"`);
+      expect(icon).toContain('<svg');
+      expect(icon).toContain('width="20" height="20"');
+      expect(icon).not.toContain('<script');
+      expect(icon).toContain('aria-hidden="true"');
+    }
+    expect(renderSiteChromeSocialIcon('OTHER" onload="alert(1)')).toContain('data-platform="OTHER"');
+    expect(renderSiteChromeSocialIcon('OTHER" onload="alert(1)')).not.toContain('onload');
   });
 
   it('emits only validated theme tokens into the stylesheet', () => {

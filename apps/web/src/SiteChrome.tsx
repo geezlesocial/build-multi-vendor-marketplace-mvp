@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HeaderActivity } from './HeaderActivity.js';
+import { SiteChromeSocialIcon } from './SiteChromeSocialIcon.js';
 import type { SessionUser } from './session.js';
 import type { SiteChromeBrand, SiteChromeConfiguration, SiteChromeSocial } from './site-chrome-types.js';
 import './SiteChrome.css';
+import './SiteChromeAccessibility.css';
 
-const socialGlyph: Record<SiteChromeSocial['platform'], string> = { FACEBOOK: 'f', INSTAGRAM: '◎', LINKEDIN: 'in', X: '𝕏', YOUTUBE: '▶', TIKTOK: '♪', WHATSAPP: '◔', PINTEREST: '℘', WEBSITE: '↗', OTHER: '↗' };
 const external = (href: string) => /^https:\/\//i.test(href);
 
 function initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]?.toLocaleUpperCase() ?? '').join('') || '?'; }
@@ -98,7 +99,7 @@ export function SiteChromeFooter({ configuration, brand, suppressed = false }: {
       <div className="siteChromeFooterIdentity">{logo && <img src={`/content-media/${encodeURIComponent(logo)}`} alt={`${title} logo`} style={{ maxWidth: footer.logoWidth, maxHeight: footer.logoHeight }} onError={event => { event.currentTarget.hidden = true; }} />}<div><strong>{title}</strong>{footer.description && <p>{footer.description}</p>}</div></div>
       {sections.map(section => <section className="siteChromeFooterSection" key={section.id}><h2>{section.title}</h2>{section.links.map(link => <a key={link.id} href={link.href} target={external(link.href) ? '_blank' : undefined} rel={external(link.href) ? 'noopener noreferrer' : undefined}>{link.label}</a>)}</section>)}
       {(footer.contactEmail || footer.contactPhone) && <section className="siteChromeFooterSection"><h2>Contact</h2>{footer.contactEmail && <a href={`mailto:${footer.contactEmail}`}>{footer.contactEmail}</a>}{footer.contactPhone && <a href={`tel:${footer.contactPhone.replace(/[^+\d]/g, '')}`}>{footer.contactPhone}</a>}</section>}
-      {socials.length > 0 && <section className="siteChromeSocials" aria-label="Social media">{socials.map(item => <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer" aria-label={item.label || item.platform} title={item.label || item.platform}><span className="siteChromeSocialGlyph" aria-hidden="true">{socialGlyph[item.platform]}</span>{item.display === 'ICON_AND_LABEL' && <span>{item.label || item.platform.replaceAll('_', ' ')}</span>}</a>)}</section>}
+      {socials.length > 0 && <section className="siteChromeSocials" aria-label="Social media">{socials.map(item => <a key={item.id} href={item.url} target="_blank" rel="noopener noreferrer" aria-label={item.label || item.platform} title={item.label || item.platform}><SiteChromeSocialIcon platform={item.platform} />{item.display === 'ICON_AND_LABEL' && <span>{item.label || item.platform.replaceAll('_', ' ')}</span>}</a>)}</section>}
     </div>
     <div className="siteChromeFooterBottom"><span>{footer.copyright || `© ${new Date().getFullYear()} ${title}`}</span>{footer.backToTop && <button type="button" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>Back to top ↑</button>}</div>
   </footer>;

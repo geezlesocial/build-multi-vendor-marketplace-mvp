@@ -58,10 +58,12 @@ describe('paid Store chrome access', () => {
     expect(paidChromeSnapshotIsEligible({ ...validSnapshot(), subscription: { ...validSnapshot().subscription, interval: 'ANNUAL', annualPriceMinor: 0 } }, now)).toBe(false);
   });
 
-  it('revokes access for expired periods, elapsed assignment, trial, or missing subscription', () => {
+  it('revokes access for every non-active subscription, expired periods, elapsed assignment, or missing subscription', () => {
     expect(paidChromeSnapshotIsEligible({ ...validSnapshot(), assignment: { ...validSnapshot().assignment, effectiveUntil: new Date('2026-10-30T23:59:59.000Z') } }, now)).toBe(false);
     expect(paidChromeSnapshotIsEligible({ ...validSnapshot(), subscription: { ...validSnapshot().subscription, currentPeriodEnd: new Date('2026-10-30T23:59:59.000Z') } }, now)).toBe(false);
-    expect(paidChromeSnapshotIsEligible({ ...validSnapshot(), subscription: { ...validSnapshot().subscription, status: 'TRIALING' } }, now)).toBe(false);
+    for (const status of ['PENDING', 'TRIALING', 'PAST_DUE', 'EXPIRED', 'CANCELLED', 'UNPAID']) {
+      expect(paidChromeSnapshotIsEligible({ ...validSnapshot(), subscription: { ...validSnapshot().subscription, status } }, now), `${status} must not grant premium chrome`).toBe(false);
+    }
     expect(paidChromeSnapshotIsEligible({ ...validSnapshot(), subscription: null }, now)).toBe(false);
   });
 });

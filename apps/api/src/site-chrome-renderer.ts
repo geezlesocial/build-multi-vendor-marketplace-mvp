@@ -1,4 +1,5 @@
 import type { SiteChromeConfiguration } from './site-chrome-domain.js';
+import { renderSiteChromeSocialIcon } from './site-chrome-social-icons.js';
 
 export type SiteChromeBrand = {
   title: string;
@@ -11,11 +12,6 @@ export type SiteChromeBrand = {
 const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const external = (href: string) => /^https:\/\//i.test(href);
 const linkAttrs = (href: string) => external(href) ? ' target="_blank" rel="noopener noreferrer"' : '';
-const socialGlyph: Record<string, string> = {
-  FACEBOOK: 'f', INSTAGRAM: '&#9673;', LINKEDIN: 'in', X: 'X', YOUTUBE: '&#9654;',
-  TIKTOK: '&#9835;', WHATSAPP: '&#9675;', PINTEREST: 'P', WEBSITE: '&#8599;', OTHER: '&#8599;'
-};
-
 /** All interpolated values are strict-schema validated color/size values, never arbitrary CSS. */
 export function siteChromeStyles(configuration: SiteChromeConfiguration) {
   const { header, footer } = configuration;
@@ -54,6 +50,6 @@ export function renderSiteChromeFooter(configuration: SiteChromeConfiguration, b
   }).join('');
   const contact = footer.contactEmail || footer.contactPhone
     ? `<section class="siteChromeSsrSection"><h2>Contact</h2>${footer.contactEmail ? `<a href="mailto:${escapeHtml(footer.contactEmail)}">${escapeHtml(footer.contactEmail)}</a>` : ''}${footer.contactPhone ? `<a href="tel:${escapeHtml(footer.contactPhone.replace(/[^+\d]/g, ''))}">${escapeHtml(footer.contactPhone)}</a>` : ''}</section>` : '';
-  const socials = footer.socials.filter(item => item.enabled).map(item => `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(item.label || item.platform)}"><span aria-hidden="true">${socialGlyph[item.platform] ?? '&#8599;'}</span>${item.display === 'ICON_AND_LABEL' ? `<span>${escapeHtml(item.label || item.platform.replaceAll('_', ' '))}</span>` : ''}</a>`).join('');
+  const socials = footer.socials.filter(item => item.enabled).map(item => `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(item.label || item.platform)}">${renderSiteChromeSocialIcon(item.platform)}${item.display === 'ICON_AND_LABEL' ? `<span>${escapeHtml(item.label || item.platform.replaceAll('_', ' '))}</span>` : ''}</a>`).join('');
   return `<footer class="siteChromeSsrFooter siteChromeSsrFooter--${footer.template.toLowerCase()}${footer.alignment === 'CENTER' ? ' isCentered' : ''}"><div class="siteChromeSsrFooterMain"><div class="siteChromeSsrIdentity">${logo ? `<img src="/content-media/${encodeURIComponent(logo)}" alt="${escapeHtml(title)} logo">` : ''}<div><strong>${escapeHtml(title)}</strong>${footer.description ? `<p>${escapeHtml(footer.description)}</p>` : ''}</div></div>${groups}${contact}${socials ? `<section class="siteChromeSsrSocials" aria-label="Social links">${socials}</section>` : ''}</div><div class="siteChromeSsrBottom"><span>${escapeHtml(footer.copyright || `Copyright ${new Date().getFullYear()} ${title}`)}</span>${footer.backToTop ? '<a href="#top">Back to top &#8593;</a>' : ''}</div></footer>`;
 }
