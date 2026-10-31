@@ -41,7 +41,7 @@ export async function eligibleSeller(sellerId: string) {
 
 export async function eligibleProducts(sellerId: string, productIds: string[]) {
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, sellerId, status: ProductStatus.APPROVED }, select: { id: true } });
-  if (products.length !== productIds.length) throw new Error('Every linked product must belong to this approved seller and be approved.');
+  if (products.length !== productIds.length) throw Object.assign(new Error('Every linked product must belong to this approved seller and be approved.'), { statusCode: 400, code: 'LIVE_PRODUCT_NOT_ELIGIBLE' });
   return products;
 }
 

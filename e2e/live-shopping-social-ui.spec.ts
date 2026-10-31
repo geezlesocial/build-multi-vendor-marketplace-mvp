@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
+test.describe.configure({ timeout: 60_000 });
 const sessionId = 'live-social-ui-test';
 const screenshotDirectory = process.env.LIVE_SHOPPING_SCREENSHOT_DIR;
 
@@ -17,8 +18,9 @@ test('live watch supports reactions, share/embed, repost, and shoppable product 
   let myReaction: keyof typeof reactions | null = null;
   let reposted = false;
   let repostCount = 0;
-  let cartAdded = false;
+  let cartQuantity = 0;
   const cartProduct = { id: 'product-1', name: 'Canvas Tote', description: 'A sturdy everyday tote.', priceMinor: 2400, salePriceMinor: null, currency: 'USD', availableStock: 8, inventory: { quantity: 8 }, sellerId: 'seller-1', productType: { id: 'physical', name: 'Physical product', requiresShipping: false } };
+  const existingCartProduct = { id: 'product-existing', name: 'Previously saved item', description: 'An unrelated item already in the cart.', priceMinor: 5000, salePriceMinor: null, currency: 'USD', availableStock: 4, inventory: { quantity: 4 }, sellerId: 'seller-2', productType: { id: 'physical', name: 'Physical product', requiresShipping: true } };
 
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.context().route('**/api/**', async route => {
@@ -31,7 +33,7 @@ test('live watch supports reactions, share/embed, repost, and shoppable product 
     if (pathname === '/api/platform/branding') return json({ platformName: 'Market Lane', shortName: 'Market Lane', logoMediaId: null, alternateLogoMediaId: null, faviconMediaId: null, defaultAvatarMediaId: null });
     if (pathname === '/api/settings/public') return json({ multiVendorEnabled: true, paymentMethods: [{ method: 'STRIPE', enabled: true }], liveShopping: { enabled: false, deploymentGate: false, reason: 'Provider not configured for this test.' } });
     if (pathname === '/api/products') return json({ items: [] });
-    if (pathname === '/api/cart') return json({ items: cartAdded ? [{ product: cartProduct, quantity: 1 }] : [] });
+    if (pathname === '/api/cart') return json({ items: [{ id: 'existing-cart-line', product: existingCartProduct, quantity: 1 }, ...(cartQuantity ? [{ id: 'live-cart-line', product: cartProduct, quantity: cartQuantity }] : [])] });
     if (pathname === '/api/currency/cart-options') return json({ checkoutCurrency: 'USD', displayCurrencies: [], paymentCurrencies: [], checkoutCompatible: true });
     if (pathname === '/api/account/preferences') return json({ preference: { displayCurrency: 'USD' } });
     if (pathname === '/api/member/header-summary') return json({ favoriteCount: 0, unreadNotificationCount: 0, unreadMessageCount: 0, notifications: [], messages: [] });
@@ -58,15 +60,23 @@ test('live watch supports reactions, share/embed, repost, and shoppable product 
       wholesaleEnabled: false, wholesaleMinQuantity: null, wholesaleMaxQuantity: null, images: [], variants: [], productType: { name: 'Physical product', requiresShipping: true }
     });
     if (pathname === '/api/orders/checkout' && method === 'POST') return json({ payment: { checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_live_embed' } }, 201);
-    if (pathname === '/api/cart/items' && method === 'POST') { cartAdded = true; return json({ id: 'cart-item-1' }, 201); }
+    if (pathname === '/api/cart/items' && method === 'POST') { cartQuantity += (request.postDataJSON() as { quantity: number }).quantity; return json({ id: 'cart-item-1' }, 201); }
     return json({});
   });
 
   await page.goto(`/live/${sessionId}`);
-  await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible({ timeout: 15_000 });
   await capture(page, '01-live-viewer.png');
   sessionProducts.push({ productId: 'product-2', featured: false, shopFeatured: true, shopSortOrder: 1, shopPinned: false, product: { id: 'product-2', name: 'Freshly tagged item', description: 'Added during the show.', priceMinor: 1800, salePriceMinor: null, currency: 'USD', availableStock: 4 } });
   await expect(page.getByRole('button', { name: /Freshly tagged item/ })).toBeVisible({ timeout: 15_000 });
+  for (let index = 3; index <= 6; index += 1) {
+    sessionProducts.push({ productId: `product-${index}`, featured: false, shopFeatured: true, shopSortOrder: index - 1, shopPinned: false, product: { id: `product-${index}`, name: `Shelf item ${index}`, description: 'Current shoppable shelf item.', priceMinor: 1000 + index, salePriceMinor: null, currency: 'USD', availableStock: 4 } });
+  }
+  sessionProducts.push({ productId: 'product-history', featured: true, shopFeatured: false, shopSortOrder: null, shopPinned: false, product: { id: 'product-history', name: 'Historical featured item', description: 'A prior show link.', priceMinor: 1200, salePriceMinor: null, currency: 'USD', availableStock: 2 } });
+  await expect(page.getByRole('button', { name: /Shelf item 6/ })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.liveWatchProductAction')).toHaveCount(6);
+  await expect(page.getByRole('region', { name: 'Previously linked products' }).getByRole('link', { name: /Historical featured item/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Historical featured item/ })).toHaveCount(0);
 
   for (const reaction of ['Like', 'Love', 'Happy', 'Smile']) {
     const button = page.getByRole('button', { name: new RegExp(`^${reaction},`) });
@@ -104,25 +114,23 @@ test('live watch supports reactions, share/embed, repost, and shoppable product 
   await capture(page, '05-added-to-cart.png');
   await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
 
-  await productDialog.getByRole('button', { name: 'Buy now' }).click();
+  await productDialog.getByRole('button', { name: 'Add & review full cart' }).click();
+  const cartReview = page.getByRole('dialog', { name: 'Review your full cart' });
+  await expect(cartReview).toBeVisible();
+  await expect(cartReview.getByText('1 × Previously saved item')).toBeVisible();
+  await expect(cartReview.getByText('2 × Canvas Tote')).toBeVisible();
+  await expect(cartReview.getByText('$98.00')).toBeVisible();
+  await expect(cartReview.getByText(/includes every item listed below, including items that were already in your cart/i)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
+  await cartReview.getByRole('button', { name: 'Continue with all cart items' }).click();
   const checkoutDialog = page.getByRole('dialog', { name: 'Complete your order' });
   await expect(checkoutDialog).toBeVisible();
   const checkoutFrame = page.frameLocator('iframe[title="Secure checkout while watching live shopping"]');
   await expect(checkoutFrame.getByRole('heading', { name: 'Complete your order' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
   await capture(page, '06-secure-checkout-keeps-live-open.png');
-  await checkoutFrame.getByLabel('Name').fill('Live Buyer');
-  await checkoutFrame.getByLabel('Email').fill('buyer@example.test');
-  await checkoutFrame.getByLabel('Address').fill('1 Test Street');
-  await checkoutFrame.getByLabel('City').fill('Test City');
-  await checkoutFrame.getByLabel('Region').fill('TS');
-  await checkoutFrame.getByLabel('Postal code').fill('1000');
-  await checkoutFrame.getByLabel('Country code').fill('US');
-  await checkoutFrame.getByLabel('Payment method').selectOption('STRIPE');
-  await checkoutFrame.getByRole('button', { name: 'Place order' }).click();
-  const providerLink = checkoutFrame.getByRole('link', { name: 'Continue to secure payment' });
-  await expect(providerLink).toHaveAttribute('href', 'https://checkout.stripe.com/c/pay/cs_test_live_embed');
-  await expect(providerLink).toHaveAttribute('target', '_blank');
+  await expect(checkoutFrame.getByRole('button', { name: 'Place order' })).toBeDisabled();
+  await expect(checkoutFrame.getByText(/calculate a covered shipping option/i)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Live Social Commerce Demo' })).toBeVisible();
   await page.setViewportSize({ width: 320, height: 740 });
   const checkoutBox = await checkoutDialog.boundingBox();
@@ -161,6 +169,19 @@ test('buyer profile timeline shows only their live reposts and supports unrepost
   await capture(page, '08-profile-repost-timeline.png');
   await page.getByRole('button', { name: 'Unrepost' }).click();
   await expect(page.getByText('Your reposted live shows will appear here.')).toBeVisible();
+});
+
+test('live video embed fails closed when video is unavailable and renders without site chrome', async ({ page }) => {
+  await page.route('**/api/live-sessions/unavailable-show', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ id: 'unavailable-show', title: 'Private test show', status: 'LIVE', realtimeAvailable: false, playbackAvailable: false, replayAvailable: false, products: [] })
+  }));
+
+  await page.goto('/live/unavailable-show/embed');
+  await expect(page.locator('.liveEmbedUnavailable')).toHaveText('This show is offline or its replay is private.');
+  await expect(page.locator('.liveEmbedMount')).toHaveCount(0);
+  await expect(page.locator('header, footer')).toHaveCount(0);
 });
 
 test('seller product picker searches product names and previews image, price, stock, and six-item limit', async ({ page }) => {

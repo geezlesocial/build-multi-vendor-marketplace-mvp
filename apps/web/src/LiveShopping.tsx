@@ -8,6 +8,7 @@ import './LiveShopping.css';
 import './LiveSocial.css';
 
 type LiveProduct = { id: string; name: string; description?: string; priceMinor?: number; salePriceMinor?: number | null; currency?: string; availableStock?: number; inventory?: { quantity: number } | null; status?: string; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; images?: { id?: string; url: string; alt: string }[]; variants?: { id: string; name: string; priceMinor: number; currency: string; stock: number; imageUrl?: string | null }[] };
+type LiveCartLine = { id: string; quantity: number; variant?: { id: string; name: string; priceMinor: number; currency: string } | null; product: { id: string; name: string; priceMinor: number; salePriceMinor?: number | null; currency: string } };
 export type LiveSession = { id: string; title: string; description?: string | null; status: string; scheduledAt?: string | null; startedAt?: string | null; recordingStatus?: string; replayPublishedAt?: string | null; replayAvailable?: boolean; replayUrl?: string; seller?: { store?: { name: string; slug?: string } | null }; products?: { productId: string; featured: boolean; shopFeatured?: boolean; shopSortOrder?: number | null; shopPinned?: boolean; product?: LiveProduct }[]; playbackAvailable?: boolean; realtimeAvailable?: boolean; playbackUrl?: string };
 type Attendance = { attendance: { eligibleDurationSeconds: number; rewardedAt: string | null } | null; rewardThresholdSeconds: number };
 type LiveReaction = 'LIKE' | 'LOVE' | 'HAPPY' | 'CONGRATS' | 'SMILE';
@@ -384,6 +385,11 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
 
   const storeName = session.seller?.store?.name ?? 'Independent store';
   const storeSlug = session.seller?.store?.slug;
+  const linkedProducts = liveSession.products ?? [];
+  const legacyProductFlags = linkedProducts.length > 0 && linkedProducts.every(link => link.shopFeatured === undefined);
+  const activeShopProducts = linkedProducts.filter(link => legacyProductFlags ? link.featured : link.shopFeatured === true).slice(0, 6);
+  const activeShopProductIds = new Set(activeShopProducts.map(link => link.productId));
+  const historicalProducts = linkedProducts.filter(link => !activeShopProductIds.has(link.productId));
   return <article className="liveWatchSlide" aria-label={`${session.title}, ${storeName}`}>
     <div className="liveWatchVideo">
       {active ? <LiveKitViewer sessionId={session.id} className="liveWatchMount" onVideo={element => { video.current = element; }} onPlayback={value => { setPlaying(value); if (value) void heartbeat(true); else void heartbeat(false); }} onError={reason => { setPlaybackError(reason); setPlaying(false); void heartbeat(false); }} /> : <div className="liveWatchStandby" aria-hidden="true"><span>LIVE</span></div>}
@@ -398,9 +404,8 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
     <div className="liveWatchInfo">
       <div className="liveWatchInfoHeading"><strong>{storeName}</strong><span>{engagement?.viewCount ?? 0} views</span></div>
       <LiveSocialActions sessionId={session.id} title={session.title} />
-      {!!liveSession.products?.length && <div className="liveWatchProducts" aria-label="Shop products in this live show">{liveSession.products.map(link => link.product && (link.shopFeatured || link.featured
-        ? <button className="liveWatchProduct liveWatchProductAction" key={link.productId} type="button" onClick={() => setSelectedProductId(link.productId)}><span>{link.shopFeatured ? link.shopPinned ? 'Featured now' : 'Shop this item' : link.featured ? 'Featured now' : 'Shop this item'}</span><strong>{link.product.name}</strong><small>{typeof link.product.priceMinor === 'number' && link.product.currency ? formatMinor(link.product.salePriceMinor ?? link.product.priceMinor, link.product.currency) : 'See current price'} · Tap for item details</small></button>
-        : <a className="liveWatchProduct" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>Historical show link</span><strong>{link.product.name}</strong><small>View product</small></a>))}</div>}
+      {!!activeShopProducts.length && <div className="liveWatchProducts" aria-label="Shop products in this live show">{activeShopProducts.map(link => link.product && <button className="liveWatchProduct liveWatchProductAction" key={link.productId} type="button" onClick={() => setSelectedProductId(link.productId)}><span>{link.shopFeatured ? link.shopPinned ? 'Featured now' : 'Shop this item' : 'Featured now'}</span><strong>{link.product.name}</strong><small>{typeof link.product.priceMinor === 'number' && link.product.currency ? formatMinor(link.product.salePriceMinor ?? link.product.priceMinor, link.product.currency) : 'See current price'} · Tap for item details</small></button>)}</div>}
+      {!!historicalProducts.length && <section className="liveWatchHistory" aria-label="Previously linked products"><h3>Previously linked products</h3><div className="liveWatchProducts">{historicalProducts.map(link => link.product && <a className="liveWatchProduct" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.featured ? 'Previously featured' : 'From this show'}</span><strong>{link.product.name}</strong><small>View product</small></a>)}</div></section>}
       {canEarn && <div className="liveWatchAttendance"><span>{rewarded ? 'Live attendance reward earned' : `Attendance ${Math.floor(duration / 60)} / ${Math.ceil(threshold / 60)} min`}</span><progress max={threshold} value={Math.min(duration, threshold)} aria-label="Live attendance reward progress" /></div>}
       {!canReact && <p className="liveWatchHint"><a href="/?auth=login">Sign in</a> to react and join the conversation.{!canEarn && ' Verify your email to qualify for attendance rewards.'}</p>}
       {canReact && !canEarn && <p className="liveWatchHint">Verify your email in <a href="/settings#profile">account settings</a> to qualify for live attendance rewards.</p>}
@@ -423,6 +428,9 @@ function ShoppableProductDialog({ sessionId, productId, onClose }: { sessionId: 
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [cartReviewOpen, setCartReviewOpen] = useState(false);
+  const [cartReviewItems, setCartReviewItems] = useState<LiveCartLine[]>([]);
+  const [cartReviewSelection, setCartReviewSelection] = useState<string | null>(null);
   const checkoutFrameRef = useRef<HTMLIFrameElement>(null);
   const productCloseRef = useRef<HTMLButtonElement>(null);
   const checkoutWasOpen = useRef(false);
@@ -433,6 +441,7 @@ function ShoppableProductDialog({ sessionId, productId, onClose }: { sessionId: 
   const maximumQuantity = Math.min(99, stock, product?.wholesaleEnabled ? product.wholesaleMaxQuantity ?? 99 : 99);
   const unitPrice = variant?.priceMinor ?? product?.salePriceMinor ?? product?.priceMinor ?? 0;
   const currency = variant?.currency ?? product?.currency ?? 'USD';
+  const selectedCartKey = `${product?.id ?? ''}:${variantId}:${quantity}`;
 
   useEffect(() => {
     let current = true;
@@ -476,17 +485,29 @@ function ShoppableProductDialog({ sessionId, productId, onClose }: { sessionId: 
     }
   }, [checkoutOpen]);
 
-  const addToCart = async (buyNow: boolean) => {
+  const addToCart = async (reviewFullCart = false) => {
     if (!product || !user || busy) return;
     setBusy(true); setError(''); setMessage('');
     try {
-      await request('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId: product.id, ...(variantId ? { variantId } : {}), quantity }) });
-      window.dispatchEvent(new Event('marketplace:cart-changed'));
-      if (buyNow) {
-        setCheckoutOpen(true);
-        setMessage('Your item is ready in secure checkout. The live show stays open.');
-      } else {
+      if (reviewFullCart && cartReviewSelection !== selectedCartKey) {
+        await request('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId: product.id, ...(variantId ? { variantId } : {}), quantity }) });
+        window.dispatchEvent(new Event('marketplace:cart-changed'));
+        // Do not add the item again if loading the cart summary fails and the
+        // buyer retries. The server cart remains authoritative and untouched.
+        setCartReviewSelection(selectedCartKey);
+      } else if (!reviewFullCart) {
+        await request('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId: product.id, ...(variantId ? { variantId } : {}), quantity }) });
+        window.dispatchEvent(new Event('marketplace:cart-changed'));
         setMessage('Added to your cart. Keep watching or add another item.');
+        return;
+      }
+      if (reviewFullCart) {
+        const cart = await request<{ items: LiveCartLine[] }>('/api/cart');
+        if (!cart.items.length) throw new Error('Your cart is empty. No checkout was opened.');
+        setCartReviewItems(cart.items);
+        setCartReviewOpen(true);
+      } else {
+        setMessage('Added to your cart.');
       }
     } catch (reason) {
       setError((reason as Error).message);
@@ -494,9 +515,25 @@ function ShoppableProductDialog({ sessionId, productId, onClose }: { sessionId: 
   };
 
   return <div className="liveProductBackdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className={checkoutOpen ? 'liveProductDialog checkoutOpen' : 'liveProductDialog'} role="dialog" aria-modal="true" aria-labelledby={checkoutOpen ? 'live-checkout-dialog-title' : 'live-product-dialog-title'} aria-describedby={checkoutOpen ? 'live-checkout-dialog-help' : 'live-product-dialog-help'} ref={dialogRef}>
-      <button type="button" className="liveProductDialogClose" onClick={onClose} aria-label={checkoutOpen ? 'Close checkout and return to live show' : 'Close product details'} ref={productCloseRef}>×</button>
-      {checkoutOpen ? <div className="liveProductCheckout">
+    <section className={checkoutOpen ? 'liveProductDialog checkoutOpen' : cartReviewOpen ? 'liveProductDialog cartReviewOpen' : 'liveProductDialog'} role="dialog" aria-modal="true" aria-labelledby={checkoutOpen ? 'live-checkout-dialog-title' : cartReviewOpen ? 'live-cart-review-title' : 'live-product-dialog-title'} aria-describedby={checkoutOpen ? 'live-checkout-dialog-help' : cartReviewOpen ? 'live-cart-review-help' : 'live-product-dialog-help'} ref={dialogRef}>
+      <button type="button" className="liveProductDialogClose" onClick={onClose} aria-label={checkoutOpen ? 'Close checkout and return to live show' : cartReviewOpen ? 'Close cart review and return to live show' : 'Close product details'} ref={productCloseRef}>×</button>
+      {cartReviewOpen ? <div className="liveCartReview">
+        <header><div><p className="eyebrow">Before checkout</p><h3 id="live-cart-review-title">Review your full cart</h3><p id="live-cart-review-help">This checkout includes every item listed below, including items that were already in your cart. Nothing has been removed and no order has been placed.</p></div></header>
+        <ul aria-label="All items included in checkout">{cartReviewItems.map(item => {
+          const unitPrice = item.variant?.priceMinor ?? item.product.salePriceMinor ?? item.product.priceMinor;
+          const currency = item.variant?.currency ?? item.product.currency;
+          return <li key={item.id}><span><strong>{item.quantity} × {item.product.name}</strong>{item.variant && <small>Option: {item.variant.name}</small>}</span><strong>{formatMinor(unitPrice * item.quantity, currency)}</strong></li>;
+        })}</ul>
+        <div className="liveCartReviewTotals"><strong>Merchandise subtotal</strong>{Array.from(cartReviewItems.reduce((totals, item) => {
+          const currency = item.variant?.currency ?? item.product.currency;
+          const unitPrice = item.variant?.priceMinor ?? item.product.salePriceMinor ?? item.product.priceMinor;
+          totals.set(currency, (totals.get(currency) ?? 0) + unitPrice * item.quantity);
+          return totals;
+        }, new Map<string, number>())).map(([currency, total]) => <strong key={currency}>{formatMinor(total, currency)}</strong>)}</div>
+        <p>Shipping and applicable discounts are calculated in checkout. Review the final order total there before selecting Place order. Your live show stays open.</p>
+        {error && <p role="alert" className="notice">{error}</p>}
+        <div className="liveProductDialogActions"><button type="button" onClick={() => { setCartReviewOpen(false); setError(''); }}>Back to item</button><button type="button" className="primary" onClick={() => { setCartReviewOpen(false); setCheckoutOpen(true); }}>Continue with all cart items</button></div>
+      </div> : checkoutOpen ? <div className="liveProductCheckout">
         <header><div><p className="eyebrow">Secure marketplace checkout</p><h3 id="live-checkout-dialog-title">Complete your order</h3><p id="live-checkout-dialog-help">Your live show continues behind this checkout. Shipping, stock, and payment rules are validated by the marketplace.</p></div><button type="button" onClick={() => setCheckoutOpen(false)}>Back to product</button></header>
         <iframe ref={checkoutFrameRef} title="Secure checkout while watching live shopping" src="/checkout?source=live-shopping&embed=1" loading="eager" />
         <a href="/checkout?source=live-shopping" target="_blank" rel="noopener noreferrer">Open checkout in a separate tab</a>
@@ -512,7 +549,7 @@ function ShoppableProductDialog({ sessionId, productId, onClose }: { sessionId: 
           <label>Quantity<input type="number" min={minimumQuantity} max={Math.max(0, maximumQuantity)} value={quantity} disabled={maximumQuantity < minimumQuantity} onChange={event => setQuantity(Math.max(minimumQuantity, Math.min(maximumQuantity, Number(event.target.value) || minimumQuantity)))} /></label>
           {product.wholesaleEnabled && <small>Wholesale orders require {minimumQuantity}–{product.wholesaleMaxQuantity ?? 99} units.</small>}
           <small id="live-product-dialog-help">Availability and price are checked again by the marketplace when you add this item. Checkout keeps existing shipping and payment rules.</small>
-          {user ? <div className="liveProductDialogActions"><button type="button" disabled={busy || stock < minimumQuantity || quantity < minimumQuantity || (variants.length > 0 && !variantId)} onClick={() => void addToCart(false)}>{busy ? 'Adding…' : 'Add to cart'}</button><button type="button" className="primary" disabled={busy || stock < minimumQuantity || quantity < minimumQuantity || (variants.length > 0 && !variantId)} onClick={() => void addToCart(true)}>{busy ? 'Preparing…' : 'Buy now'}</button></div> : <a className="primary liveProductSignIn" href="/?auth=login" target="_blank" rel="noopener noreferrer">Sign in to shop</a>}
+          {user ? <div className="liveProductDialogActions"><button type="button" disabled={busy || stock < minimumQuantity || quantity < minimumQuantity || (variants.length > 0 && !variantId)} onClick={() => void addToCart(false)}>{busy ? 'Adding…' : 'Add to cart'}</button><button type="button" className="primary" disabled={busy || stock < minimumQuantity || quantity < minimumQuantity || (variants.length > 0 && !variantId)} onClick={() => void addToCart(true)}>{busy ? 'Preparing…' : cartReviewSelection === selectedCartKey ? 'Review full cart' : 'Add & review full cart'}</button></div> : <a className="primary liveProductSignIn" href="/?auth=login" target="_blank" rel="noopener noreferrer">Sign in to shop</a>}
           {message && <p role="status" className="liveProductDialogMessage">{message}</p>}
           {error && <p role="alert" className="notice">{error}</p>}
         </div>
