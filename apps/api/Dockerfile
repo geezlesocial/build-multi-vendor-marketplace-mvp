@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build from the repository root: docker build -f apps/api/Dockerfile .
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS dependencies
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS dependencies
 WORKDIR /workspace
 RUN apk add --no-cache openssl
 COPY package.json package-lock.json ./
@@ -25,7 +25,7 @@ RUN DATABASE_URL='postgresql://127.0.0.1:5432/marketplace?schema=public' \
 
 # Dedicated image target for the one-shot deployment migration job.
 # Normal API startup never runs migrations.
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS production-dependencies
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS production-dependencies
 WORKDIR /workspace
 RUN apk add --no-cache openssl
 COPY package.json package-lock.json ./
@@ -43,7 +43,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 
 # Keep the Prisma CLI in a dedicated migration dependency graph, not the API
 # runtime. The CLI is a production dependency of this isolated workspace only.
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS migrator-dependencies
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS migrator-dependencies
 WORKDIR /workspace
 RUN apk add --no-cache openssl
 COPY package.json package-lock.json ./
@@ -60,12 +60,13 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 
 # The one-shot image carries only the API runtime dependencies, the Prisma CLI,
 # Prisma config, and migration SQL; normal API startup never migrates.
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS migrator
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS migrator
 ENV NODE_ENV=production \
     HOME=/tmp \
     TMPDIR=/tmp
 WORKDIR /workspace/apps/api
 RUN apk add --no-cache openssl \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && addgroup -S -g 10001 marketplace \
     && adduser -S -D -H -u 10001 -G marketplace marketplace
 COPY --from=migrator-dependencies --chown=marketplace:marketplace /workspace/node_modules /workspace/node_modules
@@ -74,7 +75,7 @@ COPY --chown=marketplace:marketplace apps/api/prisma.config.ts ./prisma.config.t
 USER 10001:10001
 CMD ["/workspace/node_modules/.bin/prisma", "migrate", "deploy", "--config", "/workspace/apps/api/prisma.config.ts"]
 
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS runtime
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS runtime
 ENV NODE_ENV=production \
     API_PORT=4000 \
     HOME=/tmp \
@@ -82,6 +83,7 @@ ENV NODE_ENV=production \
     NODE_OPTIONS=--require=/workspace/apps/api/runtime/safe-console.cjs
 WORKDIR /workspace
 RUN apk add --no-cache openssl \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && addgroup -S -g 10001 marketplace \
     && adduser -S -D -H -u 10001 -G marketplace marketplace
 COPY --from=production-dependencies --chown=marketplace:marketplace /workspace/node_modules ./node_modules

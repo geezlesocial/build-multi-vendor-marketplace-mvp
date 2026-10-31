@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build from the repository root: docker build -f apps/web/Dockerfile .
-FROM node:22.23.2-alpine3.24@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS build
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS build
 WORKDIR /workspace
 RUN apk add --no-cache openssl
 COPY package.json package-lock.json ./
@@ -19,7 +19,7 @@ COPY apps/web apps/web
 COPY tsconfig.base.json ./tsconfig.base.json
 RUN npm run build --workspace=apps/web
 
-FROM nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8
+FROM ghcr.io/nginx/nginx-unprivileged:1.31.8-alpine3.24@sha256:03df07e5931f8374d440bd62243a5ce9b24719715ef6fc4c9c626a5f1dbef417
 ENV API_UPSTREAM=http://api:4000 DNS_RESOLVER=127.0.0.11
 USER root
 RUN apk add --no-cache ca-certificates gettext-envsubst
