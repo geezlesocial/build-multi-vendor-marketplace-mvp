@@ -214,8 +214,7 @@ jobs:
             if docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d postgres >/dev/null 2>&1; then break; fi
             sleep 2
           done
-          docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d postgres
-          docker compose -f docker-compose.staging-test.yml exec -T postgres createdb -U marketplace_test "$database_name"
+          docker compose -f docker-compose.staging-test.yml exec -T postgres pg_isready -U marketplace_test -d "$database_name"
 
       - name: Apply migrations and seed only the disposable database
         run: |
