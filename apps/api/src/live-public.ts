@@ -10,7 +10,22 @@ export function publicLiveSession<T extends { id?: string; providerSessionRef?: 
   const sellerRecord = asRecord(seller);
   const storeRecord = asRecord(sellerRecord?.store);
   const safeSeller = sellerRecord ? { store: storeRecord ? { name: storeRecord.name, slug: storeRecord.slug } : null } : seller;
-  const safeProducts = Array.isArray(products) ? products.map(value => {
+  const orderedProducts = Array.isArray(products) ? [...products].sort((left, right) => {
+    const leftLink = asRecord(left);
+    const rightLink = asRecord(right);
+    const leftShopFeatured = leftLink?.shopFeatured === true;
+    const rightShopFeatured = rightLink?.shopFeatured === true;
+    if (leftShopFeatured !== rightShopFeatured) return leftShopFeatured ? -1 : 1;
+    if (leftShopFeatured && rightShopFeatured && leftLink?.shopPinned !== rightLink?.shopPinned) {
+      return leftLink?.shopPinned === true ? -1 : 1;
+    }
+    const leftOrder = leftShopFeatured ? leftLink?.shopSortOrder : leftLink?.sortOrder;
+    const rightOrder = rightShopFeatured ? rightLink?.shopSortOrder : rightLink?.sortOrder;
+    const leftIndex = typeof leftOrder === 'number' ? leftOrder : Number.MAX_SAFE_INTEGER;
+    const rightIndex = typeof rightOrder === 'number' ? rightOrder : Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex;
+  }) : products;
+  const safeProducts = Array.isArray(orderedProducts) ? orderedProducts.map(value => {
     const link = asRecord(value);
     if (!link) return null;
     const product = asRecord(link.product);
@@ -20,6 +35,9 @@ export function publicLiveSession<T extends { id?: string; providerSessionRef?: 
       productId: link.productId,
       sortOrder: link.sortOrder,
       featured: link.featured,
+      shopFeatured: link.shopFeatured ?? false,
+      shopSortOrder: link.shopSortOrder ?? null,
+      shopPinned: link.shopPinned ?? false,
       ...(product ? { product: {
         id: product.id,
         name: product.name,

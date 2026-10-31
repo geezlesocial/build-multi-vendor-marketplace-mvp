@@ -8,6 +8,11 @@ assert.match(nginx, /server_tokens\s+off;/);
 assert.match(nginx, /client_max_body_size\s+60m;/);
 assert.match(nginx, /location\s*=\s*\/api\s*\{\s*proxy_pass\s+\$marketplace_api;/);
 assert.match(nginx, /location\s+\^~\s+\/api\//);
+assert.ok(nginx.includes('location ~ ^/live/[^/]+/embed/?$'));
+assert.ok(nginx.includes('frame-ancestors \'self\' https:'));
+assert.ok(nginx.includes('location ~ ^/checkout/?$'));
+assert.ok(nginx.includes('frame-ancestors \'self\''));
+assert.ok(nginx.includes('X-Frame-Options "SAMEORIGIN"'));
 assert.match(nginx, /location\s+\/\s*\{\s*try_files\s+\$uri\s+\$uri\/\s+\/index\.html;/);
 assert.doesNotMatch(nginx, /\$request(?:\b|[ ;])/);
 

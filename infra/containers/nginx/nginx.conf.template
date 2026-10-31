@@ -73,6 +73,19 @@ http {
             include /etc/marketplace/proxy-headers.conf;
         }
 
+        # The marketplace checkout may be framed by its own live product dialog only.
+        location ~ ^/checkout/?$ {
+            add_header Content-Security-Policy "frame-ancestors 'self'" always;
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            try_files $uri /index.html;
+        }
+
+        # Only the dedicated, read-only live embed route may be framed by secure origins.
+        location ~ ^/live/[^/]+/embed/?$ {
+            add_header Content-Security-Policy "frame-ancestors 'self' https:" always;
+            try_files $uri /index.html;
+        }
+
         location / {
             try_files $uri $uri/ /index.html;
         }
