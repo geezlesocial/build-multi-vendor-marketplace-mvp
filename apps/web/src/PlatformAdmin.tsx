@@ -21,6 +21,7 @@ import { AdminOnboardingReadiness } from './AdminOnboardingReadiness.js';
 import { MarketplaceAds } from './MarketplaceAds.js';
 import { useSession } from './session.js';
 import { PlatformCollaborators } from './PlatformCollaborators.js';
+import { SiteChromeBuilder } from './SiteChromeBuilder.js';
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
@@ -50,7 +51,7 @@ const adminNavigation = [
   { group: 'Support and messaging', items: [{ id: 'support', label: 'Support & messaging' }] },
   { group: 'AI operations', items: [{ id: 'jima', label: 'Jima System AI' }] },
   { group: 'Integrations & APIs', items: [{ id: 'providers', label: 'Provider configurations' }, { id: 'webhooks', label: 'Webhooks & API status' }] },
-  { group: 'Platform settings', items: [{ id: 'branding', label: 'Branding' }, { id: 'settings', label: 'Policies' }, { id: 'availability', label: 'Availability & localization' }, { id: 'currencies', label: 'Currency catalog & FX' }] },
+  { group: 'Platform settings', items: [{ id: 'branding', label: 'Branding' }, { id: 'chrome', label: 'Header & footer' }, { id: 'settings', label: 'Policies' }, { id: 'availability', label: 'Availability & localization' }, { id: 'currencies', label: 'Currency catalog & FX' }] },
   { group: 'Governance', items: [{ id: 'audit', label: 'Audit log' }] }
 ];
 
@@ -63,6 +64,7 @@ const sectionPermission: Record<string, string> = {
 };
 
 function permittedSection(id: string, isAdmin: boolean, permissions: string[]) {
+  if (id === 'chrome') return isAdmin;
   if (id === 'team') return isAdmin;
   if (id === 'settings') return isAdmin || permissions.includes('MARKETPLACE') || permissions.includes('PAYMENTS');
   const permission = sectionPermission[id];
@@ -75,7 +77,7 @@ export function PlatformAdmin() {
   const permissions = user?.platformPermissions ?? [];
   const visibleNavigation = adminNavigation.map(group => ({ ...group, items: group.items.filter(item => permittedSection(item.id, isAdmin, permissions)) })).filter(group => group.items.length > 0);
   const requestedSection = new URLSearchParams(window.location.search).get('section');
-  const supportedSections = ['overview', 'orders', 'taxonomy', 'reviews', 'vendors', 'platform-store', 'shipping', 'live-shopping', 'plans', 'methods', 'transactions', 'commissions', 'payouts', 'refunds', 'affiliate', 'store-growth', 'promotions', 'marketplace-ads', 'wallet', 'coins', 'members', 'auth', 'onboarding', 'team', 'support', 'jima', 'providers', 'webhooks', 'branding', 'settings', 'availability', 'currencies', 'audit'];
+  const supportedSections = ['overview', 'orders', 'taxonomy', 'reviews', 'vendors', 'platform-store', 'shipping', 'live-shopping', 'plans', 'methods', 'transactions', 'commissions', 'payouts', 'refunds', 'affiliate', 'store-growth', 'promotions', 'marketplace-ads', 'wallet', 'coins', 'members', 'auth', 'onboarding', 'team', 'support', 'jima', 'providers', 'webhooks', 'branding', 'chrome', 'settings', 'availability', 'currencies', 'audit'];
   const firstAllowedSection = visibleNavigation[0]?.items[0]?.id ?? '';
   const requestedTab = requestedSection === 'integrations' ? 'providers' : requestedSection === 'coins' ? 'wallet' : requestedSection;
   const initialTab = requestedTab && supportedSections.includes(requestedTab) && permittedSection(requestedTab, isAdmin, permissions) ? requestedTab : firstAllowedSection;
@@ -244,6 +246,7 @@ export function PlatformAdmin() {
       </div>
       <div className="toolbar"><button className="primary" disabled={brandingSaving} onClick={() => void saveBrandingDraft()}>{brandingSaving ? 'Saving…' : 'Save branding draft'}</button><button disabled={brandingSaving} onClick={() => { if (window.confirm('Save these edits and publish this branding version? Only approved images will be made public; pending replacements are rejected and the current branding remains active.')) void publishBranding(); }}>{brandingSaving ? 'Saving…' : 'Save and publish branding'}</button></div>
     </div>)}
+    {tab === 'chrome' && isAdmin && <SiteChromeBuilder scope="platform" />}
     {tab === 'settings' && <AdminPolicySettings settings={settings} isAdmin={isAdmin} permissions={permissions} patch={patchSetting} fallback={resourceFallback('settings', 'platform policies')} />}
     {tab === 'shipping' && (resourceFallback('shipping', 'seller shipping data') ?? (shippingAdmin && <section><AdminCarriers /><h2>Seller-managed shipping</h2><p className="muted">Seller-entered service labels and fees are shown for oversight only. No carrier APIs, labels, or external quotes are connected.</p><div className="setting"><div><strong>Global shipping availability</strong><p>Disabling blocks new seller shipments without rewriting seller settings or historical order snapshots.</p></div><button onClick={() => patchSetting('sellerShippingEnabled', !shippingAdmin.enabled)}>{shippingAdmin.enabled ? 'Enabled' : 'Disabled'}</button></div>{shippingAdmin.services.length ? <div className="table">{shippingAdmin.services.map(service => <div className="row" key={service.id}><span>{service.seller.store?.name ?? 'Store'} · {service.name}</span><span>{new Intl.NumberFormat(undefined, { style: 'currency', currency: service.currency }).format(service.feeMinor / 100)}</span><span>{service.zones.map(zone => [zone.cityLabel, zone.regionLabel, zone.countryCode].filter(Boolean).join(', ')).join(' · ')}</span><strong>{service.enabled ? 'Active' : 'Disabled'}</strong></div>)}</div> : <div className="empty">No Stores have configured shipping services yet.</div>}</section>))}
     {tab === 'availability' && (resourceFallback('availability', 'availability settings') ?? (availability && <div className="settings"><h2>Buyer availability</h2><section className="setting availabilityLanguages"><div><strong>Enabled languages</strong><p>Only bundled interface languages can be enabled here. English stays available as the fallback. This controls language choices; it does not machine-translate untranslated content.</p></div><div className="availabilityLanguageOptions">{availability.supportedLanguages.map(language => <label key={language}><input type="checkbox" checked={languageDraft.includes(language)} disabled={language === 'en'} onChange={event => setLanguageDraft(current => event.target.checked ? [...new Set([...current, language])] : current.filter(value => value !== language))} />{language === 'en' ? 'English' : 'Filipino'}</label>)}</div><button className="primary" disabled={languageDraft.length === availability.languages.length && languageDraft.every(language => availability.languages.includes(language))} onClick={() => action('/api/admin/platform/availability', { method: 'PATCH', body: JSON.stringify({ languages: languageDraft, reason: 'Updated enabled platform languages in administration' }) })}>Save language availability</button></section><div className="setting"><div><strong>Base currency</strong><p>Checkout, payment capture, and settlement remain in this currency.</p></div><span>{availability.baseCurrency}</span></div><div className="setting"><div><strong>Display currencies</strong><p>{availability.note}</p></div><span>{availability.availableDisplayCurrencies.join(', ')}</span></div><div className="setting"><div><strong>Foreign exchange</strong><p>{availability.automaticFxEnabled ? 'Automatic reference-rate fetching is enabled; only fresh rates are selectable.' : 'Automatic fetching is disabled. Administrator-approved manual rates can still enable display estimates.'}</p></div><span>{availability.fxRatesConfigured ? 'Foreign rates available' : 'Base currency only'}</span></div></div>))}
