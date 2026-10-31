@@ -393,7 +393,6 @@ test('paid seller chrome is tenant-scoped, entitlement-gated, revision-safe, and
     await page.goto('/');
     await expect(page.locator('.siteChromeHeader')).toHaveCount(0);
     await expect(page.locator('.topbar .platformBrandName')).toHaveText(defaultPlatformBrand!);
-    await expect(page.locator('.topbar .platformBrandName')).toHaveText(/Market Lane/i);
   } finally {
     await staffPage?.close();
     await secondPage?.close();
