@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import { expect, test, type Page } from '@playwright/test';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
 
@@ -8,7 +8,7 @@ const password = 'LocalDemoOnly-ChangeMe-123!';
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required; provider admin tests must use the disposable E2E database.');
 validateE2EDatabaseURL(databaseUrl);
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 
 async function signIn(page: Page, email: string) {
   const response = await page.request.post('/api/auth/login', { data: { email, password } });

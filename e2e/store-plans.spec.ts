@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { PrismaClient, Role, SellerStatus } from '@prisma/client';
+import { Role, SellerStatus } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 
@@ -18,7 +19,7 @@ if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsedDatabaseUrl.hostn
   throw new Error('Store plan tests require a loopback-only disposable test/e2e database.');
 }
 
-const prisma = new PrismaClient({ datasources: { db: { url: e2eDatabaseUrl } } });
+const prisma = createTestPrismaClient(e2eDatabaseUrl);
 const otherSellerEmail = `plan-isolation-${randomUUID().slice(0, 8)}@example.test`;
 let otherStoreId = '';
 

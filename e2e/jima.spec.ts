@@ -1,12 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PrismaClient } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import { createServer, type Server } from 'node:http';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
 
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL is required for Jima tests.');
 validateE2EDatabaseURL(databaseUrl);
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 const recommendationFixtureProductIds: string[] = [];
 const recommendationFixtureCategoryIds: string[] = [];
 test.afterEach(async () => {

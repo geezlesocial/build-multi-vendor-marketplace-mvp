@@ -29,7 +29,7 @@ test('buyer wallet and Club Coins surfaces remain visible but money movement is 
   expect((await page.request.post('/api/wallet/checkout-authorize', { data: {}, headers })).status()).toBe(409);
 
   await page.goto('/wallet');
-  await expect(page.getByRole('heading', { name: 'Wallet', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'eWallet', exact: true })).toBeVisible();
   await expect(page.getByText('Real-money wallet movement is disabled by server policy.')).toBeVisible();
   await page.goto('/club-coins');
   await expect(page.getByRole('heading', { name: 'Club Coins', exact: true })).toBeVisible();

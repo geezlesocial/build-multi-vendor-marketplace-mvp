@@ -6,6 +6,8 @@ Migration `20261026173141` attempted to alter `LiveKitConfiguration` before migr
 
 ## Checksums
 
+The detailed historical-ledger behavior below was documented with the repository's Prisma 6 workflow. This staging preparation upgrades Prisma to 7.10.1. A fresh PostgreSQL 17 database successfully applied the full current migration chain and seed with Prisma 7.10.1, but the historical applied-checksum scenarios below were not rerun with the upgraded migration engine in this preparation. Keep the migration-order and checksum warnings as release gates; verify actual ledger/checksum state and the deployed Prisma CLI behavior on a disposable clone before any persistent migration.
+
 Checksums below are SHA-256 of the exact migration file bytes (Prisma's `_prisma_migrations.checksum` format):
 
 | Migration | Historical / currently deployed candidate | Current working tree |

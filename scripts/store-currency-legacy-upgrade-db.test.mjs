@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { createTestPrismaClient } from './prisma-test-client.mjs';
 import { validateE2EDatabaseURL } from './e2e-database-url.mjs';
 import { isDisposableWalletFundingDatabaseUrl } from '../apps/api/src/wallet-safety.ts';
 
@@ -59,11 +60,18 @@ function addMigrations(tempDir, names) {
 }
 
 function deploy(tempDir, databaseUrl) {
-  const result = spawnSync(process.execPath, [prismaCli, 'migrate', 'deploy', '--schema', path.join(tempDir, 'schema.prisma')], {
+  const result = spawnSync(process.execPath, [
+    prismaCli, 'migrate', 'deploy', '--config', path.join(rootDir, 'apps', 'api', 'prisma.config.ts'), '--schema', path.join(tempDir, 'schema.prisma')
+  ], {
     // Keep Prisma's process working directory outside the per-schema workspace.
     // On Windows, a process cwd can prevent that workspace from being removed.
     cwd: isolatedTempRoot,
-    env: { ...process.env, DATABASE_URL: databaseUrl, DOTENV_CONFIG_PATH: path.join(tempDir, 'no-env-file') },
+    env: {
+      ...process.env,
+      DATABASE_URL: databaseUrl,
+      PRISMA_MIGRATIONS_PATH: path.join(tempDir, 'migrations'),
+      DOTENV_CONFIG_PATH: path.join(tempDir, 'no-env-file')
+    },
     encoding: 'utf8',
     windowsHide: true
   });
@@ -266,10 +274,10 @@ test('migration 28+ preserves compatible legacy checkout, disables stale USD cap
   process.env.NODE_ENV = 'test';
   process.env.DATABASE_URL = currentUrl;
   process.env.DOTENV_CONFIG_PATH = path.join(os.tmpdir(), `marketplace-no-dotenv-${currentIdentity}`);
-  const { Prisma, PrismaClient } = await import('@prisma/client');
-  const currentDb = new PrismaClient({ datasources: { db: { url: currentUrl } } });
-  const mixedDb = new PrismaClient({ datasources: { db: { url: mixedUrl } } });
-  const unsupportedDb = new PrismaClient({ datasources: { db: { url: unsupportedUrl } } });
+  const { Prisma } = await import('@prisma/client');
+  const currentDb = createTestPrismaClient(currentUrl);
+  const mixedDb = createTestPrismaClient(mixedUrl);
+  const unsupportedDb = createTestPrismaClient(unsupportedUrl);
   const currentTemp = createTempProject(currentIdentity);
   const mixedTemp = createTempProject(mixedIdentity);
   const unsupportedTemp = createTempProject(unsupportedIdentity);

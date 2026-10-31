@@ -1,4 +1,5 @@
-import { PrismaClient, ProductStatus, Role, SellerStatus } from '@prisma/client';
+import { ProductStatus, Role, SellerStatus } from '@prisma/client';
+import { createTestPrismaClient } from '../scripts/prisma-test-client.mjs';
 import { expect, test, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { validateE2EDatabaseURL } from '../scripts/e2e-database-url.mjs';
@@ -7,7 +8,7 @@ import { expectNoHorizontalOverflow } from './layout-assertions.js';
 const databaseUrl = process.env.E2E_DATABASE_URL;
 if (!databaseUrl) throw new Error('E2E_DATABASE_URL must point to the disposable browser-test database.');
 validateE2EDatabaseURL(databaseUrl);
-const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+const prisma = createTestPrismaClient(databaseUrl);
 const password = 'Onboarding-E2E-Only-Password-42!';
 const demoPassword = 'LocalDemoOnly-ChangeMe-123!';
 const createdStores: string[] = [];
