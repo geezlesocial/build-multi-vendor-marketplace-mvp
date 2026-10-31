@@ -284,8 +284,11 @@ test('paid seller chrome is tenant-scoped, entitlement-gated, revision-safe, and
     expect(publishedState).toMatchObject({ scope: 'STORE', footerSuppressed: true, brand: { title: store.name } });
     expect(publishedState.configuration?.header.title).toBe(firstConfiguration.header.title);
     const globalHome = await page.request.get('/api/site-chrome/public?kind=HOME');
-    expect((await globalHome.json() as { scope: string; configuration: SiteChromeConfiguration | null }).scope).toBe('PLATFORM');
-    expect((await globalHome.json() as { configuration: SiteChromeConfiguration | null }).configuration).toBeNull();
+    const globalHomeState = await globalHome.json() as { scope: string; configuration: SiteChromeConfiguration | null; brand: { title: string } };
+    expect(globalHomeState.scope).toBe('PLATFORM');
+    expect(globalHomeState.configuration).toBeNull();
+    const defaultPlatformBrand = globalHomeState.brand.title;
+    expect(defaultPlatformBrand).toBeTruthy();
     const otherStoreHome = await page.request.get(`/api/site-chrome/public?storeSlug=${encodeURIComponent(otherStore.slug)}&kind=HOME`);
     expect((await otherStoreHome.json() as { configuration: SiteChromeConfiguration | null }).configuration).toBeNull();
     const product = await prisma.product.findUnique({ where: { slug: 'demo-canvas-tote' }, select: { id: true } });
@@ -384,8 +387,7 @@ test('paid seller chrome is tenant-scoped, entitlement-gated, revision-safe, and
     const secondAttempt = await secondPage.request.put('/api/seller/site-chrome', { data: { expectedVersion: 0, configuration: firstConfiguration }, headers: await csrfHeaders(secondPage) });
     expect(secondAttempt.status()).toBe(403);
     await secondPage.goto('/');
-    const defaultPlatformBrand = (await secondPage.locator('.topbar .platformBrandName').textContent())?.trim();
-    expect(defaultPlatformBrand).toBeTruthy();
+    await expect(secondPage.locator('.topbar .platformBrandName')).toHaveText(defaultPlatformBrand);
     await secondPage.goto(`/store/${otherStore.slug}`);
     await expect(secondPage.locator('.siteChromeHeader')).toHaveCount(0);
     await expect(secondPage.locator('.topbar .platformBrandName')).toHaveText(defaultPlatformBrand!);
