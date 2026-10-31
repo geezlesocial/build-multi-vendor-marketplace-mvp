@@ -118,6 +118,7 @@ export function SellerPlatform() {
         <h2>Store settings</h2>
         <p className="muted">Your store URL is generated from the store name. The server checks reserved names and URL collisions before saving. Sellers can change the Store name up to three times per calendar month. New branding uploads remain private until scanning approves them.</p>
         <p><a href="/seller/plan">View plan and usage</a></p>
+        <p><a href="/seller/site-chrome">Customize storefront header &amp; footer</a></p>
         <p><a href="/seller/currency">Manage Store currency and display offers</a> · <a href="/seller/commissions">View commission statement</a></p>
         <label>Store name<input aria-label="Store name" value={storeName} onChange={event => setStoreName(event.target.value)} maxLength={120} required disabled={!nameChanges.unlimited && nameChanges.remaining === 0} /></label>
         <p className="muted" role="status" aria-live="polite">{nameChangeHint}</p>

@@ -1,0 +1,3 @@
+.siteChromeSocialIcon{display:block;width:1.2rem;height:1.2rem;flex:0 0 1.2rem;fill:currentColor}
+.siteChromeContrastWarning{margin:.5rem 0;padding:.7rem .85rem;border:1px solid #e5b65f;border-radius:.65rem;background:#fff4da;color:#593c12;font-size:.9rem;line-height:1.45}
+.siteChromeContrastWarning::before{content:'⚠ ';font-weight:800}

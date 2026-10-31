@@ -39,7 +39,10 @@ async function uploadAvatar(page: Page) {
   // Some callers have just saved the profile on this route. Avoid a redundant
   // same-URL navigation, which can abort while the SPA is still settling.
   const current = new URL(page.url());
-  if (current.pathname !== '/settings') await page.goto('/settings#profile');
+  if (current.pathname !== '/settings') {
+    await page.goto('/settings#profile', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  }
   await page.locator('input[type="file"]').setInputFiles({ name: 'profile.png', mimeType: 'image/png', buffer: validPng });
   const response = page.waitForResponse(item => item.url().endsWith('/api/account/avatar/uploads') && item.request().method() === 'POST');
   await page.getByRole('button', { name: 'Upload photo' }).click();
@@ -161,7 +164,15 @@ test('profile name persists and unavailable managed avatar storage preserves the
   await expect(trigger.locator('.avatarFallback')).toHaveText('AT');
   await page.goto('/settings#profile');
   await page.getByLabel('Display name').fill('Avery Member');
+  const profileUpdate = page.waitForResponse(response => response.url().endsWith('/api/account/profile') && response.request().method() === 'PATCH');
   await page.getByRole('button', { name: 'Save name' }).click();
+  const updatedSession = await profileUpdate;
+  expect(updatedSession.ok(), await updatedSession.text()).toBeTruthy();
+  const updatedUser = await updatedSession.json() as { email: string; name: string; role: string; emailVerifiedAt?: string | null; onboardingCompletedAt?: string | null };
+  expect(updatedUser).toMatchObject({ email, name: 'Avery Member', role: 'BUYER' });
+  expect(updatedUser).toHaveProperty('emailVerifiedAt');
+  expect(updatedUser.onboardingCompletedAt).toBeTruthy();
+  await expect(page).toHaveURL(/\/settings(?:#profile)?$/);
   await expect(page.getByRole('button', { name: 'Avery Member, account menu' })).toBeVisible();
   await uploadAvatar(page);
   await expect(page.getByRole('alert')).toContainText('Managed private media storage is unavailable');
