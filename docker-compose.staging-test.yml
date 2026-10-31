@@ -1,0 +1,117 @@
+name: marketplace-staging-test
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    environment:
+      POSTGRES_USER: marketplace_test
+      POSTGRES_PASSWORD: local-only-disposable-password
+      POSTGRES_DB: ${STAGING_TEST_DB_NAME:-marketplace_container_e2e}
+    ports:
+      - "127.0.0.1:${STAGING_TEST_DB_PORT:-55439}:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketplace_test -d postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks: [marketplace-test]
+
+  api:
+    image: marketplace-staging-prep-api:local
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    environment:
+      NODE_ENV: production
+      API_PORT: "4000"
+      TRUST_PROXY_HOPS: "1"
+      DATABASE_URL: postgresql://marketplace_test:local-only-disposable-password@postgres:5432/${STAGING_TEST_DB_NAME:-marketplace_container_e2e}?schema=public
+      WEB_ORIGIN: http://127.0.0.1:${STAGING_TEST_WEB_PORT:-5174}
+      SITE_URL: http://127.0.0.1:${STAGING_TEST_WEB_PORT:-5174}
+      PASSWORD_PEPPER: ${STAGING_TEST_PASSWORD_PEPPER:-local-only-disposable-test-pepper-0123456789}
+      CONTENT_SCAN_REQUIRED: "true"
+      CONTENT_SCANNER_AVAILABLE: "false"
+      CONTENT_OBJECT_STORAGE_AVAILABLE: "false"
+      STORE_EMAIL_DELIVERY_AVAILABLE: "false"
+      STORE_BUSTER_SPONSORED_AVAILABLE: "false"
+      MONEY_MOVEMENT_HARD_DISABLED: "true"
+      WALLET_FUNDING_PROVIDER_READY: "false"
+      WALLET_FUNDING_SANDBOX_MODE: "false"
+      LIVE_SHOPPING_AVAILABLE: "false"
+      LIVE_RECORDING_STORAGE_AVAILABLE: "false"
+      LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE: "false"
+      FX_REFERENCE_FETCH_ENABLED: "false"
+      CONTENT_STORAGE_DIR: /tmp/content
+      UPLOAD_DIR: /tmp/uploads
+      TMPDIR: /tmp
+      NODE_OPTIONS: --require=/workspace/apps/api/runtime/safe-console.cjs
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 30s
+    ports:
+      - "127.0.0.1:${STAGING_TEST_API_PORT:-4001}:4000"
+    networks: [marketplace-test]
+
+  web:
+    image: marketplace-staging-prep-web:local
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      API_UPSTREAM: http://api:4000
+      DNS_RESOLVER: 127.0.0.11
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${STAGING_TEST_WEB_PORT:-5174}:8080"
+    networks: [marketplace-test]
+
+  migrator:
+    image: marketplace-staging-prep-migrator:local
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: migrator
+    environment:
+      DATABASE_URL: postgresql://marketplace_test:local-only-disposable-password@postgres:5432/${STAGING_TEST_DB_NAME:-marketplace_container_e2e}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: [migrations]
+    networks: [marketplace-test]
+
+  mailpit:
+    image: axllent/mailpit:v1.27.8@sha256:6abc8e633df15eaf785cfcf38bae48e66f64beecdc03121e249d0f9ec15f0707
+    profiles: [session-services]
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+    networks: [marketplace-test]
+
+  clamav:
+    image: clamav/clamav:1.5@sha256:bda39705e291105049c3936e2803ac90b955172af8030f94f05dce1252df6c6d
+    profiles: [session-services]
+    mem_limit: 4g
+    cpus: 1.5
+    networks: [marketplace-test]
+
+networks:
+  marketplace-test:
+    # The host-run Playwright process must connect through the loopback-only
+    # published PostgreSQL port. Production/Azure networks remain private.

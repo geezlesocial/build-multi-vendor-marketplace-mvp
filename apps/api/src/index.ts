@@ -83,6 +83,7 @@ import { providerCurrencyForMethod, createProviderChargeQuote, paymongoEventToVe
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', env.TRUST_PROXY_HOPS);
 app.use(helmet({ contentSecurityPolicy: { directives: { imgSrc: ["'self'", 'data:', 'https:', 'https://*.cjdropshipping.com', 'https://*.aliyuncs.com'], mediaSrc: ["'self'", 'https:'] } } }));
 app.use(cors({ origin: env.WEB_ORIGIN, credentials: true }));
 app.use(cookieParser());

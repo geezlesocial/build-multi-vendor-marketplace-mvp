@@ -1,0 +1,89 @@
+worker_processes auto;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    server_tokens off;
+    sendfile on;
+    tcp_nopush on;
+    keepalive_timeout 65;
+    client_max_body_size 60m;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+
+    # Deliberately omit query strings, cookies, authorization headers and bodies.
+    # Do not log request paths: preview, verification and unsubscribe tokens can live in paths.
+    log_format safe '$remote_addr [$time_iso8601] "$request_method $server_protocol" '
+                    '$status $body_bytes_sent $request_time $upstream_response_time $request_id';
+    access_log /dev/stdout safe;
+
+    map $http_x_forwarded_proto $marketplace_forwarded_proto {
+        default $http_x_forwarded_proto;
+        ''      $scheme;
+    }
+    map $http_x_forwarded_host $marketplace_forwarded_host {
+        default $http_x_forwarded_host;
+        ''      $host;
+    }
+    map $http_x_forwarded_port $marketplace_forwarded_port {
+        default $http_x_forwarded_port;
+        ''      $server_port;
+    }
+    map $http_x_forwarded_for $marketplace_forwarded_for {
+        default $http_x_forwarded_for;
+        ''      $remote_addr;
+    }
+
+    server {
+        listen 8080;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        resolver ${DNS_RESOLVER} valid=30s ipv6=off;
+        set $marketplace_api "${API_UPSTREAM}";
+
+        location = /healthz {
+            access_log off;
+            default_type text/plain;
+            return 200 "ok\n";
+        }
+
+        # API paths remain API responses and never fall through to React HTML.
+        location = /api { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location ^~ /api/ { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location = /health { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location = /ready { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location = /sitemap.xml { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location = /robots.txt { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location = /blog { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location ^~ /blog/ { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location = /pages { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location ^~ /pages/ { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location = /content-media { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location ^~ /content-media/ {
+            proxy_pass $marketplace_api;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            include /etc/marketplace/proxy-headers.conf;
+        }
+        location = /content-preview { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location ^~ /content-preview/ { proxy_pass $marketplace_api; include /etc/marketplace/proxy-headers.conf; }
+        location ~ ^/store/[^/]+/(blog|pages)/[^/]+/?$ {
+            proxy_pass $marketplace_api;
+            include /etc/marketplace/proxy-headers.conf;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+}

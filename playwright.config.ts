@@ -14,6 +14,7 @@ const e2eDatabaseURL = process.env.E2E_DATABASE_URL;
 validateE2EDatabaseURL(e2eDatabaseURL);
 const webServerEnv = {
   ...process.env,
+  API_PORT: String(e2eApiPort),
   DATABASE_URL: e2eDatabaseURL,
   E2E_DATABASE_URL: e2eDatabaseURL,
   E2E_API_RATE_LIMIT_OVERRIDE: 'true',
