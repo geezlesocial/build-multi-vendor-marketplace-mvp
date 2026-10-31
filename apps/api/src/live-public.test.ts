@@ -16,7 +16,23 @@ describe('public live-session serialization', () => {
     expect(result).not.toHaveProperty('providerStatus');
     expect(result).not.toHaveProperty('errorMessage');
     expect(result.seller).toEqual({ store: { name: 'Demo Store', slug: 'demo' } });
-    expect(result.products).toEqual([{ id: 'link-1', productId: 'product-1', sortOrder: 0, featured: true, product: { id: 'product-1', name: 'Tote', description: 'Canvas', priceMinor: 2400, salePriceMinor: null, currency: 'USD', availableStock: 4 } }]);
+    expect(result.products).toEqual([{ id: 'link-1', productId: 'product-1', sortOrder: 0, featured: true, shopFeatured: false, shopSortOrder: null, shopPinned: false, product: { id: 'product-1', name: 'Tote', description: 'Canvas', priceMinor: 2400, salePriceMinor: null, currency: 'USD', availableStock: 4 } }]);
+  });
+
+  it('exposes only the public shop-feature flags for tagged products', () => {
+    const result = publicLiveSession({
+      id: 'session-1',
+      products: [
+        { id: 'legacy', productId: 'product-legacy', sortOrder: 0, featured: false, shopFeatured: false, shopSortOrder: null, shopPinned: false },
+        { id: 'second', productId: 'product-second', sortOrder: 1, featured: false, shopFeatured: true, shopSortOrder: 0, shopPinned: false },
+        { id: 'pinned', productId: 'product-pinned', sortOrder: 2, featured: true, shopFeatured: true, shopSortOrder: 1, shopPinned: true, privateNote: 'must not leak' }
+      ]
+    });
+    expect(result.products).toEqual([
+      { id: 'pinned', productId: 'product-pinned', sortOrder: 2, featured: true, shopFeatured: true, shopSortOrder: 1, shopPinned: true },
+      { id: 'second', productId: 'product-second', sortOrder: 1, featured: false, shopFeatured: true, shopSortOrder: 0, shopPinned: false },
+      { id: 'legacy', productId: 'product-legacy', sortOrder: 0, featured: false, shopFeatured: false, shopSortOrder: null, shopPinned: false }
+    ]);
   });
 
   it('only exposes a secure, public HTTPS playback URL', () => {

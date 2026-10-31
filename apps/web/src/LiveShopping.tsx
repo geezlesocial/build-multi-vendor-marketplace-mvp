@@ -1,14 +1,19 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
 import { useSession } from './session.js';
 import { formatMinor } from './money.js';
+import { LiveSocialActions } from './LiveSocialActions.js';
 import './ProductReviews.css';
 import './LiveShopping.css';
+import './LiveSocial.css';
 
-type LiveProduct = { id: string; name: string; priceMinor?: number; currency?: string; availableStock?: number };
-export type LiveSession = { id: string; title: string; description?: string | null; status: string; scheduledAt?: string | null; startedAt?: string | null; recordingStatus?: string; replayPublishedAt?: string | null; replayAvailable?: boolean; replayUrl?: string; seller?: { store?: { name: string; slug?: string } | null }; products?: { productId: string; featured: boolean; product?: LiveProduct }[]; playbackAvailable?: boolean; realtimeAvailable?: boolean; playbackUrl?: string };
+type LiveProduct = { id: string; name: string; description?: string; priceMinor?: number; salePriceMinor?: number | null; currency?: string; availableStock?: number; inventory?: { quantity: number } | null; status?: string; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; images?: { id?: string; url: string; alt: string }[]; variants?: { id: string; name: string; priceMinor: number; currency: string; stock: number; imageUrl?: string | null }[] };
+type LiveCartLine = { id: string; quantity: number; variant?: { id: string; name: string; priceMinor: number; currency: string } | null; product: { id: string; name: string; priceMinor: number; salePriceMinor?: number | null; currency: string } };
+export type LiveSession = { id: string; title: string; description?: string | null; status: string; scheduledAt?: string | null; startedAt?: string | null; recordingStatus?: string; replayPublishedAt?: string | null; replayAvailable?: boolean; replayUrl?: string; seller?: { store?: { name: string; slug?: string } | null }; products?: { productId: string; featured: boolean; shopFeatured?: boolean; shopSortOrder?: number | null; shopPinned?: boolean; product?: LiveProduct }[]; playbackAvailable?: boolean; realtimeAvailable?: boolean; playbackUrl?: string };
 type Attendance = { attendance: { eligibleDurationSeconds: number; rewardedAt: string | null } | null; rewardThresholdSeconds: number };
-type Engagement = { viewCount: number; viewersNow: number | null; reactions: Record<'LIKE' | 'LOVE' | 'HAPPY' | 'CONGRATS', number>; myReaction: 'LIKE' | 'LOVE' | 'HAPPY' | 'CONGRATS' | null };
+type LiveReaction = 'LIKE' | 'LOVE' | 'HAPPY' | 'CONGRATS' | 'SMILE';
+type Engagement = { viewCount: number; viewersNow: number | null; reactions: Record<LiveReaction, number>; myReaction: LiveReaction | null };
+const emptyReactions: Record<LiveReaction, number> = { LIKE: 0, LOVE: 0, HAPPY: 0, CONGRATS: 0, SMILE: 0 };
 
 async function request<T>(path: string, options: RequestInit = {}) {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
@@ -65,7 +70,8 @@ function LiveReplayCard({ session }: { session: LiveSession }) {
     <p className="muted">{session.seller?.store?.name ?? 'Independent store'}{session.startedAt ? ` · Recorded ${new Date(session.startedAt).toLocaleString()}` : ''}</p>
     {session.description && <p>{session.description}</p>}
     {session.replayUrl && <video className="liveReplayPlayer" controls preload="metadata" playsInline src={session.replayUrl}>Your browser does not support replay video.</video>}
-    {!!session.products?.length && <div className="liveProductRail" aria-label="Products featured in this replay">{session.products.map(link => link.product && <a className="liveProductLink" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.featured ? 'Featured' : 'From this show'}</span><strong>{link.product.name}</strong><small>View product</small></a>)}</div>}
+    <LiveSocialActions sessionId={session.id} title={session.title} compact />
+    {!!session.products?.length && <div className="liveProductRail" aria-label="Products featured in this replay">{session.products.map(link => link.product && <a className="liveProductLink" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.shopFeatured ? link.shopPinned ? 'Featured during show' : 'Shop item' : link.featured ? 'Featured' : 'From this show'}</span><strong>{link.product.name}</strong><small>View product</small></a>)}</div>}
   </article>;
 }
 
@@ -119,7 +125,7 @@ function LiveSessionCard({ session, canEarn }: { session: LiveSession; canEarn: 
   return <article className="card adminReviewCard liveSessionCard">
     <div className="sectionHeading"><div><span className="adminWalletBadge">{session.status.replaceAll('_', ' ')}</span><h3>{session.title}</h3><p className="muted">{session.seller?.store?.name ?? 'Independent store'}{session.scheduledAt ? ` · ${new Date(session.scheduledAt).toLocaleString()}` : ''}</p></div><strong>{rewarded ? 'Reward earned' : `${Math.floor(duration / 60)} / ${Math.ceil(threshold / 60)} min`}</strong></div>
     {session.description && <p>{session.description}</p>}
-    {!!session.products?.length && <div className="liveProductRail" aria-label="Products featured in this show">{session.products.map(link => link.product && <a className="liveProductLink" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.featured ? 'Featured' : 'In this show'}</span><strong>{link.product.name}</strong>{typeof link.product.availableStock === 'number' && <small>{link.product.availableStock} available</small>}</a>)}</div>}
+    {!!session.products?.length && <div className="liveProductRail" aria-label="Products featured in this show">{session.products.map(link => link.product && <a className="liveProductLink" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.shopFeatured ? link.shopPinned ? 'Featured' : 'In this show' : link.featured ? 'Featured' : 'In this show'}</span><strong>{link.product.name}</strong>{typeof link.product.availableStock === 'number' && <small>{link.product.availableStock} available</small>}</a>)}</div>}
     {session.status === 'LIVE' && session.realtimeAvailable ? watching ? <><LiveKitViewer sessionId={session.id} onVideo={element => { video.current = element; }} onPlayback={active => { if (active) beginPlayback(); else pausePlayback(); }} onError={reason => { setPlaying(false); setError(reason); }} /><button type="button" className="liveRefreshButton" onClick={() => { setWatching(false); pausePlayback(); }}>Stop watching</button></> : <button type="button" className="liveInlinePreview" onClick={() => setWatching(true)}><span className="liveInlinePreviewMark" aria-hidden="true">▶</span><span><strong>Watch this live show</strong><small>Connect to the live stream when you are ready.</small></span><span className="liveInlinePreviewArrow" aria-hidden="true">↗</span></button> : <p className="muted">The session is not currently broadcasting with a playable provider stream.</p>}
     <progress max={100} value={percent} aria-label={`${percent}% of live attendance reward time`} />
     <small className="muted">{rewarded ? 'Attendance reward recorded.' : 'Five minutes of eligible playback are required. Paused, hidden-tab, and disconnected time does not count.'}</small>
@@ -127,7 +133,7 @@ function LiveSessionCard({ session, canEarn }: { session: LiveSession; canEarn: 
   </article>;
 }
 
-function LiveKitViewer({ sessionId, onVideo, onPlayback, onError, className = '' }: { sessionId: string; onVideo: (element: HTMLVideoElement) => void; onPlayback: (active: boolean) => void; onError: (message: string) => void; className?: string }) {
+export function LiveKitViewer({ sessionId, onVideo, onPlayback, onError, className = '' }: { sessionId: string; onVideo: (element: HTMLVideoElement) => void; onPlayback: (active: boolean) => void; onError: (message: string) => void; className?: string }) {
   const mount = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let room: Room | null = null;
@@ -146,6 +152,7 @@ function LiveKitViewer({ sessionId, onVideo, onPlayback, onError, className = ''
             element.autoplay = true;
             element.playsInline = true;
             element.muted = true;
+            element.controls = true;
             onVideo(element);
             element.onplaying = () => onPlayback(true);
             element.onpause = () => onPlayback(false);
@@ -167,7 +174,8 @@ const reactionOptions = [
   { key: 'LIKE', label: 'Like', emoji: '👍' },
   { key: 'LOVE', label: 'Love', emoji: '❤️' },
   { key: 'HAPPY', label: 'Happy', emoji: '😊' },
-  { key: 'CONGRATS', label: 'Congrats', emoji: '🎉' }
+  { key: 'CONGRATS', label: 'Congrats', emoji: '🎉' },
+  { key: 'SMILE', label: 'Smile', emoji: '😄' }
 ] as const;
 
 export function LiveWatchModal({ sessions, onClose, canEarn, canReact }: { sessions: LiveSession[]; onClose: () => void; canEarn: boolean; canReact: boolean }) {
@@ -185,8 +193,12 @@ export function LiveWatchModal({ sessions, onClose, canEarn, canReact }: { sessi
 
   useEffect(() => {
     const handleKeys = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        if (document.querySelector('.liveProductDialog, .liveEmbedDialog')) return;
+        onClose();
+      }
       if (event.key === 'Tab') {
+        if (document.querySelector('.liveProductDialog, .liveEmbedDialog')) return;
         const focusable = Array.from(document.querySelectorAll<HTMLElement>('.liveWatchOverlay button:not(:disabled), .liveWatchOverlay a[href]'));
         if (!focusable.length) return;
         const first = focusable[0];
@@ -242,15 +254,48 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
   const video = useRef<HTMLVideoElement>(null);
   const heartbeatQueue = useRef<Promise<void>>(Promise.resolve());
   const viewed = useRef(false);
+  const [liveSession, setLiveSession] = useState(session);
   const [playing, setPlaying] = useState(false);
   const [engagement, setEngagement] = useState<Engagement | null>(null);
   const [message, setMessage] = useState('');
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [reactionPending, setReactionPending] = useState(false);
   const [attendance, setAttendance] = useState<Attendance | null>(null);
   const [playbackError, setPlaybackError] = useState('');
+  const closeProductDialog = useCallback(() => setSelectedProductId(null), []);
   const duration = attendance?.attendance?.eligibleDurationSeconds ?? 0;
   const threshold = attendance?.rewardThresholdSeconds ?? 300;
   const rewarded = Boolean(attendance?.attendance?.rewardedAt);
+
+  useEffect(() => { setLiveSession(session); }, [session]);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    let mounted = true;
+    let pending = false;
+    const refreshProducts = async () => {
+      if (pending || document.visibilityState !== 'visible') return;
+      pending = true;
+      try {
+        const current = await request<LiveSession>(`/api/live-sessions/${encodeURIComponent(session.id)}`);
+        if (!mounted || !current.products) return;
+        setLiveSession(previous => JSON.stringify(previous.products) === JSON.stringify(current.products)
+          ? previous
+          : { ...previous, products: current.products });
+      } catch { /* The initial shelf remains usable when a background refresh fails. */ }
+      finally { pending = false; }
+    };
+    const timer = window.setInterval(() => void refreshProducts(), 10_000);
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshProducts(); };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    window.addEventListener('focus', refreshWhenVisible);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      window.removeEventListener('focus', refreshWhenVisible);
+    };
+  }, [active, session.id]);
 
   const heartbeat = useCallback((isPlaying: boolean) => {
     if (!canEarn) return;
@@ -270,12 +315,28 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
     } catch (error) { setMessage((error as Error).message); }
   }, [session.id]);
 
+  const updateReactionCounts = useCallback((event: Event) => {
+    try {
+      const payload = JSON.parse((event as MessageEvent<string>).data) as { counts?: Partial<Record<LiveReaction, number>> };
+      if (!payload.counts) return;
+      setEngagement(current => ({
+        viewCount: current?.viewCount ?? 0,
+        viewersNow: current?.viewersNow ?? null,
+        reactions: { ...emptyReactions, ...current?.reactions, ...payload.counts },
+        myReaction: current?.myReaction ?? null
+      }));
+    } catch { /* Ignore malformed event data; the regular status poll remains available. */ }
+  }, []);
+
   useEffect(() => {
     if (!active || document.visibilityState !== 'visible') return undefined;
     void refreshEngagement();
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refreshEngagement(); }, 10_000);
-    return () => window.clearInterval(timer);
-  }, [active, refreshEngagement, session.id]);
+    const events = new EventSource(`/api/live-sessions/${encodeURIComponent(session.id)}/engagement/events`, { withCredentials: true });
+    events.addEventListener('engagement', updateReactionCounts);
+    events.onopen = () => { if (document.visibilityState === 'visible') void refreshEngagement(); };
+    return () => { window.clearInterval(timer); events.removeEventListener('engagement', updateReactionCounts); events.close(); };
+  }, [active, refreshEngagement, session.id, updateReactionCounts]);
 
   useEffect(() => {
     if (!active || !playing || document.visibilityState !== 'visible' || viewed.current) return undefined;
@@ -283,7 +344,7 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
     void request<{ viewCount: number }>(`/api/live-sessions/${encodeURIComponent(session.id)}/view`, { method: 'POST', body: '{}' }).then(result => {
       if (!current) return;
       viewed.current = true;
-      setEngagement(value => ({ viewCount: Math.max(result.viewCount, value?.viewCount ?? 0), viewersNow: value?.viewersNow ?? null, reactions: value?.reactions ?? { LIKE: 0, LOVE: 0, HAPPY: 0, CONGRATS: 0 }, myReaction: value?.myReaction ?? null }));
+      setEngagement(value => ({ viewCount: Math.max(result.viewCount, value?.viewCount ?? 0), viewersNow: value?.viewersNow ?? null, reactions: value?.reactions ?? emptyReactions, myReaction: value?.myReaction ?? null }));
     }).catch(() => undefined);
     return () => { current = false; };
   }, [active, playing, session.id]);
@@ -310,7 +371,7 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', visibility); void heartbeat(false); };
   }, [active, playing, canEarn, heartbeat]);
 
-  const changeReaction = async (reaction: Engagement['myReaction'] | 'LIKE' | 'LOVE' | 'HAPPY' | 'CONGRATS') => {
+  const changeReaction = async (reaction: LiveReaction) => {
     if (!canReact || reactionPending) return;
     setReactionPending(true);
     setMessage('');
@@ -324,6 +385,11 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
 
   const storeName = session.seller?.store?.name ?? 'Independent store';
   const storeSlug = session.seller?.store?.slug;
+  const linkedProducts = liveSession.products ?? [];
+  const legacyProductFlags = linkedProducts.length > 0 && linkedProducts.every(link => link.shopFeatured === undefined);
+  const activeShopProducts = linkedProducts.filter(link => legacyProductFlags ? link.featured : link.shopFeatured === true).slice(0, 6);
+  const activeShopProductIds = new Set(activeShopProducts.map(link => link.productId));
+  const historicalProducts = linkedProducts.filter(link => !activeShopProductIds.has(link.productId));
   return <article className="liveWatchSlide" aria-label={`${session.title}, ${storeName}`}>
     <div className="liveWatchVideo">
       {active ? <LiveKitViewer sessionId={session.id} className="liveWatchMount" onVideo={element => { video.current = element; }} onPlayback={value => { setPlaying(value); if (value) void heartbeat(true); else void heartbeat(false); }} onError={reason => { setPlaybackError(reason); setPlaying(false); void heartbeat(false); }} /> : <div className="liveWatchStandby" aria-hidden="true"><span>LIVE</span></div>}
@@ -337,14 +403,159 @@ function LiveWatchSlide({ session, active, canEarn, canReact }: { session: LiveS
     </div>
     <div className="liveWatchInfo">
       <div className="liveWatchInfoHeading"><strong>{storeName}</strong><span>{engagement?.viewCount ?? 0} views</span></div>
-      {!!session.products?.length && <div className="liveWatchProducts" aria-label="Shop products in this live show">{session.products.map(link => link.product && <a className="liveWatchProduct" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.featured ? 'Featured now' : 'From this show'}</span><strong>{link.product.name}</strong><small>{typeof link.product.priceMinor === 'number' && link.product.currency ? formatMinor(link.product.priceMinor, link.product.currency) : 'View item'} · Shop item</small></a>)}</div>}
+      <LiveSocialActions sessionId={session.id} title={session.title} />
+      {!!activeShopProducts.length && <div className="liveWatchProducts" aria-label="Shop products in this live show">{activeShopProducts.map(link => link.product && <button className="liveWatchProduct liveWatchProductAction" key={link.productId} type="button" onClick={() => setSelectedProductId(link.productId)}><span>{link.shopFeatured ? link.shopPinned ? 'Featured now' : 'Shop this item' : 'Featured now'}</span><strong>{link.product.name}</strong><small>{typeof link.product.priceMinor === 'number' && link.product.currency ? formatMinor(link.product.salePriceMinor ?? link.product.priceMinor, link.product.currency) : 'See current price'} · Tap for item details</small></button>)}</div>}
+      {!!historicalProducts.length && <section className="liveWatchHistory" aria-label="Previously linked products"><h3>Previously linked products</h3><div className="liveWatchProducts">{historicalProducts.map(link => link.product && <a className="liveWatchProduct" key={link.productId} href={`/products/${encodeURIComponent(link.product.id)}`}><span>{link.featured ? 'Previously featured' : 'From this show'}</span><strong>{link.product.name}</strong><small>View product</small></a>)}</div></section>}
       {canEarn && <div className="liveWatchAttendance"><span>{rewarded ? 'Live attendance reward earned' : `Attendance ${Math.floor(duration / 60)} / ${Math.ceil(threshold / 60)} min`}</span><progress max={threshold} value={Math.min(duration, threshold)} aria-label="Live attendance reward progress" /></div>}
       {!canReact && <p className="liveWatchHint"><a href="/?auth=login">Sign in</a> to react and join the conversation.{!canEarn && ' Verify your email to qualify for attendance rewards.'}</p>}
       {canReact && !canEarn && <p className="liveWatchHint">Verify your email in <a href="/settings#profile">account settings</a> to qualify for live attendance rewards.</p>}
       {playbackError && <p className="liveWatchMessage" role="status">{playbackError}</p>}
       {message && <p className="liveWatchMessage" role="status">{message}</p>}
     </div>
+    {selectedProductId && <ShoppableProductDialog sessionId={session.id} productId={selectedProductId} onClose={closeProductDialog} />}
   </article>;
+}
+
+function ShoppableProductDialog({ sessionId, productId, onClose }: { sessionId: string; productId: string; onClose: () => void }) {
+  const { user } = useSession();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const [product, setProduct] = useState<LiveProduct | null>(null);
+  const [variantId, setVariantId] = useState('');
+  const [quantity, setQuantity] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [cartReviewOpen, setCartReviewOpen] = useState(false);
+  const [cartReviewItems, setCartReviewItems] = useState<LiveCartLine[]>([]);
+  const [cartReviewSelection, setCartReviewSelection] = useState<string | null>(null);
+  const checkoutFrameRef = useRef<HTMLIFrameElement>(null);
+  const productCloseRef = useRef<HTMLButtonElement>(null);
+  const checkoutWasOpen = useRef(false);
+  const variants = product?.variants ?? [];
+  const variant = variants.find(item => item.id === variantId) ?? null;
+  const stock = variant?.stock ?? product?.availableStock ?? 0;
+  const minimumQuantity = product?.wholesaleEnabled ? Math.max(1, product.wholesaleMinQuantity ?? 1) : 1;
+  const maximumQuantity = Math.min(99, stock, product?.wholesaleEnabled ? product.wholesaleMaxQuantity ?? 99 : 99);
+  const unitPrice = variant?.priceMinor ?? product?.salePriceMinor ?? product?.priceMinor ?? 0;
+  const currency = variant?.currency ?? product?.currency ?? 'USD';
+  const selectedCartKey = `${product?.id ?? ''}:${variantId}:${quantity}`;
+
+  useEffect(() => {
+    let current = true;
+    setLoading(true); setError('');
+    void request<LiveProduct>(`/api/live-sessions/${encodeURIComponent(sessionId)}/products/${encodeURIComponent(productId)}`)
+      .then(value => {
+        if (!current) return;
+        setProduct(value);
+        setVariantId(value.variants?.[0]?.id ?? '');
+        setQuantity(Math.max(1, value.wholesaleEnabled ? value.wholesaleMinQuantity ?? 1 : 1));
+      })
+      .catch(reason => { if (current) setError((reason as Error).message); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [sessionId, productId]);
+
+  useEffect(() => {
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], iframe[title]'));
+      if (!focusable.length) return;
+      if (event.shiftKey && document.activeElement === focusable[0]) { event.preventDefault(); focusable.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === focusable.at(-1)) { event.preventDefault(); focusable[0]?.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', onKeyDown); previousFocus.current?.focus(); };
+  }, [onClose]);
+
+  useEffect(() => {
+    if (checkoutOpen) {
+      checkoutWasOpen.current = true;
+      checkoutFrameRef.current?.focus();
+    } else if (checkoutWasOpen.current) {
+      checkoutWasOpen.current = false;
+      productCloseRef.current?.focus();
+    }
+  }, [checkoutOpen]);
+
+  const addToCart = async (reviewFullCart = false) => {
+    if (!product || !user || busy) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      if (reviewFullCart && cartReviewSelection !== selectedCartKey) {
+        await request('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId: product.id, ...(variantId ? { variantId } : {}), quantity }) });
+        window.dispatchEvent(new Event('marketplace:cart-changed'));
+        // Do not add the item again if loading the cart summary fails and the
+        // buyer retries. The server cart remains authoritative and untouched.
+        setCartReviewSelection(selectedCartKey);
+      } else if (!reviewFullCart) {
+        await request('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId: product.id, ...(variantId ? { variantId } : {}), quantity }) });
+        window.dispatchEvent(new Event('marketplace:cart-changed'));
+        setMessage('Added to your cart. Keep watching or add another item.');
+        return;
+      }
+      if (reviewFullCart) {
+        const cart = await request<{ items: LiveCartLine[] }>('/api/cart');
+        if (!cart.items.length) throw new Error('Your cart is empty. No checkout was opened.');
+        setCartReviewItems(cart.items);
+        setCartReviewOpen(true);
+      } else {
+        setMessage('Added to your cart.');
+      }
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally { setBusy(false); }
+  };
+
+  return <div className="liveProductBackdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className={checkoutOpen ? 'liveProductDialog checkoutOpen' : cartReviewOpen ? 'liveProductDialog cartReviewOpen' : 'liveProductDialog'} role="dialog" aria-modal="true" aria-labelledby={checkoutOpen ? 'live-checkout-dialog-title' : cartReviewOpen ? 'live-cart-review-title' : 'live-product-dialog-title'} aria-describedby={checkoutOpen ? 'live-checkout-dialog-help' : cartReviewOpen ? 'live-cart-review-help' : 'live-product-dialog-help'} ref={dialogRef}>
+      <button type="button" className="liveProductDialogClose" onClick={onClose} aria-label={checkoutOpen ? 'Close checkout and return to live show' : cartReviewOpen ? 'Close cart review and return to live show' : 'Close product details'} ref={productCloseRef}>×</button>
+      {cartReviewOpen ? <div className="liveCartReview">
+        <header><div><p className="eyebrow">Before checkout</p><h3 id="live-cart-review-title">Review your full cart</h3><p id="live-cart-review-help">This checkout includes every item listed below, including items that were already in your cart. Nothing has been removed and no order has been placed.</p></div></header>
+        <ul aria-label="All items included in checkout">{cartReviewItems.map(item => {
+          const unitPrice = item.variant?.priceMinor ?? item.product.salePriceMinor ?? item.product.priceMinor;
+          const currency = item.variant?.currency ?? item.product.currency;
+          return <li key={item.id}><span><strong>{item.quantity} × {item.product.name}</strong>{item.variant && <small>Option: {item.variant.name}</small>}</span><strong>{formatMinor(unitPrice * item.quantity, currency)}</strong></li>;
+        })}</ul>
+        <div className="liveCartReviewTotals"><strong>Merchandise subtotal</strong>{Array.from(cartReviewItems.reduce((totals, item) => {
+          const currency = item.variant?.currency ?? item.product.currency;
+          const unitPrice = item.variant?.priceMinor ?? item.product.salePriceMinor ?? item.product.priceMinor;
+          totals.set(currency, (totals.get(currency) ?? 0) + unitPrice * item.quantity);
+          return totals;
+        }, new Map<string, number>())).map(([currency, total]) => <strong key={currency}>{formatMinor(total, currency)}</strong>)}</div>
+        <p>Shipping and applicable discounts are calculated in checkout. Review the final order total there before selecting Place order. Your live show stays open.</p>
+        {error && <p role="alert" className="notice">{error}</p>}
+        <div className="liveProductDialogActions"><button type="button" onClick={() => { setCartReviewOpen(false); setError(''); }}>Back to item</button><button type="button" className="primary" onClick={() => { setCartReviewOpen(false); setCheckoutOpen(true); }}>Continue with all cart items</button></div>
+      </div> : checkoutOpen ? <div className="liveProductCheckout">
+        <header><div><p className="eyebrow">Secure marketplace checkout</p><h3 id="live-checkout-dialog-title">Complete your order</h3><p id="live-checkout-dialog-help">Your live show continues behind this checkout. Shipping, stock, and payment rules are validated by the marketplace.</p></div><button type="button" onClick={() => setCheckoutOpen(false)}>Back to product</button></header>
+        <iframe ref={checkoutFrameRef} title="Secure checkout while watching live shopping" src="/checkout?source=live-shopping&embed=1" loading="eager" />
+        <a href="/checkout?source=live-shopping" target="_blank" rel="noopener noreferrer">Open checkout in a separate tab</a>
+      </div> : loading ? <p role="status" className="liveProductDialogLoading">Loading current product details…</p> : error && !product ? <div><h3 id="live-product-dialog-title">Product unavailable</h3><p className="notice" role="alert">{error}</p><button type="button" onClick={onClose}>Close</button></div> : product && <>
+        <div className="liveProductDialogMedia">{product.images?.[0] ? <img src={product.images[0].url} alt={product.images[0].alt || product.name} /> : <span aria-hidden="true">{product.name.slice(0, 1)}</span>}</div>
+        <div className="liveProductDialogContent">
+          <p className="eyebrow">Featured on this live show</p>
+          <h3 id="live-product-dialog-title">{product.name}</h3>
+          <p>{product.description}</p>
+          <strong className="liveProductDialogPrice">{formatMinor(unitPrice, currency)}</strong>
+          <span className={stock > 0 ? 'liveProductStock' : 'liveProductStock unavailable'}>{stock > 0 ? `${stock} available` : 'Currently out of stock'}</span>
+          {variants.length > 0 && <label>Choose an option<select value={variantId} onChange={event => { setVariantId(event.target.value); setQuantity(Math.max(1, minimumQuantity)); }}><option value="">Choose a variant</option>{variants.map(item => <option key={item.id} value={item.id} disabled={item.stock < 1}>{item.name} · {formatMinor(item.priceMinor, item.currency)} · {item.stock} available</option>)}</select></label>}
+          <label>Quantity<input type="number" min={minimumQuantity} max={Math.max(0, maximumQuantity)} value={quantity} disabled={maximumQuantity < minimumQuantity} onChange={event => setQuantity(Math.max(minimumQuantity, Math.min(maximumQuantity, Number(event.target.value) || minimumQuantity)))} /></label>
+          {product.wholesaleEnabled && <small>Wholesale orders require {minimumQuantity}–{product.wholesaleMaxQuantity ?? 99} units.</small>}
+          <small id="live-product-dialog-help">Availability and price are checked again by the marketplace when you add this item. Checkout keeps existing shipping and payment rules.</small>
+          {user ? <div className="liveProductDialogActions"><button type="button" disabled={busy || stock < minimumQuantity || quantity < minimumQuantity || (variants.length > 0 && !variantId)} onClick={() => void addToCart(false)}>{busy ? 'Adding…' : 'Add to cart'}</button><button type="button" className="primary" disabled={busy || stock < minimumQuantity || quantity < minimumQuantity || (variants.length > 0 && !variantId)} onClick={() => void addToCart(true)}>{busy ? 'Preparing…' : cartReviewSelection === selectedCartKey ? 'Review full cart' : 'Add & review full cart'}</button></div> : <a className="primary liveProductSignIn" href="/?auth=login" target="_blank" rel="noopener noreferrer">Sign in to shop</a>}
+          {message && <p role="status" className="liveProductDialogMessage">{message}</p>}
+          {error && <p role="alert" className="notice">{error}</p>}
+        </div>
+      </>}
+    </section>
+  </div>;
 }
 
 function LiveKitHost({ sessionId, onPublished, onError }: { sessionId: string; onPublished: (published: boolean) => void; onError: (message: string) => void }) {
@@ -379,7 +590,7 @@ function LiveKitHost({ sessionId, onPublished, onError }: { sessionId: string; o
 type LiveReadiness = { effectiveEnabled: boolean; deploymentGate: boolean; runtimeEnabled: boolean; reason: string; recordingAvailable?: boolean; recordingStorageConfigured?: boolean; readiness: { provider: string | null; configured: boolean; healthy: boolean; attendanceVerificationAvailable: boolean; reason: string } };
 type LiveProviderConfiguration = { provider: 'LIVEKIT'; configured: boolean; serverUrl: string | null; apiKeyConfigured: boolean; apiSecretConfigured: boolean; apiKeyMasked: string | null; deploymentGateEnabled: boolean; source: 'ADMIN_DASHBOARD' | 'DEPLOYMENT_ENVIRONMENT' | 'NOT_CONFIGURED'; configurationError: string | null };
 type AdminLiveProvider = { configuration: LiveProviderConfiguration; readiness: LiveReadiness['readiness'] };
-type SellerLiveSession = LiveSession & { scheduledAt: string | null; timezone: string; deletedAt?: string | null; products: { productId: string; featured: boolean; product?: LiveProduct }[] };
+type SellerLiveSession = LiveSession & { scheduledAt: string | null; timezone: string; deletedAt?: string | null; products: { productId: string; featured: boolean; shopFeatured?: boolean; shopSortOrder?: number | null; shopPinned?: boolean; product?: LiveProduct }[] };
 
 export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
   const [sessions, setSessions] = useState<SellerLiveSession[]>([]);
@@ -393,6 +604,7 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
   const [description, setDescription] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [productIds, setProductIds] = useState<string[]>([]);
+  const [featuredProductId, setFeaturedProductId] = useState('');
   const inFlight = useRef(false);
   const load = useCallback(async () => {
     if (inFlight.current || document.visibilityState !== 'visible') return;
@@ -425,9 +637,10 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
     try {
       await request('/api/seller/live-sessions', { method: 'POST', body: JSON.stringify({
         title, description, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-        ...(scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {}), productIds
+        ...(scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {}), productIds,
+        ...(featuredProductId ? { featuredProductId } : {})
       }) });
-      setTitle(''); setDescription(''); setScheduledAt(''); setProductIds([]);
+      setTitle(''); setDescription(''); setScheduledAt(''); setProductIds([]); setFeaturedProductId('');
       setMessage('Show saved. It will appear publicly after live shopping is enabled and the stream provider is ready.');
       await load();
     } catch (error) { setMessage((error as Error).message); }
@@ -443,6 +656,17 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
         scheduledAt: input.scheduledAt ? new Date(input.scheduledAt).toISOString() : null
       }) });
       setMessage('Show details saved.'); await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const updateShopProducts = async (sessionId: string, input: { productIds: string[]; featuredProductId: string | null }) => {
+    if (saving) return;
+    setSaving(true); setMessage('');
+    try {
+      await request(`/api/seller/live-sessions/${encodeURIComponent(sessionId)}/products`, { method: 'PATCH', body: JSON.stringify(input) });
+      setMessage('Live shopping products saved. Existing historical product links were preserved.');
+      await load();
     } catch (error) { setMessage((error as Error).message); }
     finally { setSaving(false); }
   };
@@ -522,7 +746,7 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
       <label>Show title<input required minLength={3} maxLength={160} value={title} onChange={event => setTitle(event.target.value)} /></label>
       <label>Description<textarea maxLength={5000} rows={3} value={description} onChange={event => setDescription(event.target.value)} /></label>
       <label>Schedule (your local time)<input type="datetime-local" value={scheduledAt} onChange={event => setScheduledAt(event.target.value)} /><small>Leave blank to save as a draft. Scheduled shows remain private until live shopping is enabled.</small></label>
-      <label>Featured products<select multiple size={Math.min(6, Math.max(3, products.length))} value={productIds} onChange={event => setProductIds(Array.from(event.currentTarget.selectedOptions, option => option.value))}>{products.filter(product => (product as LiveProduct & { status?: string }).status === 'APPROVED').map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select><small>Only approved products from your Store are listed. Use Ctrl/Cmd to select multiple items.</small></label>
+      <ProductTagPicker products={products} productIds={productIds} featuredProductId={featuredProductId} onProductIdsChange={next => { setProductIds(next); setFeaturedProductId(current => next.includes(current) ? current : next[0] ?? ''); }} onFeaturedProductChange={setFeaturedProductId} disabled={saving} />
       <button className="primary" disabled={saving}>{saving ? 'Saving show…' : 'Save draft or schedule'}</button>
     </form>
     <div className="liveSessionListHeading"><h3>{showDeleted ? 'Deleted shows' : 'Your shows'}</h3><div className="liveShowListActions"><span>{showDeleted ? deletedSessions.length : sessions.length} total</span><button type="button" onClick={() => setShowDeleted(value => !value)}>{showDeleted ? 'Back to your shows' : `Deleted shows (${deletedSessions.length})`}</button></div></div>
@@ -530,13 +754,71 @@ export function SellerLiveStudio({ products }: { products: LiveProduct[] }) {
     {loading && <div className="empty" role="status">Loading your shows…</div>}
     {!loading && !showDeleted && sessions.length === 0 && <div className="empty">No shows yet. Create a draft or add a schedule above.</div>}
     {!loading && showDeleted && deletedSessions.length === 0 && <div className="empty">Deleted shows appear here and can be restored.</div>}
-    <div className="liveSellerSessionList">{(showDeleted ? deletedSessions : sessions).map(session => <SellerSessionCard key={session.id} session={session} saving={saving} onSave={updateSession} onCancel={cancelSession} onRefresh={load} providerReady={providerReady} onReplayChange={setReplayPublished} onReplayDelete={deleteReplay} onShowPublish={setShowPublished} onShowDelete={deleteShow} onRestore={restoreShow} archived={showDeleted} />)}</div>
+    <div className="liveSellerSessionList">{(showDeleted ? deletedSessions : sessions).map(session => <SellerSessionCard key={session.id} session={session} products={products} saving={saving} onSave={updateSession} onSaveProducts={updateShopProducts} onCancel={cancelSession} onRefresh={load} providerReady={providerReady} onReplayChange={setReplayPublished} onReplayDelete={deleteReplay} onShowPublish={setShowPublished} onShowDelete={deleteShow} onRestore={restoreShow} archived={showDeleted} />)}</div>
   </section>;
 }
 
-function SellerSessionCard({ session, saving, onSave, onCancel, onRefresh, providerReady, onReplayChange, onReplayDelete, onShowPublish, onShowDelete, onRestore, archived }: {
-  session: SellerLiveSession; saving: boolean;
+function ProductTagPicker({ products, productIds, featuredProductId, onProductIdsChange, onFeaturedProductChange, disabled = false }: {
+  products: LiveProduct[];
+  productIds: string[];
+  featuredProductId: string;
+  onProductIdsChange: (productIds: string[]) => void;
+  onFeaturedProductChange: (productId: string) => void;
+  disabled?: boolean;
+}) {
+  const radioGroup = useId();
+  const [limitMessage, setLimitMessage] = useState('');
+  const [search, setSearch] = useState('');
+  const approvedProducts = products.filter(product => product.status === 'APPROVED');
+  const visibleProducts = approvedProducts.filter(product => product.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
+  const toggle = (productId: string, checked: boolean) => {
+    setLimitMessage('');
+    if (checked && productIds.length >= 6) {
+      setLimitMessage('A show can feature up to six products. Remove one before adding another.');
+      return;
+    }
+    const next = checked ? [...productIds, productId] : productIds.filter(id => id !== productId);
+    onProductIdsChange(next);
+    if (checked && productIds.length === 0) onFeaturedProductChange(productId);
+  };
+  const move = (productId: string, direction: -1 | 1) => {
+    const from = productIds.indexOf(productId);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= productIds.length) return;
+    const next = [...productIds];
+    [next[from], next[to]] = [next[to]!, next[from]!];
+    onProductIdsChange(next);
+  };
+  return <fieldset className="liveProductTagPicker" disabled={disabled}>
+    <legend>Featured products · {productIds.length}/6</legend>
+    <p className="muted">Select up to six approved products from your Store. Selection order controls the live shelf; the pinned item is highlighted first.</p>
+    {approvedProducts.length > 0 && <label className="liveProductTagSearch">Search your products<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search by product name" autoComplete="off" /></label>}
+    {visibleProducts.length ? <div className="liveProductTagChoices">{visibleProducts.map(product => {
+      const selectedIndex = productIds.indexOf(product.id);
+      const selected = selectedIndex >= 0;
+      const availableStock = product.availableStock ?? product.inventory?.quantity;
+      return <div className={selected ? 'liveProductTagChoice selected' : 'liveProductTagChoice'} key={product.id}>
+        <label className="liveProductTagSelect"><input type="checkbox" aria-label={`Feature ${product.name}`} checked={selected} onChange={event => toggle(product.id, event.currentTarget.checked)} />
+          {product.images?.[0]?.url ? <img src={product.images[0].url} alt={product.images[0].alt || ''} loading="lazy" /> : <span className="liveProductTagPlaceholder" aria-hidden="true">{product.name.slice(0, 1)}</span>}
+          <span className="liveProductTagDetails"><strong>{product.name}</strong><small>{typeof product.priceMinor === 'number' && product.currency ? formatMinor(product.salePriceMinor ?? product.priceMinor, product.currency) : 'Price unavailable'}</small><small>{typeof availableStock === 'number' ? `${availableStock} available` : 'Availability checked at checkout'}</small></span>
+        </label>
+        {selected && <div className="liveProductTagOrder">
+          <span>#{selectedIndex + 1}</span>
+          <button type="button" aria-label={`Move ${product.name} earlier`} disabled={disabled || selectedIndex === 0} onClick={() => move(product.id, -1)}>↑</button>
+          <button type="button" aria-label={`Move ${product.name} later`} disabled={disabled || selectedIndex === productIds.length - 1} onClick={() => move(product.id, 1)}>↓</button>
+          <label className="liveProductTagPin"><input type="radio" name={radioGroup} checked={featuredProductId === product.id} onChange={() => onFeaturedProductChange(product.id)} /> Pin</label>
+        </div>}
+      </div>;
+    })}</div> : approvedProducts.length > 0 ? <div className="empty">No approved products match that search.</div> : <div className="empty">No approved products are available to feature yet.</div>}
+    <small>Older product links remain preserved in show history and are not removed when this shelf changes.</small>
+    {limitMessage && <small className="liveProductTagLimit" role="status">{limitMessage}</small>}
+  </fieldset>;
+}
+
+function SellerSessionCard({ session, products, saving, onSave, onSaveProducts, onCancel, onRefresh, providerReady, onReplayChange, onReplayDelete, onShowPublish, onShowDelete, onRestore, archived }: {
+  session: SellerLiveSession; products: LiveProduct[]; saving: boolean;
   onSave: (sessionId: string, input: { title: string; description: string; scheduledAt: string }) => Promise<void>;
+  onSaveProducts: (sessionId: string, input: { productIds: string[]; featuredProductId: string | null }) => Promise<void>;
   onCancel: (session: SellerLiveSession) => Promise<void>; onRefresh: () => Promise<void>; providerReady: boolean;
   onReplayChange: (session: SellerLiveSession, published: boolean) => Promise<void>; onReplayDelete: (session: SellerLiveSession) => Promise<void>;
   onShowPublish: (session: SellerLiveSession, published: boolean) => Promise<void>; onShowDelete: (session: SellerLiveSession) => Promise<void>;
@@ -545,11 +827,20 @@ function SellerSessionCard({ session, saving, onSave, onCancel, onRefresh, provi
   const [title, setTitle] = useState(session.title);
   const [description, setDescription] = useState(session.description ?? '');
   const [scheduledAt, setScheduledAt] = useState(toLocalDateTime(session.scheduledAt));
+  const [shopProductIds, setShopProductIds] = useState<string[]>([]);
+  const [featuredShopProductId, setFeaturedShopProductId] = useState('');
   const [broadcastBusy, setBroadcastBusy] = useState(false);
   const [hostPublished, setHostPublished] = useState(false);
   const [hostError, setHostError] = useState('');
-  useEffect(() => { setTitle(session.title); setDescription(session.description ?? ''); setScheduledAt(toLocalDateTime(session.scheduledAt)); }, [session]);
+  const shopProductSignature = [...session.products].filter(link => link.shopFeatured).sort((a, b) => (a.shopSortOrder ?? 0) - (b.shopSortOrder ?? 0)).map(link => `${link.productId},${link.shopPinned ? '1' : '0'}`).join('|');
+  useEffect(() => { setTitle(session.title); setDescription(session.description ?? ''); setScheduledAt(toLocalDateTime(session.scheduledAt)); }, [session.id, session.title, session.description, session.scheduledAt]);
+  useEffect(() => {
+    const serverProducts = shopProductSignature.split('|').filter(Boolean).map(entry => { const [productId, featured] = entry.split(','); return { productId: productId ?? '', featured: featured === '1' }; });
+    setShopProductIds(serverProducts.map(link => link.productId));
+    setFeaturedShopProductId(serverProducts.find(link => link.featured)?.productId ?? serverProducts[0]?.productId ?? '');
+  }, [session.id, shopProductSignature]);
   const editable = !archived && (session.status === 'DRAFT' || session.status === 'SCHEDULED');
+  const canManageShop = !archived && ['DRAFT', 'SCHEDULED', 'STARTING', 'LIVE', 'PAUSED'].includes(session.status);
   const canDelete = !['STARTING', 'LIVE', 'PAUSED'].includes(session.status) && !['STARTING', 'RECORDING', 'PROCESSING'].includes(session.recordingStatus ?? 'NOT_CONFIGURED');
   const canPublish = Boolean(session.scheduledAt && new Date(session.scheduledAt).getTime() > Date.now());
   const transition = async (status: 'STARTING' | 'LIVE' | 'ENDED') => {
@@ -571,7 +862,8 @@ function SellerSessionCard({ session, saving, onSave, onCancel, onRefresh, provi
         {canDelete && <button type="button" className="liveDeleteShowButton" disabled={saving || broadcastBusy} onClick={() => void onShowDelete(session)}>Delete show</button>}
       </>}
     </div></header>
-    {!!session.products.length && <ul className="liveLinkedProducts">{session.products.map(link => <li key={link.productId}>{link.featured ? 'Featured: ' : ''}{link.product?.name ?? 'Product'}</li>)}</ul>}
+    {!!session.products.length && <ul className="liveLinkedProducts">{session.products.map(link => <li key={link.productId}>{link.shopFeatured ? 'Shop shelf: ' : link.featured ? 'Historical feature: ' : 'Historical link: '}{link.product?.name ?? 'Product'}</li>)}</ul>}
+    {canManageShop && <details className="liveSessionEdit liveSessionShopEdit"><summary>Manage featured products · {shopProductIds.length}/6</summary><ProductTagPicker products={products} productIds={shopProductIds} featuredProductId={featuredShopProductId} onProductIdsChange={next => { setShopProductIds(next); setFeaturedShopProductId(current => next.includes(current) ? current : next[0] ?? ''); }} onFeaturedProductChange={setFeaturedShopProductId} disabled={saving || broadcastBusy} /><button type="button" disabled={saving || broadcastBusy} onClick={() => void onSaveProducts(session.id, { productIds: shopProductIds, featuredProductId: featuredShopProductId || null })}>Save featured products</button></details>}
     {['STARTING', 'LIVE', 'PAUSED'].includes(session.status) && <><LiveKitHost sessionId={session.id} onPublished={setHostPublished} onError={setHostError} /><small className="muted">{session.status === 'STARTING' ? (hostPublished ? 'Camera and microphone are ready. You can go live.' : 'Allow camera and microphone access, then wait for the preview.') : 'Your live broadcast is connected.'}</small></>}
     {!archived && ['STARTING', 'LIVE', 'PAUSED'].includes(session.status) && <p className="muted">An active broadcast stays visible while it is on air. End the broadcast to take it offline; you can unpublish its replay after recording finishes.</p>}
     {session.status === 'ENDED' && session.recordingStatus && session.recordingStatus !== 'NOT_CONFIGURED' && <div className="liveReplayStatus" role="status"><strong>Replay: {session.recordingStatus.toLowerCase()}</strong>{session.recordingStatus === 'READY' ? <><p>{session.replayPublishedAt ? 'This replay is published and visible to shoppers.' : 'This replay is private. Publish it when you are ready.'}</p><video className="liveReplayPlayer" controls preload="metadata" playsInline src={`/api/seller/live-sessions/${encodeURIComponent(session.id)}/replay`}>Your browser does not support replay video.</video>{archived && <button type="button" disabled={saving || broadcastBusy} onClick={() => void onReplayDelete(session)}>Permanently delete replay file</button>}</> : <p>{session.recordingStatus === 'FAILED' ? 'The recording could not be completed. Live streaming was not affected.' : 'The recording is being finalized in private storage. This card will update automatically.'}</p>}</div>}

@@ -31,6 +31,7 @@ import { ClubCoins, Wallet } from './Wallet.js';
 import { AppShell } from './AppShell.js';
 import { SessionProvider, useSession, type SessionUser } from './session.js';
 import { formatMinor } from './money.js';
+import { LiveEmbedPage, LivePublicPage } from './LivePublicPage.js';
 
 type User = SessionUser;
 type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; sellerId?: string | null; seller?: { store?: { name: string } }; category?: { name: string }; productType?: { id: string; name: string; requiresShipping: boolean } };
@@ -42,6 +43,9 @@ type Settings = { multiVendorEnabled: boolean; paymentMethods: { method: string;
 
 const money = (minor: number, currency = 'USD') => formatMinor(minor, currency);
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> { const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1]; const response = await fetch(path, { credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'x-csrf-token': csrf } : {}), ...(options.headers ?? {}) }, ...options }); if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error ?? 'Request failed'); } return response.status === 204 ? (undefined as T) : response.json(); }
+const isLiveCheckoutEmbed = () => window.location.pathname === '/checkout'
+  && new URLSearchParams(window.location.search).get('source') === 'live-shopping'
+  && new URLSearchParams(window.location.search).get('embed') === '1';
 const normalizeCart = (value: { items?: CartApiItem[] }): CartState => ({ items: (value.items ?? []).map(item => ({ ...item, product: { ...item.product, availableStock: item.variant?.stock ?? item.product.inventory?.quantity ?? item.product.availableStock ?? 0 } })) });
 const itemPrice = (item: CartItem) => item.variant?.priceMinor ?? item.product.salePriceMinor ?? item.product.priceMinor;
 const itemStock = (item: CartItem) => item.variant?.stock ?? item.product.availableStock;
@@ -163,6 +167,7 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
   const [form, setForm] = useState({ buyerName: user?.name ?? '', buyerEmail: user?.email ?? '', line1: '', city: '', region: '', postalCode: '', country: 'US', method: 'COD' });
   const [paymentMethodManuallySelected, setPaymentMethodManuallySelected] = useState(false);
   const [result, setResult] = useState('');
+  const [paymentRedirectUrl, setPaymentRedirectUrl] = useState('');
   const [pendingProductId, setPendingProductId] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<OrderConfirmation | null>(null);
   const [shippingQuote, setShippingQuote] = useState<ShippingQuote | null>(null);
@@ -341,6 +346,7 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPaymentRedirectUrl('');
     if (!user) { setResult('Sign in before checkout.'); return; }
     if (form.method === 'COD' && !codMethodEnabled) { setResult('Cash on delivery is disabled by the marketplace.'); return; }
     if (form.method === 'COD' && !codEligible) { setResult(codUnavailableMessage); return; }
@@ -348,8 +354,21 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
       const displayCurrencyAllowed = Boolean(currencyOptions?.displayCurrencies.some(currency => currency.code === displayCurrency));
       const r = await api<{ orderId: string; orderNumber: string; totalMinor: number; shippingTotalMinor: number; discountMinor: number; discountCode?: string | null; currency: string; paymentStatus: string; shippingBreakdown: OrderConfirmation['shipments']; payment?: { checkoutUrl?: string; approvalUrl?: string } | null }>('/api/orders/checkout', { method: 'POST', body: JSON.stringify({ buyerName: form.buyerName, buyerEmail: form.buyerEmail, address, method: form.method, ...(displayCurrencyAllowed ? { displayCurrency } : {}), ...(appliedDiscount ? { discountCode: appliedDiscount.code } : {}), shippingQuoteToken: shippingQuote?.quoteToken ?? undefined }) });
       const redirectUrl = r.payment?.checkoutUrl ?? r.payment?.approvalUrl;
-      if (redirectUrl) { window.location.assign(redirectUrl); return; }
-      window.history.replaceState({}, '', `/checkout?order=${encodeURIComponent(r.orderId)}`);
+      if (redirectUrl) {
+        const paymentUrl = new URL(redirectUrl);
+        if (paymentUrl.protocol !== 'https:') throw new Error('The payment provider did not return a secure checkout link. Your order state has been preserved; contact support before retrying.');
+        if (isLiveCheckoutEmbed()) {
+          setPaymentRedirectUrl(paymentUrl.toString());
+          setResult('Your order is ready. Continue to the secure payment provider in a new tab; this live show will remain open.');
+          return;
+        }
+        window.location.assign(paymentUrl.toString());
+        return;
+      }
+      const checkoutReturn = new URL('/checkout', window.location.origin);
+      checkoutReturn.searchParams.set('order', r.orderId);
+      if (isLiveCheckoutEmbed()) { checkoutReturn.searchParams.set('source', 'live-shopping'); checkoutReturn.searchParams.set('embed', '1'); }
+      window.history.replaceState({}, '', `${checkoutReturn.pathname}${checkoutReturn.search}`);
       setConfirmation({ orderNumber: r.orderNumber, total: r.totalMinor, itemSubtotal: r.totalMinor - r.shippingTotalMinor + r.discountMinor, discountMinor: r.discountMinor, discountCode: r.discountCode, shippingTotal: r.shippingTotalMinor, currency: r.currency, method: form.method, paymentStatus: r.paymentStatus, shipments: r.shippingBreakdown, displayEstimate: null });
       setDisplayEstimate(null);
       setResult('');
@@ -377,9 +396,10 @@ function Checkout({ cart, total, settings, user, onChange, onClearMessage, onAnn
         {requiresShipping && <button type="button" onClick={() => void calculateShipping()} disabled={quotePending}>{quotePending ? 'Calculating shipping…' : shippingQuote ? 'Recalculate shipping' : 'Calculate shipping'}</button>}
         {currencyOptions && <label>Display estimate (not payment currency)<select value={displayCurrency} onChange={event => setDisplayCurrency(event.target.value)}>{currencyOptions.displayCurrencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>}
         {currencyOptions?.error && <p className="muted" role="status">{currencyOptions.error}</p>}
-        <label>Payment method<select value={form.method} onChange={event => { setPaymentMethodManuallySelected(true); setForm({ ...form, method: event.target.value }); }}>{methods.map(method => <option key={method.method} value={method.method}>{method.method === 'PAYMONGO' ? 'PayMongo · PHP' : method.method === 'PAYSTACK' ? 'Paystack · NGN' : method.method === 'COD' ? 'Cash on delivery' : method.method}</option>)}</select></label>
+        <label>Payment method<select value={form.method} onChange={event => { setPaymentMethodManuallySelected(true); setPaymentRedirectUrl(''); setForm({ ...form, method: event.target.value }); }}>{methods.map(method => <option key={method.method} value={method.method}>{method.method === 'PAYMONGO' ? 'PayMongo · PHP' : method.method === 'PAYSTACK' ? 'Paystack · NGN' : method.method === 'COD' ? 'Cash on delivery' : method.method}</option>)}</select></label>
         {selectedProviderCurrency && <p className="muted" role="status">Your actual order and seller accounting stay in {currencyOptions?.checkoutCurrency}. The provider charge will be collected in {selectedProviderCurrency.code}; the current conversion estimate is shown in the summary and will be recalculated securely when you place the order.</p>}
         <button className="primary" disabled={discountPending || quotePending || (requiresShipping && !shippingQuote) || Boolean(currencyOptions && !currencyOptions.checkoutCompatible)}>Place order</button>
+        {paymentRedirectUrl && <a className="checkoutProviderRedirect" href={paymentRedirectUrl} target="_blank" rel="noopener noreferrer">Continue to secure payment</a>}
         {requiresShipping && !shippingQuote && <p className="muted">Calculate a covered shipping option for each Store before placing your order.</p>}{result && <p className="notice" role="alert">{result}</p>}
       </form>}
     </div>
@@ -450,5 +470,16 @@ function PageRouter() {
   const jimaHelpPath = path.match(/^\/help\/jima\/([^/]+)\/?$/);
   return storeContentPath ? <SellerStoreContent /> : storeGrowthPath ? <SellerStoreGrowth /> : path === '/email/confirm' ? <StoreEmailAction kind="confirm" /> : path === '/email/unsubscribe' ? <StoreEmailAction kind="unsubscribe" /> : path === '/seller/currency' ? <SellerStoreCurrency /> : path === '/seller/commissions' ? <SellerCommissionStatement /> : path === '/seller/site-chrome' ? <SiteChromeBuilder scope="store" /> : path === '/admin/currencies' ? <AdminCurrencyCommission section="currencies" /> : path === '/admin/commissions' ? <AdminCurrencyCommission section="commissions" /> : path === '/dashboard' ? <Dashboard /> : path === '/ads' ? <MarketplaceAds /> : path === '/admin/ads' ? <MarketplaceAds admin /> : path === '/favorites' ? <Favorites /> : path === '/settings' ? <Settings /> : path === '/wallet' ? <Wallet /> : path === '/club-coins' ? <ClubCoins /> : path === '/admin/wallet' ? <AdminWallet /> : path.startsWith('/admin/content') ? <ContentAdmin /> : path.startsWith('/admin/platform') ? <PlatformAdmin /> : path.startsWith('/seller/plan') ? <SellerStorePlan /> : path.startsWith('/seller/platform') ? <SellerPlatform /> : path.startsWith('/affiliate') ? <AffiliateDashboard /> : jimaHelpPath ? <JimaKnowledgeArticle id={decodeURIComponent(jimaHelpPath[1])} /> : categoryPath ? <MarketplaceCategory slug={decodeURIComponent(categoryPath[1])} /> : storePath ? <Storefront slug={decodeURIComponent(storePath[1])} /> : productPath ? <ProductPage id={decodeURIComponent(productPath[1])} /> : path === '/' ? <DomainRootRoute /> : <App />;
 }
-function RoutedPage() { return window.location.pathname === '/email/verify' ? <EmailVerificationAction /> : <PageRouter />; }
-createRoot(document.getElementById('root')!).render(<React.StrictMode><SessionProvider><AppShell><RoutedPage /></AppShell></SessionProvider></React.StrictMode>);
+function RoutedPage() {
+  const liveRoute = window.location.pathname.match(/^\/live\/([^/]+)\/?$/);
+  if (liveRoute) return <LivePublicPage sessionId={safePathSegment(liveRoute[1]!)} />;
+  return window.location.pathname === '/email/verify' ? <EmailVerificationAction /> : <PageRouter />;
+}
+function safePathSegment(value: string) { try { return decodeURIComponent(value); } catch { return ''; } }
+const liveEmbedRoute = window.location.pathname.match(/^\/live\/([^/]+)\/embed\/?$/);
+const liveCheckoutEmbedRoute = window.location.pathname === '/checkout'
+  && new URLSearchParams(window.location.search).get('source') === 'live-shopping'
+  && new URLSearchParams(window.location.search).get('embed') === '1';
+createRoot(document.getElementById('root')!).render(<React.StrictMode>{liveEmbedRoute
+  ? <LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} />
+  : <SessionProvider>{liveCheckoutEmbedRoute ? <RoutedPage /> : <AppShell><RoutedPage /></AppShell>}</SessionProvider>}</React.StrictMode>);

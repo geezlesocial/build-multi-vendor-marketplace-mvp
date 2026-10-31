@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Express, NextFunction, Request, Response } from 'express';
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { LiveSessionReactionKind, LiveSessionStatus, SellerStatus } from '@prisma/client';
 import { z } from 'zod';
 import { currentUser, prisma, requireAuth } from './security.js';
@@ -12,6 +13,45 @@ const param = (value: string | string[] | undefined) => Array.isArray(value) ? v
 const viewerCookie = 'marketplace_live_viewer';
 const reactionSchema = z.object({ reaction: z.nativeEnum(LiveSessionReactionKind).nullable() }).strict();
 const reactionKinds = Object.values(LiveSessionReactionKind);
+const reactionMutationLimit = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const MAX_ACTIVE_ENGAGEMENT_STREAMS = 500;
+const MAX_SESSION_ENGAGEMENT_STREAMS = 200;
+const engagementStreams = new Map<string, Set<Response>>();
+const lastEngagementCounts = new Map<string, string>();
+let activeStreamCount = 0;
+let engagementTimer: NodeJS.Timeout | null = null;
+let engagementPublishInFlight = false;
+
+function publishEngagementCounts() {
+  if (engagementPublishInFlight || engagementStreams.size === 0) return;
+  engagementPublishInFlight = true;
+  const sessionIds = [...engagementStreams.keys()];
+  void prisma.liveSessionReaction.groupBy({
+    by: ['sessionId', 'reaction'],
+    where: { sessionId: { in: sessionIds } },
+    _count: { _all: true }
+  }).then(reactions => {
+    const countsBySession = new Map<string, Record<LiveSessionReactionKind, number>>();
+    for (const sessionId of sessionIds) {
+      countsBySession.set(sessionId, Object.fromEntries(reactionKinds.map(kind => [kind, 0])) as Record<LiveSessionReactionKind, number>);
+    }
+    for (const item of reactions) countsBySession.get(item.sessionId)![item.reaction] = item._count._all;
+    for (const sessionId of sessionIds) {
+      const subscribers = engagementStreams.get(sessionId);
+      if (!subscribers) continue;
+      const counts = countsBySession.get(sessionId)!;
+      const serializedCounts = JSON.stringify(counts);
+      if (lastEngagementCounts.get(sessionId) === serializedCounts) continue;
+      lastEngagementCounts.set(sessionId, serializedCounts);
+      const payload = `event: engagement\ndata: ${JSON.stringify({ counts })}\n\n`;
+      for (const subscriber of subscribers) {
+        if (!subscriber.writableEnded) subscriber.write(payload);
+      }
+    }
+  }).catch(() => undefined).finally(() => {
+    engagementPublishInFlight = false;
+  });
+}
 
 async function activeSession(id: string) {
   return prisma.liveSession.findFirst({
@@ -42,6 +82,55 @@ export function registerLiveEngagementRoutes(app: Express) {
     res.json(await engagement(session.id, user?.id, session.providerSessionRef));
   }));
 
+  app.get('/api/live-sessions/:id/engagement/events', run(async (req, res) => {
+    await requireLiveShopping();
+    const session = await activeSession(param(req.params.id));
+    if (!session) return res.status(404).json({ error: 'Live session not found' });
+    const viewers = engagementStreams.get(session.id) ?? new Set<Response>();
+    if (activeStreamCount >= MAX_ACTIVE_ENGAGEMENT_STREAMS || viewers.size >= MAX_SESSION_ENGAGEMENT_STREAMS) {
+      return res.status(503).json({ error: 'Live engagement is at capacity. Use the refresh fallback.' });
+    }
+
+    res.status(200);
+    res.set({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    res.flushHeaders();
+    res.write('retry: 3000\nevent: ready\ndata: {}\n\n');
+    viewers.add(res);
+    engagementStreams.set(session.id, viewers);
+    activeStreamCount += 1;
+
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': keep-alive\n\n');
+    }, 20_000);
+    heartbeat.unref();
+
+    if (!engagementTimer) {
+      engagementTimer = setInterval(publishEngagementCounts, 2_000);
+      engagementTimer.unref();
+    }
+
+    const close = () => {
+      clearInterval(heartbeat);
+      const subscribers = engagementStreams.get(session.id);
+      subscribers?.delete(res);
+      activeStreamCount = Math.max(0, activeStreamCount - 1);
+      if (subscribers?.size === 0) {
+        engagementStreams.delete(session.id);
+        lastEngagementCounts.delete(session.id);
+      }
+      if (engagementStreams.size === 0 && engagementTimer) {
+        clearInterval(engagementTimer);
+        engagementTimer = null;
+      }
+    };
+    res.on('close', close);
+  }));
+
   app.post('/api/live-sessions/:id/view', run(async (req, res) => {
     await requireLiveShopping();
     const session = await activeSession(param(req.params.id));
@@ -66,7 +155,7 @@ export function registerLiveEngagementRoutes(app: Express) {
     res.json({ viewCount });
   }));
 
-  app.put('/api/live-sessions/:id/reaction', requireAuth, run(async (req, res) => {
+  app.put('/api/live-sessions/:id/reaction', reactionMutationLimit, requireAuth, run(async (req, res) => {
     await requireLiveShopping();
     const input = reactionSchema.parse(req.body);
     const user = res.locals.user as { id: string };

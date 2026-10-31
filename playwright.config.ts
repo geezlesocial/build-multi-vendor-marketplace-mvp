@@ -11,7 +11,15 @@ const e2eContentStorageDir = process.env.E2E_CONTENT_STORAGE_DIR ?? path.join(os
 process.env.E2E_CONTENT_STORAGE_DIR = e2eContentStorageDir;
 validateE2EBaseURL(e2eBaseURL);
 const e2eDatabaseURL = process.env.E2E_DATABASE_URL;
-validateE2EDatabaseURL(e2eDatabaseURL);
+const validatedE2EDatabase = validateE2EDatabaseURL(e2eDatabaseURL);
+const liveShoppingSimulator = process.env.E2E_LIVE_SHOPPING_SIMULATOR === 'true';
+const e2eLiveKitPort = Number(process.env.E2E_LIVEKIT_PORT ?? 9399);
+if (liveShoppingSimulator) {
+  const sandboxId = process.env.WALLET_FUNDING_SANDBOX_ID ?? '';
+  if (!/^[a-f0-9]{32}$/.test(sandboxId) || validatedE2EDatabase.databaseName !== `wallet_funding_e2e_${sandboxId}`) {
+    throw new Error('The local LiveKit simulator can run only against the matching per-run wallet_funding_e2e database.');
+  }
+}
 const webServerEnv = {
   ...process.env,
   API_PORT: String(e2eApiPort),
@@ -38,7 +46,13 @@ const webServerEnv = {
   WALLET_FUNDING_PROVIDER_READY: 'false',
   CLUB_COINS_HARD_DISABLED: 'true',
   LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE: 'false',
-  LIVE_SHOPPING_AVAILABLE: 'false',
+  LIVE_SHOPPING_AVAILABLE: liveShoppingSimulator ? 'true' : 'false',
+  // Never inherit a developer's real provider credentials. Outside the
+  // dedicated simulator test, use a closed loopback port and keep the feature
+  // gate off; this satisfies strict configuration validation without egress.
+  LIVEKIT_URL: liveShoppingSimulator ? `http://127.0.0.1:${e2eLiveKitPort}` : 'http://127.0.0.1:1',
+  LIVEKIT_API_KEY: 'marketplace_e2e_local_only',
+  LIVEKIT_API_SECRET: 'synthetic_local_test_secret_never_for_deployment',
   CONTENT_STORAGE_DIR: e2eContentStorageDir,
   // Feature provider gates are fixed off in browser tests; no cloud service is contacted.
   CONTENT_OBJECT_STORAGE_AVAILABLE: 'false',
@@ -66,6 +80,12 @@ export default defineConfig({
     screenshot: 'only-on-failure'
   },
   webServer: [
+    ...(liveShoppingSimulator ? [{
+      command: `node scripts/fake-livekit-server.mjs --port ${e2eLiveKitPort}`,
+      url: `http://${e2eHost}:${e2eLiveKitPort}/healthz`,
+      reuseExistingServer: false,
+      timeout: 30_000
+    }] : []),
     {
       command: 'npm run dev -w apps/api',
       url: `http://${e2eHost}:${e2eApiPort}/health`,

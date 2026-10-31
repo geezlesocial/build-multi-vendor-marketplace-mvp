@@ -76,6 +76,9 @@ import { createAccountVerificationChallenge, deliverAccountVerification, registe
 import { registerProductReviewRoutes } from './product-review-routes.js';
 import { registerLiveAttendanceRoutes } from './live-attendance-routes.js';
 import { registerLiveEngagementRoutes } from './live-engagement-routes.js';
+import { registerLiveSocialRoutes } from './live-social-routes.js';
+import { registerLiveShopRoutes } from './live-shop-routes.js';
+import { syncLiveShopProducts } from './live-shop-products.js';
 import { purgeExpiredMessageAttachmentDrafts, registerMessageRoutes } from './message-routes.js';
 import { wholesaleConfigurationError, wholesaleQuantityError } from './wholesale-domain.js';
 import { registerSocialAuthRoutes } from './social-auth-routes.js';
@@ -156,6 +159,8 @@ registerAccountVerificationRoutes(app);
 registerProductReviewRoutes(app);
 registerLiveAttendanceRoutes(app);
 registerLiveEngagementRoutes(app);
+registerLiveSocialRoutes(app);
+registerLiveShopRoutes(app);
 registerMessageRoutes(app);
 registerSocialAuthRoutes(app);
 registerOnboardingRoutes(app);
@@ -238,6 +243,7 @@ app.get('/api/live-sessions/:id', asyncRoute(async (req, res) => {
   const sessionWhere: Prisma.LiveSessionWhereInput = { id: routeParam(req.params.id), deletedAt: null, seller: { is: { status: SellerStatus.APPROVED } }, OR: publicSessionOptions };
   const session = await prisma.liveSession.findFirst({ where: sessionWhere, include: { seller: { include: { store: { select: { name: true, slug: true } } } }, products: { where: { product: { is: { status: ProductStatus.APPROVED } } }, orderBy: { sortOrder: 'asc' }, include: { product: { include: { inventory: true } } } } } });
   if (!session) return res.status(404).json({ error: 'Live session not found' });
+  res.set('Cache-Control', 'no-store');
   res.json(publicLiveSession({ ...session, products: session.products.map(link => ({ ...link, product: { ...link.product, availableStock: link.product.inventory?.quantity ?? 0 } })) }));
 }));
 app.get('/api/live-sessions/:id/replay', asyncRoute(async (req, res) => {
@@ -283,7 +289,7 @@ app.post('/api/seller/live-sessions', requireAuth, requireRole(Role.SELLER), asy
   await eligibleProducts(user.sellerId, input.productIds);
   const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
   if (scheduledAt && scheduledAt <= new Date()) return res.status(400).json({ error: 'Choose a future date and time for the live show.' });
-  const session = await prisma.liveSession.create({ data: { sellerId: user.sellerId, title: input.title, description: input.description, coverImageUrl: input.coverImageUrl, scheduledAt, timezone: input.timezone, status: scheduledAt ? 'SCHEDULED' : 'DRAFT', products: { create: input.productIds.map((productId, sortOrder) => ({ productId, sortOrder, featured: productId === input.featuredProductId })) } }, include: { products: true } });
+  const session = await prisma.liveSession.create({ data: { sellerId: user.sellerId, title: input.title, description: input.description, coverImageUrl: input.coverImageUrl, scheduledAt, timezone: input.timezone, status: scheduledAt ? 'SCHEDULED' : 'DRAFT', products: { create: input.productIds.map((productId, sortOrder) => ({ productId, sortOrder, featured: productId === input.featuredProductId, shopFeatured: true, shopSortOrder: sortOrder, shopPinned: productId === input.featuredProductId })) } }, include: { products: true } });
   await audit((res.locals.user as { id: string }).id, 'LIVE_SESSION_CREATED', 'LiveSession', session.id, { status: session.status, productCount: input.productIds.length });
   res.status(201).json(publicLiveSession(session));
 }));
@@ -305,8 +311,7 @@ app.patch('/api/seller/live-sessions/:id', requireAuth, requireRole(Role.SELLER)
     });
     if (!changed.count) return null;
     if (input.productIds) {
-      await tx.liveSessionProduct.deleteMany({ where: { sessionId: session.id } });
-      await tx.liveSessionProduct.createMany({ data: input.productIds.map((productId, sortOrder) => ({ sessionId: session.id, productId, sortOrder, featured: productId === input.featuredProductId })) });
+      await syncLiveShopProducts(tx, session.id, input.productIds, input.featuredProductId);
     }
     return tx.liveSession.findUnique({ where: { id: session.id }, include: { products: { orderBy: { sortOrder: 'asc' }, include: { product: true } } } });
   });

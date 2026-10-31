@@ -17,6 +17,7 @@ import { announceHeaderActivityChange } from './header-activity-events.js';
 import './ProductManagement.css';
 import './Messages.css';
 import { MessageVideoPreview } from './MessageVideoPreview.js';
+import { LiveRepostTimeline } from './LiveRepostTimeline.js';
 
 type User = { id: string; email: string; name: string; role: string; sellerId?: string; avatarUrl?: string };
 type Access = { buyer: boolean; seller: boolean; affiliateEligible: boolean; sellerApplication: { status: string; reason?: string | null; store?: { name: string; slug: string } | null } | null };
@@ -30,7 +31,7 @@ type WorkspaceTabs = { buyer: string; seller: string };
 const CART_SYNC_STORAGE_KEY = 'marketplace:cart-sync';
 const allowedTabs: Record<Workspace, string[]> = {
   buyer: ['overview', 'orders', 'cart', 'favorites', 'messages', 'notifications', 'profile', 'addresses', 'affiliate', 'live'],
-  seller: ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'ads', 'messages', 'store', 'currency', 'commission', 'integrations', 'payouts', 'pos', 'live']
+  seller: ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'ads', 'messages', 'store', 'currency', 'commission', 'integrations', 'payouts', 'pos', 'live', 'profile']
 };
 function readDashboardLocation(): { mode: Workspace; tab: string } {
   const params = new URLSearchParams(window.location.search);
@@ -504,7 +505,14 @@ function Messages({ conversations, reload, currentUserId }: { conversations: any
     {notice && <p className="messagesNotice" role="status">{notice}</p>}
   </section>;
 }
-function Profile({ user, onUserUpdated, reload }: { user: User; onUserUpdated: (user: SessionUser) => void; reload: () => void }) { const [name, setName] = useState(user.name); const [message, setMessage] = useState(''); return <section className="profileSummary"><div className="profileSummaryHeader"><h2>Profile and security</h2>{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span className="avatarFallback" aria-hidden="true">{user.name.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]?.toLocaleUpperCase() ?? '').join('')}</span>}</div><label>Display name<input value={name} onChange={event => setName(event.target.value)} /></label><p className="muted">Email: {user.email} · Role: {user.role}</p><div className="profileActions"><button className="primary" onClick={async () => { const updated = await request<SessionUser>('/api/account/profile', { method: 'PATCH', body: JSON.stringify({ name }) }); onUserUpdated(updated); setMessage('Profile saved.'); reload(); }}>Save profile</button><a href="/settings#profile">Manage your photo and settings</a></div>{message && <p role="status" className="muted">{message}</p>}</section>; }
+function Profile({ user, onUserUpdated, reload }: { user: User; onUserUpdated: (user: SessionUser) => void; reload: () => void }) {
+  const [name, setName] = useState(user.name);
+  const [message, setMessage] = useState('');
+  return <>
+    <section className="profileSummary"><div className="profileSummaryHeader"><h2>Profile and security</h2>{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span className="avatarFallback" aria-hidden="true">{user.name.trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]?.toLocaleUpperCase() ?? '').join('')}</span>}</div><label>Display name<input value={name} onChange={event => setName(event.target.value)} /></label><p className="muted">Email: {user.email} · Role: {user.role}</p><div className="profileActions"><button className="primary" onClick={async () => { const updated = await request<SessionUser>('/api/account/profile', { method: 'PATCH', body: JSON.stringify({ name }) }); onUserUpdated(updated); setMessage('Profile saved.'); reload(); }}>Save profile</button><a href="/settings#profile">Manage your photo and settings</a></div>{message && <p role="status" className="muted">{message}</p>}</section>
+    <LiveRepostTimeline />
+  </>;
+}
 function Addresses({ data, reload }: { data: BuyerData; reload: () => void }) {
   const [form, setForm] = useState({ label: 'Home', line1: '', city: '', region: '', postalCode: '', country: 'US' });
   const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -521,7 +529,7 @@ function Addresses({ data, reload }: { data: BuyerData; reload: () => void }) {
 
 function SellerDashboard({ data, tab, setTab, reload, currentUserId }: { data: SellerData | null; tab: string; setTab: (value: string) => void; reload: () => void; currentUserId: string }) {
   if (!data) return null;
-  const tabs = ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'ads', 'messages', 'store', 'currency', 'commission', 'integrations', 'payouts', 'pos', 'live'];
+  const tabs = ['overview', 'products', 'orders', 'shipping', 'dropshipping', 'ads', 'messages', 'store', 'currency', 'commission', 'integrations', 'payouts', 'pos', 'live', 'profile'];
   return <>
     <Tabs id="seller-dashboard" items={tabs} active={tab} setActive={setTab} />
     <nav className="sellerQuickLinks" aria-label="Store tools">
@@ -544,6 +552,7 @@ function SellerDashboard({ data, tab, setTab, reload, currentUserId }: { data: S
     {tab === 'payouts' && <section><h2>Payouts</h2><p className="muted">Payouts remain separate from buyer checkout. Full account identifiers are never shown.</p><div className="table">{data.payoutMethods.map(method => <div className="row" key={method.id}><span>{method.type} · {method.maskedIdentifier}</span><span>{method.status}</span></div>)}{data.payouts.map(payout => <div className="row" key={payout.id}><span>{money(payout.amountMinor, payout.currency)}</span><span>{payout.status}</span></div>)}</div><a href="/seller/platform">Manage payout methods</a></section>}
     {tab === 'pos' && <section className="setting"><h2>Cash POS</h2><p>POS availability is server-enforced for approved seller/cashier accounts.</p><a href="/pos">Open POS</a></section>}
     {tab === 'live' && <SellerLiveStudio products={data.products} />}
+    {tab === 'profile' && <LiveRepostTimeline />}
   </>;
 }
 function ProductManagement({ products, media, categories, brands, productTypes, reload, setMessage, onUploadFiles, uploading, uploadProgress }: { products: any[]; media: any[]; categories: CatalogCategory[]; brands: CatalogBrand[]; productTypes: CatalogProductType[]; reload: () => void; setMessage: (value: string) => void; onUploadFiles: (files: File[], product?: any) => void; uploading: boolean; uploadProgress: number | null }) {
