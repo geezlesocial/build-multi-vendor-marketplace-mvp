@@ -733,6 +733,7 @@ model User {
   emailOutbox                         EmailOutbox[]
   platformBrandingRevisions           PlatformBrandingRevision[]
   storeThemeRevisions                 StoreThemeRevision[]
+  siteChromeRevisions                 SiteChromeRevision[]                @relation("SiteChromeEditor")
   sellerAdminNotes                    SellerAdminNote[]
   sellerModerationEvents              SellerModerationEvent[]
   payoutMethodsCreated                SellerPayoutMethod[]               @relation("PayoutMethodCreator")
@@ -1045,6 +1046,7 @@ model Store {
   logoMedia                  MediaAsset?                      @relation("StoreLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
   bannerMedia                MediaAsset?                      @relation("StoreBanner", fields: [bannerMediaId], references: [id], onDelete: SetNull)
   themeRevisions             StoreThemeRevision[]
+  siteChromeConfiguration   SiteChromeConfiguration?
   planAssignments            StorePlanAssignment[]
   subscriptions              StoreSubscription[]
   blogPosts                  BlogPost[]
@@ -2054,6 +2056,37 @@ model StoreThemeRevision {
 
   @@unique([storeId, version])
   @@index([storeId, createdAt])
+}
+
+model SiteChromeConfiguration {
+  id               String                 @id
+  storeId          String?                @unique
+  draftJson        Json
+  publishedJson    Json?
+  draftVersion     Int                    @default(0)
+  publishedVersion Int?
+  publishedAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  store            Store?                 @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  revisions        SiteChromeRevision[]
+
+  @@index([publishedVersion, publishedAt])
+}
+
+model SiteChromeRevision {
+  id              String                 @id @default(cuid())
+  configurationId String
+  version         Int
+  configurationJson Json
+  editorId        String
+  changeNote      String?
+  createdAt       DateTime               @default(now())
+  configuration   SiteChromeConfiguration @relation(fields: [configurationId], references: [id], onDelete: Cascade)
+  editor          User                   @relation("SiteChromeEditor", fields: [editorId], references: [id], onDelete: Restrict)
+
+  @@unique([configurationId, version])
+  @@index([configurationId, createdAt])
 }
 
 model StorePlan {

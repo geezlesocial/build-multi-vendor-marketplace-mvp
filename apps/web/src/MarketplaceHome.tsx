@@ -63,7 +63,7 @@ function SponsoredProductCard({ item, onAdd }: { item: SponsoredProduct; onAdd: 
 
 export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: (productId: string, quantity?: number) => void; onSignIn: () => void }) {
   const [home, setHome] = useState<HomeData | null>(null);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get('search') ?? '');
   const [search, setSearch] = useState<SearchData>({ products: [], stores: [] });
   const [activeIndex, setActiveIndex] = useState(-1);
   const [loading, setLoading] = useState(true);
