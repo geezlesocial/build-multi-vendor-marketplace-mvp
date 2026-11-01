@@ -4,13 +4,13 @@ This note compares the emailed assessment with the Marketplace release baseline 
 
 ## Current merged-main update (`b5de1a8`, 2026-11-01)
 
-PR #44 (merge `1ca3928`) and PR #45 (merge `b5de1a8`) are now merged after exact-head independent approvals and passing PR CI/security checks. Post-merge CI for `b5de1a8` is still running at [run 41299293917](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41299293917); do not treat it as passed until it completes.
+PR #44 (merge `1ca3928`) and PR #45 (merge `b5de1a8`) are merged after exact-head independent approvals and passing PR CI/security checks. Post-merge application CI for `b5de1a8` passed: [run 41299293917](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41299293917).
 
 - Current physical file lengths are: API `index.ts` 1,098 lines; seller live-session route modules 320 and 431 lines; `LiveShopping.tsx` 832 lines; `Dashboard.tsx` 663 lines; and extracted `SellerProducts.tsx` 461 lines. The extractions reduced the two original hotspots, but several extracted modules still exceed 300 lines, so further decomposition requires characterization tests rather than being described as complete.
-- The last completed API coverage artifact remains the `af7f538` run: 15.37% statements, 15.80% branches, 19.32% functions, and 17.16% lines (76 API test files / 365 tests). The current `b5de1a8` pipeline is measuring coverage again; its results are pending. The enforced 11% / 12% / 14% / 12% floors are non-regression guards, not adequate-coverage claims.
-- Main still has the 37 API / 102 web lint-warning ceilings. PR #47's branch reduces its measured warnings to 8 / 91; it is open, with container-security checks passed and CI/review still pending.
-- Main's `.env.example` covers the 75 application-schema settings, but the separate Prisma CLI variable `PRISMA_MIGRATIONS_PATH` is the gap addressed by open PR #49. That PR adds a dependency-free guard for the API schema and Prisma CLI setting, required active values, and critical fail-closed sample gates; exact-head CI/review are still pending.
-- Main CI/security, Prisma migration, API and browser checks are not absent: the post-merge pipeline is currently executing. The most recent completed main CI is still `af7f538` run 41296301675.
+- The `b5de1a8` API coverage artifact reports 15.35% statements, 15.79% branches, 19.25% functions, and 17.06% lines; all 76 API test files passed. Compared with the preceding `af7f538` artifact (15.37%, 15.80%, 19.32%, 17.16%), the tiny decline follows added route source not directly counted by Vitest coverage; these percentages remain low. CI enforces 11% / 12% / 14% / 12% non-regression floors, not adequate-coverage targets. The CMS browser job passed 100 tests and skipped 1.
+- Main has lint-warning ceilings of 37 API / 102 web. The cleanup represented by PR #47 measures 8 / 91 on its branch; it is not reflected in main until merged.
+- Main's `.env.example` covers 75 application-schema settings. PR #49 adds `PRISMA_MIGRATIONS_PATH` plus a dependency-free guard for schema/example completeness, required active values, and critical fail-closed sample gates.
+- CI, Prisma migration, API, browser, and security checks exist. The exact post-merge application CI at `b5de1a8` passed; separate container security/integration gates are run on PR heads.
 
 ## Historical claim reconciliation at `af7f538` (superseded by the current-main update above)
 
