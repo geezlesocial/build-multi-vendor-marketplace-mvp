@@ -54,7 +54,8 @@ const files = [
     formatCandidates
       .filter(
         ({ status, path }) =>
-          status.startsWith("A") || !/^apps\/(?:api|web)\/src\//.test(path),
+          status.startsWith("A") ||
+          (!/^apps\/(?:api|web)\/src\//.test(path) && !/^e2e\//.test(path)),
       )
       .map(({ path }) => path),
   ),

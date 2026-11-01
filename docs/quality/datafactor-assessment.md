@@ -14,7 +14,7 @@ This note compares the emailed assessment with the repository at the Marketplace
 
 ## Lint and formatting baseline
 
-The new ESLint presets currently produce no errors. To avoid mass-reformatting legacy application modules in a tooling-only change, Prettier checks all changed/new configuration and documentation files plus newly added source files; existing `apps/api/src` and `apps/web/src` files are incrementally exempt until they are refactored or intentionally formatted.
+The new ESLint presets currently produce no errors. To avoid mass-reformatting legacy application modules and browser tests, Prettier checks changed/new configuration and documentation files plus newly added source files. Existing `apps/api/src`, `apps/web/src`, and `e2e` files are baseline-exempt from whole-file formatting checks; newly added source remains checked.
 
 The first measured warning baseline is 37 API warnings (29 unused-symbol findings and 8 explicit `any` findings) and 102 web warnings (45 React hook dependency findings, 47 explicit `any` findings, and 10 unused-symbol findings). Workspace lint scripts ratchet those warning ceilings so newly introduced warnings fail CI. Warnings are visible and should be reduced; they are not presented as resolved. React Hooks rule-of-hooks violations and other recommended-rule errors remain fatal.
 
