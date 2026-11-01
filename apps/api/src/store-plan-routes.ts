@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, Role, SellerStatus, StorePlanAssignmentStatus, StorePlanStatus, StorePlanVersionStatus } from '@prisma/client';
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
-import { asStorePlanEntitlements, dropshippingPlanBlock, effectiveStorePlan, isAtLimit, sellerOwnedConnectionsPlanBlock, storeEntitlements, storePlanEntitlementsSchema } from './store-plan-domain.js';
+import { asStorePlanEntitlements, dropshippingPlanBlock, effectiveStorePlan, sellerOwnedConnectionsPlanBlock, storeEntitlements, storePlanEntitlementsSchema } from './store-plan-domain.js';
 import { formatMinorAmount, isFreePlan, planPricingInputSchema, resolvePlanPricing } from './store-plan-pricing.js';
 import { env } from './config.js';
 import { stripeStoreBillingProvider, storePlanBillingSandboxEnabled, stripeStoreBillingTermsSupported } from './stripe-store-billing.js';

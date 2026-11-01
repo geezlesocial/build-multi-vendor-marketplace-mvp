@@ -52,7 +52,6 @@ export function StorePlanAdmin() {
     api<Assignment[]>(`/api/admin/store-plan-stores/${encodeURIComponent(selectedStoreId)}/assignments`).then(setAssignments).catch(error => setMessage(error.message));
   }, [selectedStoreId]);
 
-  const selectedPlan = plans.find(plan => plan.id === selectedPlanId) ?? null;
   const activeVersions = useMemo(() => plans.filter(plan => plan.status === 'ACTIVE').flatMap(plan => plan.versions.filter(version => version.status === 'ACTIVE' && version.monthlyPriceMinor === 0 && version.annualPriceMinor === 0 && version.introPriceMinor === null && version.freeTrialDays === 0).map(version => ({ ...version, plan }))), [plans]);
   const updateList = (field: 'allowedThemes' | 'paymentConnectors' | 'mobileTemplates', value: string, checked: boolean) => setEntitlements(current => ({ ...current, [field]: checked ? [...current[field], value] : current[field].filter(item => item !== value) }));
   const editPlan = (plan: Plan) => {

@@ -54,14 +54,22 @@ function App() {
   const { user, setUser } = useSession();
   const [settings, setSettings] = useState<Settings>({ multiVendorEnabled: true, paymentMethods: [], liveShopping: { enabled: false, deploymentGate: false, reason: 'Live shopping is not configured.' } });
   const [products, setProducts] = useState<Product[]>([]);
-  const [query, setQuery] = useState('');
   const [cart, setCart] = useState<CartState>({ items: [] });
   const [view, setView] = useState<'home' | 'checkout' | 'login' | 'dashboard' | 'pos' | 'live' | 'affiliate'>(() => window.location.pathname === '/checkout' ? 'checkout' : window.location.pathname === '/pos' ? 'pos' : new URLSearchParams(window.location.search).has('auth') ? 'login' : 'home');
   const [message, setMessage] = useState('');
 
   const loadCart = async () => { const next = normalizeCart(await api<{ items: CartApiItem[] }>('/api/cart')); setCart(next); window.dispatchEvent(new Event('marketplace:cart-changed')); };
-  const load = async () => { const [publicSettings, catalog] = await Promise.all([api<Settings>('/api/settings/public'), api<{ items: Product[] }>(`/api/products?q=${encodeURIComponent(query)}`)]); setSettings(publicSettings); setProducts(catalog.items); };
-  useEffect(() => { load().catch(e => setMessage(e.message)); }, [query]);
+  useEffect(() => {
+    let active = true;
+    Promise.all([api<Settings>('/api/settings/public'), api<{ items: Product[] }>('/api/products?q=')])
+      .then(([publicSettings, catalog]) => {
+        if (!active) return;
+        setSettings(publicSettings);
+        setProducts(catalog.items);
+      })
+      .catch(error => { if (active) setMessage((error as Error).message); });
+    return () => { active = false; };
+  }, []);
   useEffect(() => { if (user) void loadCart().catch(e => setMessage(e.message)); else setCart({ items: [] }); }, [user?.id]);
   const cartTotal = useMemo(() => cart.items.reduce((sum, item) => sum + itemPrice(item) * item.quantity, 0), [cart]);
   const add = async (productId: string, quantity = 1) => { if (!user) { setView('login'); setMessage('Sign in to add items to your cart.'); return; } try { await api('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId, quantity }) }); setMessage('Added to cart'); await loadCart(); } catch (e) { setMessage((e as Error).message); } };
@@ -78,7 +86,6 @@ function App() {
   </>;
 }
 
-function Home({ products, query, setQuery, add, settings }: { products: Product[]; query: string; setQuery: (v: string) => void; add: (id: string) => void; settings: Settings }) { return <section className="page"><div className="hero"><p className="eyebrow">A calmer way to shop local</p><h1>Find good things from independent sellers.</h1><p>Browse approved products, compare stores, and check out securely with the payment methods the marketplace currently supports.</p><div className="heroPills"><span>Server-validated stock</span><span>Clear order status</span><span>COD available when enabled</span></div></div><div className="toolbar"><label className="search"><span>Search</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search products" /></label><span className="muted">{settings.multiVendorEnabled ? 'Multi-vendor mode is on' : 'Platform products only'}</span></div><div className="grid">{products.map(p => <article className="card" key={p.id}><div className="productMark">{p.name.slice(0, 1)}</div><div className="cardBody"><p className="eyebrow">{p.category?.name ?? 'Featured'} · {p.seller?.store?.name ?? 'Platform store'}</p><h2>{p.name}</h2><p>{p.description}</p><div className="cardBottom"><strong>{money(p.salePriceMinor ?? p.priceMinor, p.currency)}</strong><button onClick={() => add(p.id)} disabled={p.availableStock < 1}>Add to cart</button></div>{p.salePriceMinor != null && <small><del>{money(p.priceMinor, p.currency)}</del> · Sale price</small>}<small>{p.availableStock} in stock</small></div></article>)}</div>{products.length === 0 && <div className="empty">No approved products match that search.</div>}</section>; }
 
 type SocialProvider = { id: string; label: string; logoUrl: string | null };
 type AuthPresentation = { signInHeading: string; signInText: string; signUpHeading: string; signUpText: string; logoUrl: string | null; layout: 'CENTERED' | 'SPLIT' | 'EDITORIAL'; motion: 'NONE' | 'FADE' | 'SLIDE'; accentColor: string };

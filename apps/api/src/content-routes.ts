@@ -67,11 +67,6 @@ async function assertMediaReady(ids: string[], release: boolean) {
   if (release && assets.some(asset => asset.scanStatus !== MediaScanStatus.APPROVED)) throw fail(409, 'All media must pass scanning before publication');
 }
 
-async function nextRevision(model: 'post' | 'page', id: string) {
-  if (model === 'post') return (await prisma.blogPostRevision.findFirst({ where: { postId: id }, orderBy: { revisionNumber: 'desc' }, select: { revisionNumber: true } }))?.revisionNumber ?? 0;
-  return (await prisma.contentPageRevision.findFirst({ where: { pageId: id }, orderBy: { revisionNumber: 'desc' }, select: { revisionNumber: true } }))?.revisionNumber ?? 0;
-}
-
 async function assertRedirectSafe(fromPath: string, destinationPath: string) {
   if (fromPath === destinationPath) throw fail(400, 'Redirect cannot target itself');
   const existing = await prisma.slugRedirect.findUnique({ where: { fromPath }, select: { destinationPath: true } });
@@ -114,21 +109,6 @@ async function publicMediaAsset(id: string) {
   ]);
   const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || chromeConfigurations.some(configuration => JSON.stringify(configuration.publishedJson).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative) || authPage?.logoMediaId === id || Boolean(marketingCampaignMedia);
   return referencedInPublishedContent ? asset : null;
-}
-
-function fileSignature(bytes: Buffer, extension: string, claimedMime: string) {
-  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { kind: MediaKind.IMAGE, mime: 'image/png', extension: 'png' };
-  if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return { kind: MediaKind.IMAGE, mime: 'image/jpeg', extension: 'jpg' };
-  if (bytes.subarray(0, 6).toString('ascii') === 'GIF89a' || bytes.subarray(0, 6).toString('ascii') === 'GIF87a') return { kind: MediaKind.IMAGE, mime: 'image/gif', extension: 'gif' };
-  if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return { kind: MediaKind.IMAGE, mime: 'image/webp', extension: 'webp' };
-  if (bytes.subarray(4, 8).toString('ascii') === 'ftyp') return { kind: MediaKind.VIDEO, mime: 'video/mp4', extension: 'mp4' };
-  if (bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return { kind: MediaKind.VIDEO, mime: 'video/webm', extension: 'webm' };
-  if (bytes.subarray(0, 4).toString('ascii') === 'OggS') return { kind: MediaKind.VIDEO, mime: 'video/ogg', extension: 'ogv' };
-  if (bytes.subarray(0, 5).toString('ascii') === '%PDF-') return { kind: MediaKind.DOCUMENT, mime: 'application/pdf', extension: 'pdf' };
-  if (bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) && ['docx', 'xlsx', 'pptx'].includes(extension)) return { kind: MediaKind.DOCUMENT, mime: `application/${extension}`, extension };
-  if (bytes.subarray(0, 7).toString('utf8').toUpperCase().startsWith('WEBVTT') && (claimedMime === 'text/vtt' || extension === 'vtt')) return { kind: MediaKind.CAPTION, mime: 'text/vtt', extension: 'vtt' };
-  if (['csv'].includes(extension) && /^[\x09\x0a\x0d\x20-\x7e]*$/.test(bytes.toString('utf8'))) return { kind: MediaKind.DOCUMENT, mime: 'text/csv', extension };
-  throw fail(415, 'File signature or type is not allowed');
 }
 
 async function contentHtml(content: { id: string; title: string; bodyJson: unknown; excerpt?: string | null; seoTitle?: string | null; seoDescription?: string | null; canonicalUrl?: string | null; noIndex: boolean; noFollow: boolean; publishedAt?: Date | null; updatedAt: Date; slug: string; ogImageId?: string | null }, kind: 'blog' | 'pages', preview = false) {
