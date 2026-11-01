@@ -371,6 +371,7 @@ export function registerWalletRoutes(app: Express) {
         if (sourceAccount.status !== WalletAccountStatus.ACTIVE || destinationAccount.status !== WalletAccountStatus.ACTIVE) throw fail(409, 'Wallet transfer is unavailable');
         const sourceBalance = await ensureWalletBalance(tx, sourceAccount.id, input.currency);
         const destinationBalance = await ensureWalletBalance(tx, destinationAccount.id, input.currency);
+        if (!Number.isSafeInteger(sourceBalance.availableMinor) || sourceBalance.availableMinor < input.amountMinor) throw fail(409, 'Insufficient available wallet funds');
         assertTransferAllowed({ senderId: user.id, recipientId: recipient.id, amountMinor: input.amountMinor, currency: input.currency }, sourceBalance.availableMinor, walletGateSettings(setting), env.MONEY_MOVEMENT_HARD_DISABLED);
         const debit = await tx.walletBalance.updateMany({ where: { id: sourceBalance.id, availableMinor: { gte: input.amountMinor } }, data: { availableMinor: { decrement: input.amountMinor } } });
         if (debit.count !== 1) throw fail(409, 'Insufficient available wallet funds');

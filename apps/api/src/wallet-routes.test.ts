@@ -39,12 +39,30 @@ const mocks = vi.hoisted(() => {
     admin: { id: "admin_test", role: "ADMIN" },
   };
   const activeWallet = {
-    id: "wallet_test",
+    id: "buyer_wallet",
     userId: "buyer_test",
     walletId: null as string | null,
     type: "USER",
     status: "ACTIVE",
   };
+  const balanceState = {
+    byAccount: { buyer_wallet: 1_000, seller_wallet: 250 } as Record<
+      string,
+      number
+    >,
+    forceDebitFailure: false,
+  };
+  const transferState: {
+    completed: {
+      id: string;
+      senderId: string;
+      recipientId: string;
+      amountMinor: number;
+      currency: string;
+      status: string;
+      idempotencyKey: string;
+    } | null;
+  } = { completed: null };
   const verification = { sender: true, recipient: true };
   const methods = {
     marketplaceSettings: {
@@ -122,6 +140,13 @@ const mocks = vi.hoisted(() => {
           where: { userId?: string; walletId?: string };
         }) => {
           if (where.userId === "buyer_test") return { ...activeWallet };
+          if (where.userId === "seller_test")
+            return {
+              id: "seller_wallet",
+              userId: "seller_test",
+              walletId: "uib9876",
+              status: "ACTIVE",
+            };
           if (where.walletId === "UI314159")
             return {
               id: "admin_wallet",
@@ -149,7 +174,62 @@ const mocks = vi.hoisted(() => {
       }),
       count: vi.fn(async () => 0),
     },
-    walletBalance: { groupBy: vi.fn(async () => []) },
+    walletBalance: {
+      groupBy: vi.fn(async () => []),
+      upsert: vi.fn(
+        async ({
+          where,
+        }: {
+          where: {
+            accountId_currency: { accountId: string; currency: string };
+          };
+        }) => ({
+          id: `balance:${where.accountId_currency.accountId}`,
+          accountId: where.accountId_currency.accountId,
+          currency: where.accountId_currency.currency,
+          availableMinor:
+            balanceState.byAccount[where.accountId_currency.accountId] ?? 0,
+          pendingMinor: 0,
+          heldMinor: 0,
+          frozenMinor: 0,
+        }),
+      ),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: { availableMinor: { decrement: number } };
+        }) => {
+          if (balanceState.forceDebitFailure) return { count: 0 };
+          const accountId = where.id.slice("balance:".length);
+          const balance = balanceState.byAccount[accountId] ?? 0;
+          if (balance < data.availableMinor.decrement) return { count: 0 };
+          balanceState.byAccount[accountId] =
+            balance - data.availableMinor.decrement;
+          return { count: 1 };
+        },
+      ),
+      update: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: { availableMinor: { increment: number } };
+        }) => {
+          const accountId = where.id.slice("balance:".length);
+          balanceState.byAccount[accountId] =
+            (balanceState.byAccount[accountId] ?? 0) +
+            data.availableMinor.increment;
+          return {
+            id: where.id,
+            availableMinor: balanceState.byAccount[accountId],
+          };
+        },
+      ),
+    },
     clubCoinAccount: {
       aggregate: vi.fn(async () => ({
         _sum: { balance: 0 },
@@ -163,8 +243,20 @@ const mocks = vi.hoisted(() => {
       ]),
     },
     walletTransfer: {
-      findUnique: vi.fn(async () => null),
-      create: vi.fn(),
+      findUnique: vi.fn(async () => transferState.completed),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const transfer = {
+          id: "transfer_synthetic_1",
+          senderId: String(data.senderId),
+          recipientId: String(data.recipientId),
+          amountMinor: Number(data.amountMinor),
+          currency: String(data.currency),
+          status: String(data.status),
+          idempotencyKey: String(data.idempotencyKey),
+        };
+        transferState.completed = transfer;
+        return { ...data, id: transfer.id };
+      }),
       update: vi.fn(),
     },
     walletFundingIntent: { findUnique: vi.fn(), create: vi.fn() },
@@ -172,7 +264,9 @@ const mocks = vi.hoisted(() => {
       findMany: vi.fn(async () => []),
       createMany: vi.fn(),
     },
-    walletLedgerTransaction: { create: vi.fn() },
+    walletLedgerTransaction: {
+      create: vi.fn(async () => ({ id: "ledger_synthetic_transfer_1" })),
+    },
     walletBalanceAllocation: { createMany: vi.fn() },
     auditLog: { create: vi.fn() },
     clubCoinEntry: { findUnique: vi.fn(), create: vi.fn(), findMany: vi.fn() },
@@ -181,7 +275,16 @@ const mocks = vi.hoisted(() => {
       operation(methods),
     ),
   };
-  return { actors, activeWallet, env, methods, settings, verification };
+  return {
+    actors,
+    activeWallet,
+    balanceState,
+    env,
+    methods,
+    settings,
+    transferState,
+    verification,
+  };
 });
 
 vi.mock("./config.js", () => ({ env: mocks.env }));
@@ -282,6 +385,10 @@ describe("wallet HTTP route authorization and fail-closed boundaries", () => {
       walletEmergencyPause: false,
     });
     mocks.activeWallet.walletId = null;
+    mocks.balanceState.byAccount.buyer_wallet = 1_000;
+    mocks.balanceState.byAccount.seller_wallet = 250;
+    mocks.balanceState.forceDebitFailure = false;
+    mocks.transferState.completed = null;
     mocks.verification.sender = true;
     mocks.verification.recipient = true;
   });
@@ -427,5 +534,129 @@ describe("wallet HTTP route authorization and fail-closed boundaries", () => {
         "Real-money wallet movement is hard-disabled by server configuration",
     });
     expect(mocks.methods.marketplaceSettings.update).not.toHaveBeenCalled();
+  });
+
+  it("posts a balanced transfer once and returns the existing result on exact replay", async () => {
+    mocks.env.MONEY_MOVEMENT_HARD_DISABLED = false;
+    const payload = {
+      recipientEmail: "seller@example.test",
+      amountMinor: 200,
+      currency: "USD",
+      idempotencyKey: "transfer_balanced_001",
+    };
+
+    const first = await request("/api/wallet/transfers", "buyer", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    expect(first.status).toBe(201);
+    expect(await first.json()).toMatchObject({
+      id: "transfer_synthetic_1",
+      status: "COMPLETED",
+      amountMinor: 200,
+      currency: "USD",
+    });
+    expect(mocks.balanceState.byAccount).toEqual({
+      buyer_wallet: 800,
+      seller_wallet: 450,
+    });
+    expect(mocks.methods.walletLedgerPosting.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          accountId: "buyer_wallet",
+          direction: "CREDIT",
+          amountMinor: 200,
+          currency: "USD",
+        }),
+        expect.objectContaining({
+          accountId: "seller_wallet",
+          direction: "DEBIT",
+          amountMinor: 200,
+          currency: "USD",
+        }),
+      ]),
+    });
+    expect(mocks.methods.walletBalanceAllocation.createMany).toHaveBeenCalled();
+    expect(mocks.methods.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "WALLET_TRANSFER_COMPLETED",
+          actorId: "buyer_test",
+        }),
+      }),
+    );
+
+    const replay = await request("/api/wallet/transfers", "buyer", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({
+      id: "transfer_synthetic_1",
+      status: "COMPLETED",
+    });
+    expect(mocks.methods.$transaction).toHaveBeenCalledTimes(1);
+    expect(mocks.balanceState.byAccount).toEqual({
+      buyer_wallet: 800,
+      seller_wallet: 450,
+    });
+  });
+
+  it("rejects a transfer with insufficient funds before ledger or recipient balance writes", async () => {
+    mocks.env.MONEY_MOVEMENT_HARD_DISABLED = false;
+    mocks.balanceState.byAccount.buyer_wallet = 50;
+
+    const response = await request("/api/wallet/transfers", "buyer", {
+      method: "POST",
+      body: JSON.stringify({
+        recipientEmail: "seller@example.test",
+        amountMinor: 100,
+        currency: "USD",
+        idempotencyKey: "transfer_insufficient_001",
+      }),
+    });
+
+    const responseBody = await response.json();
+    expect({ status: response.status, body: responseBody }).toMatchObject({
+      status: 409,
+      body: { error: "Insufficient available wallet funds" },
+    });
+    expect(mocks.methods.walletLedgerTransaction.create).not.toHaveBeenCalled();
+    expect(mocks.methods.walletBalance.update).not.toHaveBeenCalled();
+    expect(mocks.methods.walletLedgerPosting.createMany).not.toHaveBeenCalled();
+    expect(mocks.methods.walletTransfer.create).not.toHaveBeenCalled();
+    expect(mocks.balanceState.byAccount).toEqual({
+      buyer_wallet: 50,
+      seller_wallet: 250,
+    });
+  });
+
+  it("rejects a concurrent balance-debit race without posting the transfer", async () => {
+    mocks.env.MONEY_MOVEMENT_HARD_DISABLED = false;
+    mocks.balanceState.forceDebitFailure = true;
+
+    const response = await request("/api/wallet/transfers", "buyer", {
+      method: "POST",
+      body: JSON.stringify({
+        recipientEmail: "seller@example.test",
+        amountMinor: 200,
+        currency: "USD",
+        idempotencyKey: "transfer_debit_race_001",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "Insufficient available wallet funds",
+    });
+    expect(mocks.methods.walletBalance.updateMany).toHaveBeenCalledTimes(1);
+    expect(mocks.methods.walletLedgerTransaction.create).not.toHaveBeenCalled();
+    expect(mocks.methods.walletBalance.update).not.toHaveBeenCalled();
+    expect(mocks.methods.walletLedgerPosting.createMany).not.toHaveBeenCalled();
+    expect(mocks.methods.walletTransfer.create).not.toHaveBeenCalled();
+    expect(mocks.balanceState.byAccount).toEqual({
+      buyer_wallet: 1_000,
+      seller_wallet: 250,
+    });
   });
 });
