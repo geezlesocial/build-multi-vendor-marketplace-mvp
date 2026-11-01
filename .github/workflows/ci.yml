@@ -7,9 +7,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PASSWORD_PEPPER: ci-test-only-placeholder-pepper-123456
-      CONTENT_SCAN_REQUIRED: 'true'
+      CONTENT_SCAN_REQUIRED: "true"
       SITE_URL: http://127.0.0.1:4000
       WEB_ORIGIN: http://127.0.0.1:5173
+      FORMAT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
     services:
       postgres:
         image: postgres:17
@@ -26,6 +27,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -48,8 +51,17 @@ jobs:
       - run: npm run db:deploy
       - run: npm run db:seed
       - run: npm run lint
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
+      - run: npm run test:coverage -w apps/api
+      - name: Retain API coverage summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-api-coverage-${{ github.sha }}
+          path: apps/api/coverage/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 14
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - name: Run CMS browser tests
