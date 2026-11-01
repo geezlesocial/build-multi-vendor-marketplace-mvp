@@ -74,12 +74,12 @@ async function validateVisibilityKeys(configuration: SiteChromeConfiguration, st
 }
 
 async function checkChromeMedia(configuration: SiteChromeConfiguration, storeId: string | null, publish: boolean) {
-  const ids = [...new Set([configuration.header.logoMediaId, configuration.footer.logoMediaId].filter((id): id is string => Boolean(id)))];
+  const ids = [...new Set([configuration.header.logoMediaId, configuration.footer.logoMediaId, ...configuration.footer.socials.map(social => social.iconMediaId)].filter((id): id is string => Boolean(id)))];
   if (!ids.length) return;
   const assets = await prisma.mediaAsset.findMany({ where: { id: { in: ids }, storeId, kind: MediaKind.IMAGE, uploadStatus: MediaUploadStatus.COMPLETE }, select: { id: true, scanStatus: true } });
-  if (assets.length !== ids.length) throw fail(400, 'A logo asset is unavailable or belongs to another website.');
-  if (assets.some(asset => asset.scanStatus === MediaScanStatus.REJECTED)) throw fail(409, 'Rejected logo media cannot be used.');
-  if (publish && assets.some(asset => asset.scanStatus !== MediaScanStatus.APPROVED)) throw fail(409, 'Logo media must pass safety scanning before publication.');
+  if (assets.length !== ids.length) throw fail(400, 'A logo or social icon asset is unavailable or belongs to another website.');
+  if (assets.some(asset => asset.scanStatus === MediaScanStatus.REJECTED)) throw fail(409, 'Rejected logo or social icon media cannot be used.');
+  if (publish && assets.some(asset => asset.scanStatus !== MediaScanStatus.APPROVED)) throw fail(409, 'Logo and social icon media must pass safety scanning before publication.');
 }
 
 async function chromeForScope(id: string, storeId: string | null) {
@@ -123,10 +123,10 @@ async function publishDraft(id: string, storeId: string | null, expectedVersion:
     if (current.draftVersion !== expectedVersion) throw fail(409, 'This draft changed in another session. Reload it before publishing.');
     const configuration = siteChromeSchema.parse(current.draftJson);
     await validateVisibilityKeys(configuration, storeId ?? undefined);
-    const ids = [...new Set([configuration.header.logoMediaId, configuration.footer.logoMediaId].filter((assetId): assetId is string => Boolean(assetId)))];
+    const ids = [...new Set([configuration.header.logoMediaId, configuration.footer.logoMediaId, ...configuration.footer.socials.map(social => social.iconMediaId)].filter((assetId): assetId is string => Boolean(assetId)))];
     if (ids.length) {
       const assets = await tx.mediaAsset.findMany({ where: { id: { in: ids }, storeId, kind: MediaKind.IMAGE, uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: MediaScanStatus.APPROVED }, select: { id: true } });
-      if (assets.length !== ids.length) throw fail(409, 'All logos must belong to this website and pass safety scanning before publication.');
+      if (assets.length !== ids.length) throw fail(409, 'All logos and social icons must belong to this website and pass safety scanning before publication.');
     }
     const published = await tx.siteChromeConfiguration.update({ where: { id }, data: { publishedJson: jsonInput(configuration), publishedVersion: expectedVersion, publishedAt: new Date() } });
     await tx.auditLog.create({ data: { actorId, action: 'SITE_CHROME_PUBLISHED', entity: 'SiteChromeConfiguration', entityId: id, metadata: { version: expectedVersion, scope: storeId ? 'STORE' : 'PLATFORM' } } });
@@ -236,7 +236,7 @@ export function registerSiteChromeRoutes(app: Express) {
       configuration = (await resolvePublishedSiteChrome({})).configuration;
     }
     res.set({ 'Content-Type': 'text/css; charset=utf-8', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
-    res.send(siteChromeStyles(configuration ?? defaultSiteChrome()));
+    res.send(`${siteChromeStyles(configuration ?? defaultSiteChrome())}\n@media(min-width:381px) and (max-width:900px){.siteChromeSsrFooter--business .siteChromeSsrFooterMain{grid-template-columns:repeat(2,minmax(0,1fr))}.siteChromeSsrIdentity{grid-column:1/-1}}`);
   }));
 
   app.get('/api/admin/site-chrome', requireAuth, run(async (_req, res) => {
