@@ -5,7 +5,6 @@ import { Role } from "@prisma/client";
 import { EgressStatus } from "livekit-server-sdk";
 import { z } from "zod";
 import { audit, prisma, requireAuth, requireRole } from "./security.js";
-import { canDeleteLiveShow } from "./live-state.js";
 import {
   canTransitionLiveSession,
   requireLiveShopping,

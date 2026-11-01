@@ -11,7 +11,7 @@ import { env } from './config.js';
 import { prisma, hashPassword, verifyPassword, createSession, currentUser, requireAuth, requireRole, audit, safeUser, resolvePlatformPositionName } from './security.js';
 import { registerSchema, loginSchema, checkoutSchema, productSchema, variantSchema, posSchema, settingSchema, liveReportSchema } from './validation.js';
 import { capturePaypalOrder, createPaymongoCheckout, createPaypalOrder, createPaystackTransaction, createStripeCheckout, stripe, verifyPaypalWebhook } from './payments.js';
-import { eligibleProducts, liveShoppingState, publicLiveSession, requireLiveShopping } from './live-domain.js';
+import { liveShoppingState, publicLiveSession, requireLiveShopping } from './live-domain.js';
 import { liveProvider } from './live-provider.js';
 import { registerLiveProviderConfigurationRoutes, syncLiveProviderFromDatabase } from './live-provider-config.js';
 import { liveReplayStorageReady, reconcileLiveRecordings, streamReplayObject } from './live-replays.js';
