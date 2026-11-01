@@ -80,10 +80,15 @@ export async function verifyPaypalWebhook(rawBody: Buffer, headers: Record<strin
   return result.verification_status === 'SUCCESS';
 }
 
+function paypalRequestId(action: 'ORDER' | 'CAPTURE', identity: string) {
+  const digest = crypto.createHash('sha256').update(`marketplace:${action}:${identity}`).digest('hex').slice(0, 32);
+  return `ml-${action === 'ORDER' ? 'o' : 'c'}-${digest}`;
+}
+
 export async function createPaypalOrder(order: { id: string; orderNumber: string; totalMinor: number; currency: string }) {
   const token = await paypalAccessToken();
   const value = (order.totalMinor / 100).toFixed(2);
-  const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': crypto.randomUUID() }, body: JSON.stringify({ intent: 'CAPTURE', purchase_units: [{ reference_id: order.id, custom_id: order.id, description: `Marketplace order ${order.orderNumber}`, amount: { currency_code: order.currency, value } }], application_context: { user_action: 'PAY_NOW' } }) });
+  const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': paypalRequestId('ORDER', order.id) }, body: JSON.stringify({ intent: 'CAPTURE', purchase_units: [{ reference_id: order.id, custom_id: order.id, description: `Marketplace order ${order.orderNumber}`, amount: { currency_code: order.currency, value } }], application_context: { user_action: 'PAY_NOW' } }) });
   if (!response.ok) throw new Error(`PayPal create order failed (${response.status})`);
   return response.json() as Promise<{ id: string; status: string; links?: { rel: string; href: string }[] }>;
 }
@@ -100,7 +105,7 @@ export async function createPaypalStoreBusterOrder(input: { fundingIntentId: str
   return response.json() as Promise<{ id: string; status: string; links?: { rel: string; href: string }[] }>;
 }
 
-export async function capturePaypalOrder(providerOrderId: string, requestId: string = crypto.randomUUID()) {
+export async function capturePaypalOrder(providerOrderId: string, requestId: string = paypalRequestId('CAPTURE', providerOrderId)) {
   const token = await paypalAccessToken();
   const response = await fetch(`${env.PAYPAL_BASE_URL}/v2/checkout/orders/${encodeURIComponent(providerOrderId)}/capture`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': requestId } });
   if (!response.ok) throw new Error(`PayPal capture failed (${response.status})`);
