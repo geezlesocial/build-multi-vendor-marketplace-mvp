@@ -36,13 +36,17 @@ to waive failed or unavailable CI for a normal merge.
   payment, email-marketing, or live-streaming credentials.
 - Test databases and peppers are synthetic and scoped to ephemeral jobs.
 - Pull-request code is executed only in non-deploying verification jobs.
+- Full application CI runs on every pull request and on pushes to `main`; feature-branch pushes are validated by the pull-request run instead of launching a duplicate full suite.
 - Container actions are pinned to full commit SHAs; checkout does not retain
   credentials in the worktree.
 - GitHub Actions is restricted to the reviewed action repositories used by
   this project (`actions/checkout`, `actions/setup-node`,
-  `actions/upload-artifact`, `aquasecurity/trivy-action`, and `azure/login`),
-  and the repository requires full-length action commit SHAs. Repository
-  workflow-token defaults remain read-only; workflows cannot approve PRs.
+  `actions/upload-artifact`, `actions/cache` and its `restore`/`save`
+  subactions, `aquasecurity/trivy-action`, `aquasecurity/setup-trivy`, and
+  `azure/login`). These include the pinned composite-action dependencies used
+  by the Trivy scan. The repository requires full-length action commit SHAs.
+  Repository workflow-token defaults remain read-only; workflows cannot
+  approve PRs.
 - The Azure staging workflow is intentionally outside this change. PR #34 must
   remain a draft, and its workflow must not be run until environment approval,
   identity scope, spending, and deployment controls are separately approved.
