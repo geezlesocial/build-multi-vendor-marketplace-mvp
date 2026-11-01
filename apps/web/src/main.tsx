@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import './DashboardPolish.css';
 import './currency-location.css';
+import './store-themes.css';
 import './checkout-discount.css';
 import { ContentAdmin } from './ContentAdmin.js';
 import { AffiliateAdmin } from './AffiliateAdmin.js';
@@ -16,6 +17,7 @@ import { SellerStoreGrowth } from './SellerStoreGrowth.js';
 import { SellerCommissionStatement, SellerStoreCurrency } from './SellerStoreCurrency.js';
 import { AdminCurrencyCommission } from './AdminCurrencyCommission.js';
 import { Storefront } from './Storefront.js';
+import { StoreThemeStudio } from './StoreThemeStudio.js';
 import { StoreEmailAction } from './StoreEmailAction.js';
 import { EmailVerificationAction } from './EmailVerificationAction.js';
 import { Dashboard } from './Dashboard.js';
@@ -468,7 +470,7 @@ function PageRouter() {
   const categoryPath = path.match(/^\/category\/([^/]+)\/?$/);
   const productPath = path.match(/^\/products\/([^/]+)\/?$/);
   const jimaHelpPath = path.match(/^\/help\/jima\/([^/]+)\/?$/);
-  return storeContentPath ? <SellerStoreContent /> : storeGrowthPath ? <SellerStoreGrowth /> : path === '/email/confirm' ? <StoreEmailAction kind="confirm" /> : path === '/email/unsubscribe' ? <StoreEmailAction kind="unsubscribe" /> : path === '/seller/currency' ? <SellerStoreCurrency /> : path === '/seller/commissions' ? <SellerCommissionStatement /> : path === '/seller/site-chrome' ? <SiteChromeBuilder scope="store" /> : path === '/admin/currencies' ? <AdminCurrencyCommission section="currencies" /> : path === '/admin/commissions' ? <AdminCurrencyCommission section="commissions" /> : path === '/dashboard' ? <Dashboard /> : path === '/ads' ? <MarketplaceAds /> : path === '/admin/ads' ? <MarketplaceAds admin /> : path === '/favorites' ? <Favorites /> : path === '/settings' ? <Settings /> : path === '/wallet' ? <Wallet /> : path === '/club-coins' ? <ClubCoins /> : path === '/admin/wallet' ? <AdminWallet /> : path.startsWith('/admin/content') ? <ContentAdmin /> : path.startsWith('/admin/platform') ? <PlatformAdmin /> : path.startsWith('/seller/plan') ? <SellerStorePlan /> : path.startsWith('/seller/platform') ? <SellerPlatform /> : path.startsWith('/affiliate') ? <AffiliateDashboard /> : jimaHelpPath ? <JimaKnowledgeArticle id={decodeURIComponent(jimaHelpPath[1])} /> : categoryPath ? <MarketplaceCategory slug={decodeURIComponent(categoryPath[1])} /> : storePath ? <Storefront slug={decodeURIComponent(storePath[1])} /> : productPath ? <ProductPage id={decodeURIComponent(productPath[1])} /> : path === '/' ? <DomainRootRoute /> : <App />;
+  return storeContentPath ? <SellerStoreContent /> : storeGrowthPath ? <SellerStoreGrowth /> : path === '/email/confirm' ? <StoreEmailAction kind="confirm" /> : path === '/email/unsubscribe' ? <StoreEmailAction kind="unsubscribe" /> : path === '/seller/currency' ? <SellerStoreCurrency /> : path === '/seller/commissions' ? <SellerCommissionStatement /> : path === '/seller/themes' ? <StoreThemeStudio /> : path === '/seller/site-chrome' ? <SiteChromeBuilder scope="store" /> : path === '/admin/themes' ? <PlatformAdmin /> : path === '/admin/currencies' ? <AdminCurrencyCommission section="currencies" /> : path === '/admin/commissions' ? <AdminCurrencyCommission section="commissions" /> : path === '/dashboard' ? <Dashboard /> : path === '/ads' ? <MarketplaceAds /> : path === '/admin/ads' ? <MarketplaceAds admin /> : path === '/favorites' ? <Favorites /> : path === '/settings' ? <Settings /> : path === '/wallet' ? <Wallet /> : path === '/club-coins' ? <ClubCoins /> : path === '/admin/wallet' ? <AdminWallet /> : path.startsWith('/admin/content') ? <ContentAdmin /> : path.startsWith('/admin/platform') ? <PlatformAdmin /> : path.startsWith('/seller/plan') ? <SellerStorePlan /> : path.startsWith('/seller/platform') ? <SellerPlatform /> : path.startsWith('/affiliate') ? <AffiliateDashboard /> : jimaHelpPath ? <JimaKnowledgeArticle id={decodeURIComponent(jimaHelpPath[1])} /> : categoryPath ? <MarketplaceCategory slug={decodeURIComponent(categoryPath[1])} /> : storePath ? <Storefront slug={decodeURIComponent(storePath[1])} /> : productPath ? <ProductPage id={decodeURIComponent(productPath[1])} /> : path === '/' ? <DomainRootRoute /> : <App />;
 }
 function RoutedPage() {
   const liveRoute = window.location.pathname.match(/^\/live\/([^/]+)\/?$/);

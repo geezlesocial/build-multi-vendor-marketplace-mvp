@@ -548,7 +548,7 @@ function SellerDashboard({ data, tab, setTab, reload, currentUserId }: { data: S
     {tab === 'commission' && <SellerCommissionStatement />}
     {tab === 'integrations' && <SellerStoreIntegrations />}
     {tab === 'messages' && <><Messages conversations={data.conversations} reload={reload} currentUserId={currentUserId} /><SupportDesk mode="seller" /></>}
-    {tab === 'store' && <section className="setting"><div><h2>{data.store.name}</h2><p>Public URL: /store/{data.store.slug}</p></div><a href={`/store/${data.store.slug}`}>View store</a><a href="/seller/platform">Edit store settings</a></section>}
+    {tab === 'store' && <section className="setting"><div><h2>{data.store.name}</h2><p>Public URL: /store/{data.store.slug}</p></div><a href={`/store/${data.store.slug}`}>View store</a><a href="/seller/platform">Edit store settings</a><a href="/seller/themes">Open Themes &amp; Templates Studio</a></section>}
     {tab === 'payouts' && <section><h2>Payouts</h2><p className="muted">Payouts remain separate from buyer checkout. Full account identifiers are never shown.</p><div className="table">{data.payoutMethods.map(method => <div className="row" key={method.id}><span>{method.type} · {method.maskedIdentifier}</span><span>{method.status}</span></div>)}{data.payouts.map(payout => <div className="row" key={payout.id}><span>{money(payout.amountMinor, payout.currency)}</span><span>{payout.status}</span></div>)}</div><a href="/seller/platform">Manage payout methods</a></section>}
     {tab === 'pos' && <section className="setting"><h2>Cash POS</h2><p>POS availability is server-enforced for approved seller/cashier accounts.</p><a href="/pos">Open POS</a></section>}
     {tab === 'live' && <SellerLiveStudio products={data.products} />}
