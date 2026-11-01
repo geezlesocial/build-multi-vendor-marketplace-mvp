@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     providerSessionRef: null,
     playbackRef: null,
     recordingStatus: "NOT_CONFIGURED",
+    recordingErrorCode: null,
     recordingEgressId: null,
     recordingStorageKey: null,
     replayPublishedAt: null,
@@ -51,9 +52,14 @@ const mocks = vi.hoisted(() => {
     requireLiveShopping: vi.fn(async () => ({ effectiveEnabled: true })),
     canTransition: vi.fn(canTransition),
     canDelete: vi.fn(
-      (status: string, recordingStatus: string) =>
+      (
+        status: string,
+        recordingStatus: string,
+        recordingErrorCode?: string | null,
+      ) =>
         !["STARTING", "LIVE", "PAUSED"].includes(status) &&
-        !["STARTING", "RECORDING", "PROCESSING"].includes(recordingStatus),
+        !["STARTING", "RECORDING", "PROCESSING"].includes(recordingStatus) &&
+        recordingErrorCode !== "SELLER_REPLAY_DELETE_PENDING",
     ),
     createProviderSession: vi.fn(async () => ({
       providerSessionRef: "provider-session-synthetic",
@@ -70,9 +76,12 @@ const mocks = vi.hoisted(() => {
     stopRecording: vi.fn(async () => ({ status: 0 })),
     liveReplayStorageReady: vi.fn(() => false),
     reconcileLiveRecordings: vi.fn(async () => undefined),
-    removeReplayObject: vi.fn(async () => undefined),
+    removeReplayObject: vi.fn(async (_key: string) => undefined),
     replayObjectExists: vi.fn(async () => true),
-    streamReplayObject: vi.fn(async () => undefined),
+    streamReplayObject: vi.fn(async (...args: unknown[]) => {
+      const response = args[1] as { send: (body: string) => unknown };
+      response.send("synthetic replay");
+    }),
     syncLiveShopProducts: vi.fn(async () => undefined),
   };
   const tx = {
@@ -130,12 +139,25 @@ vi.mock("./security.js", () => ({
 vi.mock("./live-domain.js", () => ({
   eligibleProducts: mocks.calls.eligibleProducts,
   eligibleSeller: mocks.calls.eligibleSeller,
-  publicLiveSession: (session: unknown) => session,
+  publicLiveSession: (session: Record<string, unknown>) => {
+    const {
+      providerSessionRef: _providerSessionRef,
+      playbackRef: _playbackRef,
+      providerStatus: _providerStatus,
+      errorMessage: _errorMessage,
+      recordingEgressId: _recordingEgressId,
+      recordingStorageKey: _recordingStorageKey,
+      recordingErrorCode: _recordingErrorCode,
+      ...safe
+    } = session;
+    return safe;
+  },
   canTransitionLiveSession: mocks.calls.canTransition,
   requireLiveShopping: mocks.calls.requireLiveShopping,
 }));
 vi.mock("./live-state.js", () => ({
   canDeleteLiveShow: mocks.calls.canDelete,
+  REPLAY_DELETION_PENDING_ERROR_CODE: "SELLER_REPLAY_DELETE_PENDING",
 }));
 vi.mock("./live-provider.js", () => ({
   liveProvider: {
@@ -536,6 +558,255 @@ describe("seller live-session API ownership and provider gates", () => {
     expect(mocks.calls.updateMany).not.toHaveBeenCalled();
   });
 
+  it("publishes an owned replay only after confirming the private object exists", async () => {
+    setSession(
+      mocks.makeSession({
+        status: "ENDED",
+        recordingStatus: "READY",
+        recordingStorageKey: "synthetic/private-replay.mp4",
+      }),
+    );
+    const baseUrl = await startServer();
+    const response = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-synthetic/replay",
+      { ...seller, method: "POST", body: { published: true } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      id: "session-synthetic",
+      published: true,
+    });
+    expect(mocks.calls.replayObjectExists).toHaveBeenCalledWith(
+      "synthetic/private-replay.mp4",
+    );
+    expect(mocks.calls.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          sellerId: "seller-a",
+          recordingStatus: "READY",
+          replayPublishedAt: null,
+          recordingStorageKey: "synthetic/private-replay.mp4",
+        }),
+        data: expect.objectContaining({ replayPublishedAt: expect.any(Date) }),
+      }),
+    );
+    expect(mocks.calls.audit).toHaveBeenCalledWith(
+      "user-a",
+      "LIVE_REPLAY_PUBLISHED",
+      "LiveSession",
+      "session-synthetic",
+      { published: true },
+    );
+  });
+
+  it("unpublishes an owned replay without needing the object to be available", async () => {
+    const replayPublishedAt = new Date("2026-10-30T10:00:00.000Z");
+    setSession(
+      mocks.makeSession({
+        status: "ENDED",
+        recordingStatus: "READY",
+        recordingStorageKey: "synthetic/private-replay.mp4",
+        replayPublishedAt,
+      }),
+    );
+    mocks.calls.replayObjectExists.mockResolvedValue(false);
+    const baseUrl = await startServer();
+    const response = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-synthetic/replay",
+      { ...seller, method: "POST", body: { published: false } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      id: "session-synthetic",
+      published: false,
+    });
+    expect(mocks.calls.replayObjectExists).not.toHaveBeenCalled();
+    expect(mocks.calls.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ replayPublishedAt }),
+        data: { replayPublishedAt: null },
+      }),
+    );
+    expect(mocks.calls.audit).toHaveBeenCalledWith(
+      "user-a",
+      "LIVE_REPLAY_UNPUBLISHED",
+      "LiveSession",
+      "session-synthetic",
+      { published: false },
+    );
+  });
+
+  it("does not stream a replay unless an owned ended recording is ready", async () => {
+    mocks.calls.findFirst.mockResolvedValue(null);
+    const baseUrl = await startServer();
+    const response = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-owned-by-another-seller/replay",
+      seller,
+    );
+
+    expect(response.status).toBe(404);
+    expect(mocks.calls.streamReplayObject).not.toHaveBeenCalled();
+  });
+
+  it("claims replay deletion before removing the object and reports a publish race", async () => {
+    setSession(
+      mocks.makeSession({
+        status: "ENDED",
+        recordingStatus: "READY",
+        recordingStorageKey: "synthetic/private-replay.mp4",
+      }),
+    );
+    mocks.calls.updateMany.mockResolvedValueOnce({ count: 0 });
+    const baseUrl = await startServer();
+    const response = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-synthetic/replay",
+      { ...seller, method: "DELETE" },
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.calls.updateMany).toHaveBeenCalledOnce();
+    expect(mocks.calls.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          recordingStatus: "READY",
+          replayPublishedAt: null,
+          recordingStorageKey: "synthetic/private-replay.mp4",
+        }),
+        data: {
+          recordingStatus: "FAILED",
+          recordingErrorCode: "SELLER_REPLAY_DELETE_PENDING",
+        },
+      }),
+    );
+    expect(mocks.calls.removeReplayObject).not.toHaveBeenCalled();
+    expect(mocks.calls.audit).not.toHaveBeenCalled();
+  });
+
+  it("removes an unpublished replay after its deletion claim and then clears its key", async () => {
+    setSession(
+      mocks.makeSession({
+        status: "ENDED",
+        recordingStatus: "READY",
+        recordingStorageKey: "synthetic/private-replay.mp4",
+      }),
+    );
+    const baseUrl = await startServer();
+    const response = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-synthetic/replay",
+      { ...seller, method: "DELETE" },
+    );
+
+    expect(response.status).toBe(204);
+    expect(mocks.calls.updateMany).toHaveBeenCalledTimes(2);
+    expect(mocks.calls.removeReplayObject).toHaveBeenCalledOnce();
+    expect(mocks.calls.removeReplayObject).toHaveBeenCalledWith(
+      "synthetic/private-replay.mp4",
+    );
+    expect(mocks.calls.updateMany.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.calls.removeReplayObject.mock.invocationCallOrder[0]!,
+    );
+    expect(
+      mocks.calls.removeReplayObject.mock.invocationCallOrder[0]!,
+    ).toBeLessThan(mocks.calls.updateMany.mock.invocationCallOrder[1]!);
+    expect(mocks.calls.updateMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          recordingStatus: "FAILED",
+          recordingErrorCode: "SELLER_REPLAY_DELETE_PENDING",
+          recordingStorageKey: "synthetic/private-replay.mp4",
+        }),
+        data: {
+          recordingStatus: "FAILED",
+          recordingStorageKey: null,
+          recordingErrorCode: "SELLER_DELETED_REPLAY",
+        },
+      }),
+    );
+    expect(mocks.calls.audit).toHaveBeenCalledWith(
+      "user-a",
+      "LIVE_REPLAY_DELETED",
+      "LiveSession",
+      "session-synthetic",
+      {},
+    );
+  });
+
+  it("retains a retryable claim when storage fails and then completes deletion", async () => {
+    setSession(
+      mocks.makeSession({
+        status: "ENDED",
+        recordingStatus: "READY",
+        recordingStorageKey: "synthetic/private-replay.mp4",
+      }),
+    );
+    mocks.calls.removeReplayObject.mockRejectedValueOnce(
+      new Error("Synthetic storage outage"),
+    );
+    const baseUrl = await startServer();
+    const firstAttempt = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-synthetic/replay",
+      { ...seller, method: "DELETE" },
+    );
+
+    expect(firstAttempt.status).toBe(500);
+    expect(mocks.calls.updateMany).toHaveBeenCalledOnce();
+    expect(mocks.calls.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          recordingStatus: "READY",
+          recordingStorageKey: "synthetic/private-replay.mp4",
+        }),
+        data: {
+          recordingStatus: "FAILED",
+          recordingErrorCode: "SELLER_REPLAY_DELETE_PENDING",
+        },
+      }),
+    );
+    expect(mocks.calls.audit).not.toHaveBeenCalled();
+
+    setSession(
+      mocks.makeSession({
+        status: "ENDED",
+        recordingStatus: "FAILED",
+        recordingErrorCode: "SELLER_REPLAY_DELETE_PENDING",
+        recordingStorageKey: "synthetic/private-replay.mp4",
+      }),
+    );
+    const retry = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-synthetic/replay",
+      { ...seller, method: "DELETE" },
+    );
+
+    expect(retry.status).toBe(204);
+    expect(mocks.calls.removeReplayObject).toHaveBeenCalledTimes(2);
+    expect(mocks.calls.updateMany).toHaveBeenCalledTimes(2);
+    expect(mocks.calls.updateMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          recordingStatus: "FAILED",
+          recordingErrorCode: "SELLER_REPLAY_DELETE_PENDING",
+          recordingStorageKey: "synthetic/private-replay.mp4",
+        }),
+        data: {
+          recordingStatus: "FAILED",
+          recordingStorageKey: null,
+          recordingErrorCode: "SELLER_DELETED_REPLAY",
+        },
+      }),
+    );
+  });
+
   it("prevents deletion while a seller broadcast is active", async () => {
     setSession(mocks.makeSession({ status: "LIVE" }));
     const baseUrl = await startServer();
@@ -547,5 +818,54 @@ describe("seller live-session API ownership and provider gates", () => {
 
     expect(response.status).toBe(409);
     expect(mocks.calls.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("prevents deleting a show until its pending replay deletion can be retried", async () => {
+    setSession(
+      mocks.makeSession({
+        status: "ENDED",
+        recordingStatus: "FAILED",
+        recordingErrorCode: "SELLER_REPLAY_DELETE_PENDING",
+        recordingStorageKey: "synthetic/private-replay.mp4",
+      }),
+    );
+    const baseUrl = await startServer();
+    const response = await request(
+      baseUrl,
+      "/api/seller/live-sessions/session-synthetic",
+      { ...seller, method: "DELETE" },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Finish deleting the replay before deleting this show.",
+    });
+    expect(mocks.calls.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("exposes only a seller retry flag for a pending replay deletion", async () => {
+    const pendingSession = mocks.makeSession({
+      status: "ENDED",
+      recordingStatus: "FAILED",
+      recordingErrorCode: "SELLER_REPLAY_DELETE_PENDING",
+      recordingStorageKey: "synthetic/private-replay.mp4",
+    });
+    setSession(pendingSession);
+    mocks.calls.findMany.mockResolvedValue([pendingSession]);
+    const baseUrl = await startServer();
+    const response = await request(
+      baseUrl,
+      "/api/seller/live-sessions",
+      seller,
+    );
+    const [session] = (await response.json()) as Record<string, unknown>[];
+
+    expect(response.status).toBe(200);
+    expect(session).toMatchObject({
+      id: "session-synthetic",
+      replayDeletionPending: true,
+    });
+    expect(session).not.toHaveProperty("recordingErrorCode");
+    expect(session).not.toHaveProperty("recordingStorageKey");
   });
 });
