@@ -600,6 +600,20 @@ describe("wallet HTTP route authorization and fail-closed boundaries", () => {
       buyer_wallet: 800,
       seller_wallet: 450,
     });
+
+    const mismatchedReplay = await request("/api/wallet/transfers", "buyer", {
+      method: "POST",
+      body: JSON.stringify({ ...payload, amountMinor: 201 }),
+    });
+    expect(mismatchedReplay.status).toBe(409);
+    expect(await mismatchedReplay.json()).toMatchObject({
+      error: "Idempotency key was already used for a different request",
+    });
+    expect(mocks.methods.$transaction).toHaveBeenCalledTimes(1);
+    expect(mocks.balanceState.byAccount).toEqual({
+      buyer_wallet: 800,
+      seller_wallet: 450,
+    });
   });
 
   it("rejects a transfer with insufficient funds before ledger or recipient balance writes", async () => {
