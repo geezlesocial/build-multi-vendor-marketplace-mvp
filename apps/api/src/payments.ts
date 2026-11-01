@@ -36,7 +36,7 @@ export async function createPaystackTransaction(order: { id: string; orderNumber
   const key = env.PAYSTACK_SECRET_KEY;
   if (!key || key.toLowerCase().includes('placeholder')) throw new Error('Paystack is not configured with a real API secret.');
   if (order.currency !== 'NGN') throw new Error('Paystack checkout is restricted to NGN.');
-  const reference = `ML${order.id.replace(/[^A-Za-z0-9=.\-]/g, '')}`;
+  const reference = `ML${order.id.replace(/[^A-Za-z0-9=.-]/g, '')}`;
   const response = await fetch('https://api.paystack.co/transaction/initialize', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },

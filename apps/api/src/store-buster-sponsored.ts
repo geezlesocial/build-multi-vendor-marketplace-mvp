@@ -61,7 +61,7 @@ export async function settleStoreBusterFunding(input: FundingCapture) {
       for (const accountId of accountIds) {
         await tx.$queryRaw`SELECT "id" FROM "StoreBusterAdAccount" WHERE "id" = ${accountId} FOR UPDATE`;
       }
-      let intent = await tx.storeBusterAdFundingIntent.findUnique({ where: { id: intentId }, include: { account: true } });
+      const intent = await tx.storeBusterAdFundingIntent.findUnique({ where: { id: intentId }, include: { account: true } });
       if (!intent) return { handled: false, reconciliation: 'NOT_AD_FUNDING' as const };
 
       let reviewReason: string | null = null;

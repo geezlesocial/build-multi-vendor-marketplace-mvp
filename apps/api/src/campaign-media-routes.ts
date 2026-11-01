@@ -63,8 +63,7 @@ export function registerCampaignMediaRoutes(app: Express, scanner: MalwareScanne
     const inputBytes = Buffer.isBuffer(bytesInput) ? bytesInput : Buffer.alloc(0);
     if (!inputBytes.length) throw fail(400, 'Choose a non-empty image or video file.');
 
-    let originalName: string;
-    originalName = decodedHeader(req, 'x-file-name').trim();
+    const originalName = decodedHeader(req, 'x-file-name').trim();
     const mime = (req.get('x-file-type') ?? '').trim().toLowerCase();
     if (!originalName || originalName.length > 255 || /[\r\n\0]/.test(originalName)) throw fail(400, 'The file name is invalid.');
     const extension = path.extname(path.basename(originalName)).slice(1).toLowerCase();
@@ -78,7 +77,7 @@ export function registerCampaignMediaRoutes(app: Express, scanner: MalwareScanne
     const maxBytes = detected.kind === MediaKind.IMAGE ? env.CONTENT_MAX_IMAGE_BYTES : env.CONTENT_MAX_VIDEO_BYTES;
     if (inputBytes.length > maxBytes) throw fail(413, `File exceeds the configured ${detected.kind.toLowerCase()} size limit.`);
 
-    let destinationUrl = validateDestination(decodedHeader(req, 'x-destination-url') || null);
+    const destinationUrl = validateDestination(decodedHeader(req, 'x-destination-url') || null);
     let altText = decodedHeader(req, 'x-alt-text').trim();
     let buttonLabel = decodedHeader(req, 'x-button-label').trim();
     if (detected.kind === MediaKind.IMAGE) {
