@@ -7,8 +7,8 @@ below any floor fails the job.
 
 ## Measured baseline and floors
 
-Measured on `b5de1a8fa3910fd9029cbcdc10f608d7cd5e6b7b` with the locked dependency
-set and V8 coverage provider:
+The local baseline reproduction used `b5de1a8fa3910fd9029cbcdc10f608d7cd5e6b7b`,
+the locked dependency set, Node 22.18.0, and the V8 coverage provider:
 
 | Metric     | Baseline | Enforced floor |
 | ---------- | -------: | -------------: |
@@ -16,6 +16,10 @@ set and V8 coverage provider:
 | Branches   |   15.78% |            15% |
 | Functions  |   19.25% |            19% |
 | Lines      |   17.06% |            17% |
+
+The successful GitHub Actions coverage artifact for the same main commit reports
+15.79% branches (the local rerun reports 15.78%); the other displayed metrics
+match to two decimal places. The 15% branch floor is below both measurements.
 
 The floors are deliberately just below the reproducible baseline to allow small
 runtime/tooling variance while preventing a material coverage regression. They
