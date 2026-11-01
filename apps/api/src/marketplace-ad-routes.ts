@@ -65,7 +65,7 @@ const marketplaceAdBlogClient = `
         label.className='marketplace-ad-blog-label'; label.textContent='Sponsored · marketplace ad'; title.textContent=ad.headline; description.textContent=ad.description; actions.className='marketplace-ad-blog-actions';
         actions.append(link('View product','/products/'+encodeURIComponent(ad.product.id),ad,'PRODUCT'));
         if(ad.store && ad.store.slug) actions.append(link('Visit store','/store/'+encodeURIComponent(ad.store.slug),ad,'STORE'));
-        if(ad.externalUrl && /^https:\/\//i.test(ad.externalUrl)) actions.append(link('Visit advertiser',ad.externalUrl,ad,'EXTERNAL'));
+        if(ad.externalUrl && ad.externalUrl.toLowerCase().startsWith('https://')) actions.append(link('Visit advertiser',ad.externalUrl,ad,'EXTERNAL'));
         body.append(label,title,description,actions); card.append(body); grid.append(card);
         visible(card, () => request(api+'/'+encodeURIComponent(ad.id)+'/impression', { method:'POST', body:JSON.stringify({ impressionToken:ad.impressionToken }), keepalive:true }).catch(() => undefined));
       });

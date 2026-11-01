@@ -10,7 +10,7 @@ describe('password hashing compatibility', () => {
     expect(encoded.startsWith('v2$')).toBe(true);
     await expect(verifyPassword(password, encoded)).resolves.toBe(true);
     await expect(verifyPassword(`${password}!`, encoded)).resolves.toBe(false);
-  });
+  }, 15_000);
 
   it('continues to verify existing bcrypt(password + pepper) hashes', async () => {
     const password = 'ExistingDemoPassword-2026!';

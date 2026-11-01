@@ -289,7 +289,6 @@ export function registerJimaRoutes(app: Express) {
       prisma.jimaMessage.create({ data: { conversationId: conversation.id, role: 'user', content: input.message } }),
       prisma.jimaConversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } })
     ]);
-    let answer: string;
     let runtimeResult: { accepted: true; value: string } | { accepted: false };
     try {
       runtimeResult = await runtimeSlots.run(() => requestJimaCompletion(config, messages));
@@ -302,7 +301,7 @@ export function registerJimaRoutes(app: Express) {
       res.setHeader('Retry-After', '5');
       return res.status(503).json({ error: 'Jima is handling several requests right now. Please retry shortly.', conversationId: conversation.id });
     }
-    answer = runtimeResult.value;
+    const answer = runtimeResult.value;
     await recordRuntimeOutcome('SUCCESS');
     await prisma.$transaction([
       prisma.jimaMessage.create({ data: { conversationId: conversation.id, role: 'assistant', content: answer } }),
