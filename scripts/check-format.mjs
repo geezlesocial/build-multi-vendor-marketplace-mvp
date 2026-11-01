@@ -9,11 +9,36 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "inherit"],
   }).trim();
 
-const base =
-  process.env.FORMAT_BASE_REF ||
-  (process.env.GITHUB_BASE_REF
+const baseCandidates = [
+  process.env.FORMAT_BASE_REF,
+  process.env.GITHUB_BASE_REF
     ? `origin/${process.env.GITHUB_BASE_REF}`
-    : "origin/main");
+    : undefined,
+  "origin/main",
+];
+const base = baseCandidates.find((candidate) => {
+  if (
+    !candidate?.trim() ||
+    /^0+$/.test(candidate.trim()) ||
+    candidate.startsWith("-")
+  ) {
+    return false;
+  }
+
+  try {
+    run("git", ["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+if (!base) {
+  throw new Error(
+    "No valid formatter comparison base was found; fetch the pull-request base or origin/main.",
+  );
+}
+
 const trackedChanges = run("git", [
   "diff",
   "--name-status",
