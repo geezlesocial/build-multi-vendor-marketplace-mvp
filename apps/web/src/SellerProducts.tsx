@@ -113,7 +113,7 @@ export function SellerProducts({
     return () => {
       active = false;
     };
-  }, [resourceRetry]);
+  }, [resourceRetry, request]);
   const uploadFiles = async (files: File[], product?: any) => {
     if (uploadLock.current) return;
     const selected: { file: File; contentType: string }[] = [];
