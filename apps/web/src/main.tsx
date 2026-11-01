@@ -8,16 +8,12 @@ import './checkout-discount.css';
 import { ContentAdmin } from './ContentAdmin.js';
 import { AffiliateAdmin } from './AffiliateAdmin.js';
 import { AffiliateDashboard } from './AffiliateDashboard.js';
-import { PlatformAdmin } from './PlatformAdmin.js';
 import { SiteChromeBuilder } from './SiteChromeBuilder.js';
-import { SellerPlatform } from './SellerPlatform.js';
 import { SellerStorePlan } from './SellerStorePlan.js';
 import { SellerStoreContent } from './SellerStoreContent.js';
 import { SellerStoreGrowth } from './SellerStoreGrowth.js';
 import { SellerCommissionStatement, SellerStoreCurrency } from './SellerStoreCurrency.js';
 import { AdminCurrencyCommission } from './AdminCurrencyCommission.js';
-import { Storefront } from './Storefront.js';
-import { StoreThemeStudio } from './StoreThemeStudio.js';
 import { StoreEmailAction } from './StoreEmailAction.js';
 import { EmailVerificationAction } from './EmailVerificationAction.js';
 import { Dashboard } from './Dashboard.js';
@@ -34,6 +30,11 @@ import { AppShell } from './AppShell.js';
 import { SessionProvider, useSession, type SessionUser } from './session.js';
 import { formatMinor } from './money.js';
 import { LiveEmbedPage, LivePublicPage } from './LivePublicPage.js';
+
+const PlatformAdmin = React.lazy(() => import('./PlatformAdmin.js').then(module => ({ default: module.PlatformAdmin })));
+const SellerPlatform = React.lazy(() => import('./SellerPlatform.js').then(module => ({ default: module.SellerPlatform })));
+const Storefront = React.lazy(() => import('./Storefront.js').then(module => ({ default: module.Storefront })));
+const StoreThemeStudio = React.lazy(() => import('./StoreThemeStudio.js').then(module => ({ default: module.StoreThemeStudio })));
 
 type User = SessionUser;
 type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; sellerId?: string | null; seller?: { store?: { name: string } }; category?: { name: string }; productType?: { id: string; name: string; requiresShipping: boolean } };
@@ -477,6 +478,8 @@ function RoutedPage() {
   if (liveRoute) return <LivePublicPage sessionId={safePathSegment(liveRoute[1]!)} />;
   return window.location.pathname === '/email/verify' ? <EmailVerificationAction /> : <PageRouter />;
 }
+function RouteLoading() { return <main className="shellLoading" role="status"><p className="eyebrow">Marketplace</p><h1>Opening your page…</h1></main>; }
+function RoutedPageBoundary() { return <React.Suspense fallback={<RouteLoading />}><RoutedPage /></React.Suspense>; }
 function safePathSegment(value: string) { try { return decodeURIComponent(value); } catch { return ''; } }
 const liveEmbedRoute = window.location.pathname.match(/^\/live\/([^/]+)\/embed\/?$/);
 const liveCheckoutEmbedRoute = window.location.pathname === '/checkout'
@@ -484,4 +487,4 @@ const liveCheckoutEmbedRoute = window.location.pathname === '/checkout'
   && new URLSearchParams(window.location.search).get('embed') === '1';
 createRoot(document.getElementById('root')!).render(<React.StrictMode>{liveEmbedRoute
   ? <LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} />
-  : <SessionProvider>{liveCheckoutEmbedRoute ? <RoutedPage /> : <AppShell><RoutedPage /></AppShell>}</SessionProvider>}</React.StrictMode>);
+  : <SessionProvider>{liveCheckoutEmbedRoute ? <RoutedPageBoundary /> : <AppShell><RoutedPageBoundary /></AppShell>}</SessionProvider>}</React.StrictMode>);
