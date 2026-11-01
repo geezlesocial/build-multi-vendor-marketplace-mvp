@@ -7,8 +7,10 @@ const repositoryRoot = path.resolve(
   "..",
 );
 const configPath = path.join(repositoryRoot, "apps/api/src/config.ts");
+const prismaConfigPath = path.join(repositoryRoot, "apps/api/prisma.config.ts");
 const examplePath = path.join(repositoryRoot, ".env.example");
 const configSource = readFileSync(configPath, "utf8");
+const prismaConfigSource = readFileSync(prismaConfigPath, "utf8");
 const exampleSource = readFileSync(examplePath, "utf8");
 
 // Config schema properties are deliberately one per line so this dependency-free
@@ -31,7 +33,13 @@ for (const line of exampleSource.split(/\r?\n/)) {
 }
 
 const schemaNames = schemaProperties.map(([, name]) => name);
+const prismaConfigNames = [
+  ...prismaConfigSource.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)\b/g),
+].map(([, name]) => name);
 const missingDocumentation = schemaNames.filter(
+  (name) => !documentedNames.has(name),
+);
+const missingPrismaDocumentation = prismaConfigNames.filter(
   (name) => !documentedNames.has(name),
 );
 // These imported Zod helpers supply their own fail-closed defaults outside config.ts.
@@ -66,15 +74,24 @@ const failClosedValues = new Map([
 const unsafeGates = [...failClosedValues].filter(
   ([name, expected]) => activeValues.get(name) !== expected,
 );
+const invalidPrismaDefaults =
+  activeValues.get("PRISMA_MIGRATIONS_PATH") !== "prisma/migrations";
 
 if (
   missingDocumentation.length ||
+  missingPrismaDocumentation.length ||
   inactiveRequired.length ||
-  unsafeGates.length
+  unsafeGates.length ||
+  invalidPrismaDefaults
 ) {
   if (missingDocumentation.length) {
     console.error(
       `Undocumented config schema keys: ${missingDocumentation.join(", ")}`,
+    );
+  }
+  if (missingPrismaDocumentation.length) {
+    console.error(
+      `Undocumented Prisma CLI environment keys: ${missingPrismaDocumentation.join(", ")}`,
     );
   }
   if (inactiveRequired.length) {
@@ -87,9 +104,14 @@ if (
       `Unsafe or missing fail-closed sample settings: ${unsafeGates.map(([name]) => name).join(", ")}`,
     );
   }
+  if (invalidPrismaDefaults) {
+    console.error(
+      "PRISMA_MIGRATIONS_PATH must actively use the safe default prisma/migrations.",
+    );
+  }
   process.exitCode = 1;
 } else {
   console.log(
-    `Environment example covers ${schemaNames.length} API settings (${requiredNames.length} required active; optional integration settings may remain commented). Critical launch gates are fail-closed.`,
+    `Environment example covers ${schemaNames.length} API settings and ${prismaConfigNames.length} Prisma CLI setting (${requiredNames.length} required active; optional integration settings may remain commented). Critical launch gates are fail-closed.`,
   );
 }

@@ -9,11 +9,11 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "inherit"],
   }).trim();
 
-const base =
-  process.env.FORMAT_BASE_REF ||
-  (process.env.GITHUB_BASE_REF
-    ? `origin/${process.env.GITHUB_BASE_REF}`
-    : "origin/main");
+const fallbackBase = process.env.GITHUB_BASE_REF
+  ? `origin/${process.env.GITHUB_BASE_REF}`
+  : "origin/main";
+const configuredBase = process.env.FORMAT_BASE_REF || fallbackBase;
+const base = /^0+$/.test(configuredBase) ? fallbackBase : configuredBase;
 const trackedChanges = run("git", [
   "diff",
   "--name-status",
