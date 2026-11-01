@@ -12,6 +12,7 @@
     "build": "npm run build -w apps/api && npm run build -w apps/web",
     "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
     "format:check": "node scripts/check-format.mjs",
+    "env:example:check": "node scripts/check-env-example.mjs",
     "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
     "test": "npm run test -w apps/api",
     "db:generate": "npm run prisma:generate -w apps/api",

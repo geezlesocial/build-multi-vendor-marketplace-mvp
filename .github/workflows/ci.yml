@@ -52,6 +52,7 @@ jobs:
       - run: npm run db:seed
       - run: npm run lint
       - run: npm run format:check
+      - run: npm run env:example:check
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:coverage -w apps/api
