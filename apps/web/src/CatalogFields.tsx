@@ -112,5 +112,5 @@ function SuggestionForm({ kind, title, parentCategoryId, categoryId, onMessage }
     catch (error) { onMessage((error as Error).message); }
     finally { setSaving(false); }
   };
-  return <div className="catalogSuggestionForm"><label>{title}<input required minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void submit(); } }} placeholder={`Enter ${title.toLocaleLowerCase()}`} /></label><button type="button" disabled={saving || !name.trim()} onClick={() => void submit()}>{saving ? 'Submitting…' : 'Suggest'}</button></div>;
+  return <div className="catalogSuggestionForm"><label>{title}<input minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void submit(); } }} placeholder={`Enter ${title.toLocaleLowerCase()}`} /></label><button type="button" disabled={saving || !name.trim()} onClick={() => void submit()}>{saving ? 'Submitting…' : 'Suggest'}</button></div>;
 }
