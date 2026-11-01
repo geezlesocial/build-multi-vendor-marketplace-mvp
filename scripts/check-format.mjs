@@ -9,8 +9,9 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "inherit"],
   }).trim();
 
+const requestedBase = process.env.FORMAT_BASE_REF?.trim();
 const base =
-  process.env.FORMAT_BASE_REF ||
+  (requestedBase && !/^0{40}$/.test(requestedBase) ? requestedBase : null) ||
   (process.env.GITHUB_BASE_REF
     ? `origin/${process.env.GITHUB_BASE_REF}`
     : "origin/main");
