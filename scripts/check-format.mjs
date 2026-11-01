@@ -9,11 +9,36 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "inherit"],
   }).trim();
 
-const base =
+const requestedBase =
   process.env.FORMAT_BASE_REF ||
   (process.env.GITHUB_BASE_REF
     ? `origin/${process.env.GITHUB_BASE_REF}`
     : "origin/main");
+const baseCandidates = [
+  requestedBase,
+  process.env.GITHUB_BASE_REF
+    ? `origin/${process.env.GITHUB_BASE_REF}`
+    : "origin/main",
+].filter(
+  (candidate, index, candidates) => candidates.indexOf(candidate) === index,
+);
+const isCommit = (ref) => {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+const base = baseCandidates.find(isCommit);
+if (!base) {
+  console.error(
+    `Could not resolve a formatting comparison base (${baseCandidates.join(", ")}).`,
+  );
+  process.exit(1);
+}
 const trackedChanges = run("git", [
   "diff",
   "--name-status",
