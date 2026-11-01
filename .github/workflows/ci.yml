@@ -57,6 +57,7 @@ jobs:
       - run: npm run db:deploy
       - run: npm run db:seed
       - run: npm run lint
+      - run: node --test scripts/format-base.test.mjs
       - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
