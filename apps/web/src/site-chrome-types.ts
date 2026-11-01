@@ -1,5 +1,5 @@
 export type SiteChromeLink = { id: string; label: string; href: string; enabled: boolean };
-export type SiteChromeSocial = { id: string; platform: 'FACEBOOK' | 'INSTAGRAM' | 'LINKEDIN' | 'X' | 'YOUTUBE' | 'TIKTOK' | 'WHATSAPP' | 'PINTEREST' | 'WEBSITE' | 'OTHER'; url: string; label: string; enabled: boolean; display: 'ICON_AND_LABEL' | 'ICON_ONLY' };
+export type SiteChromeSocial = { id: string; platform: 'FACEBOOK' | 'INSTAGRAM' | 'LINKEDIN' | 'X' | 'YOUTUBE' | 'TIKTOK' | 'WHATSAPP' | 'PINTEREST' | 'WEBSITE' | 'OTHER'; url: string; label: string; iconMediaId: string | null; enabled: boolean; display: 'ICON_AND_LABEL' | 'ICON_ONLY' };
 export type SiteChromeConfiguration = {
   header: {
     template: 'CLASSIC' | 'EDITORIAL' | 'COMMERCE'; title: string; tagline: string; logoMediaId: string | null;

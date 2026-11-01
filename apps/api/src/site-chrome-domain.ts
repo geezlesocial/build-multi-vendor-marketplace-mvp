@@ -29,6 +29,7 @@ const socialSchema = z.object({
   platform: z.enum(['FACEBOOK', 'INSTAGRAM', 'LINKEDIN', 'X', 'YOUTUBE', 'TIKTOK', 'WHATSAPP', 'PINTEREST', 'WEBSITE', 'OTHER']),
   url: z.string().trim().url().max(1000).refine(value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; } }, 'Social links must use HTTPS'),
   label: z.string().trim().max(48).default(''),
+  iconMediaId: z.string().min(1).max(80).nullable().default(null),
   enabled: z.boolean().default(true),
   display: z.enum(['ICON_AND_LABEL', 'ICON_ONLY']).default('ICON_AND_LABEL')
 }).strict();

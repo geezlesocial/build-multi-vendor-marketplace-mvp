@@ -24,6 +24,8 @@ describe('site chrome configuration', () => {
 
   it('limits social profiles to six HTTPS destinations and rejects duplicate IDs and URLs', () => {
     const social = (id: string, url: string) => ({ id, platform: 'OTHER' as const, url, label: 'Profile', enabled: true, display: 'ICON_AND_LABEL' as const });
+    const legacy = siteChromeSchema.parse({ ...defaultSiteChrome(), footer: { ...defaultSiteChrome().footer, socials: [social('legacy', 'https://example.com/legacy')] } });
+    expect(legacy.footer.socials[0]?.iconMediaId).toBeNull();
     expect(() => siteChromeSchema.parse({ ...defaultSiteChrome(), footer: { ...defaultSiteChrome().footer, socials: Array.from({ length: 7 }, (_, index) => social(`social-${index}`, `https://example.com/${index}`)) } })).toThrow();
     expect(() => siteChromeSchema.parse({ ...defaultSiteChrome(), footer: { ...defaultSiteChrome().footer, socials: [social('same', 'https://example.com/a'), social('same', 'https://example.com/b')] } })).toThrow(/unique/);
     expect(() => siteChromeSchema.parse({ ...defaultSiteChrome(), footer: { ...defaultSiteChrome().footer, socials: [social('a', 'https://example.com/a'), social('b', 'https://example.com/a')] } })).toThrow(/unique/);

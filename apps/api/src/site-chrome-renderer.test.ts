@@ -28,7 +28,7 @@ describe('server-rendered site chrome', () => {
         ...base.footer,
         title: 'Studio & Co',
         description: 'Thoughtful goods',
-        socials: [{ id: 'site', platform: 'WEBSITE' as const, url: 'https://example.test', label: 'Website', enabled: true, display: 'ICON_AND_LABEL' as const }]
+        socials: [{ id: 'site', platform: 'WEBSITE' as const, url: 'https://example.test', label: 'Website', iconMediaId: null, enabled: true, display: 'ICON_AND_LABEL' as const }]
       }
     };
     expect(renderSiteChromeFooter(configuration, brand, false)).toContain('Studio &amp; Co');
@@ -54,11 +54,52 @@ describe('server-rendered site chrome', () => {
     expect(renderSiteChromeSocialIcon('OTHER" onload="alert(1)')).not.toContain('onload');
   });
 
+  it('does not force Commerce search on when the published search setting is off', () => {
+    const base = defaultSiteChrome();
+    const html = renderSiteChromeHeader({ ...base, header: { ...base.header, template: 'COMMERCE', showSearch: false } }, brand);
+    expect(html).not.toContain('role="search"');
+    expect(html).not.toContain('/site-chrome-search.js');
+  });
+
+  it('renders search and announcement only when enabled, and safely includes the suggestion assets', () => {
+    const base = defaultSiteChrome();
+    const enabled = renderSiteChromeHeader({ ...base, header: { ...base.header, template: 'COMMERCE', showSearch: true, announcementEnabled: true, announcementText: 'A <safe> announcement', announcementHref: '/shop' } }, brand);
+    expect(enabled).toContain('role="search"');
+    expect(enabled).toContain('src="/site-chrome-search.js"');
+    expect(enabled).toContain('A &lt;safe&gt; announcement');
+    const disabled = renderSiteChromeHeader({ ...base, header: { ...base.header, announcementEnabled: false, announcementText: 'Do not render' } }, brand);
+    expect(disabled).not.toContain('Do not render');
+  });
+
+  it('renders footer groups, contact actions, copyright, and approved custom social images', () => {
+    const base = defaultSiteChrome();
+    const html = renderSiteChromeFooter({ ...base, footer: {
+      ...base.footer,
+      title: 'Studio footer',
+      description: 'A short brand story',
+      contactEmail: 'hello@example.test',
+      contactPhone: '+1 (555) 123-4567',
+      copyright: 'Copyright by Studio',
+      backToTop: true,
+      sections: [{ id: 'help', title: 'Help', links: [{ id: 'faq', label: 'FAQs', href: '/pages/faq', enabled: true }] }],
+      socials: [{ id: 'instagram', platform: 'INSTAGRAM', url: 'https://instagram.com/studio', label: 'Studio on Instagram', iconMediaId: 'approved-social-icon', enabled: true, display: 'ICON_AND_LABEL' }]
+    } }, brand, false);
+    expect(html).toContain('A short brand story');
+    expect(html).toContain('href="mailto:hello@example.test"');
+    expect(html).toContain('href="tel:+15551234567"');
+    expect(html).toContain('href="/pages/faq"');
+    expect(html).toContain('Copyright by Studio');
+    expect(html).toContain('href="#top">Back to top');
+    expect(html).toContain('src="/content-media/approved-social-icon"');
+    expect(html).not.toContain('data-platform="INSTAGRAM"');
+  });
+
   it('emits only validated theme tokens into the stylesheet', () => {
     const base = defaultSiteChrome();
     const css = siteChromeStyles({ ...base, header: { ...base.header, backgroundColor: '#123456' }, footer: { ...base.footer, logoWidth: 120 } });
     expect(css).toContain('--chrome-header-bg:#123456');
     expect(css).toContain('--chrome-footer-logo-width:120px');
+    expect(css).toContain('.siteChromeSsrSearchResults[hidden]{display:none}');
     expect(css).not.toContain('<script');
   });
 });
