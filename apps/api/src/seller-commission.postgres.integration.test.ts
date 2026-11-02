@@ -58,7 +58,7 @@ describe.skipIf(!prisma)("seller commission PostgreSQL concurrency", () => {
           passwordHash: "synthetic-test-only-hash",
           name: "Synthetic Commission Test Seller",
           role: "SELLER",
-          seller: { create: { status: "APPROVED" } },
+          seller: { create: { status: "PENDING" } },
         },
         include: { seller: true },
       });
@@ -79,7 +79,7 @@ describe.skipIf(!prisma)("seller commission PostgreSQL concurrency", () => {
           slug: `commission-product-${fixtureSuffix}`,
           description: "Disposable PostgreSQL integration fixture.",
           priceMinor: 10_000,
-          status: "APPROVED",
+          status: "PENDING",
         },
       });
       const order = await tx.parentOrder.create({
@@ -90,6 +90,7 @@ describe.skipIf(!prisma)("seller commission PostgreSQL concurrency", () => {
           addressJson: { country: "US", synthetic: true },
           totalMinor: 10_000,
           currency: "USD",
+          createdAt: new Date("2000-01-01T00:00:00.000Z"),
           sellerOrders: {
             create: {
               sellerId: user.seller.id,
@@ -220,26 +221,32 @@ afterAll(async () => {
   try {
     if (fixture) {
       await prisma.$transaction(async (tx) => {
-        await tx.sellerCommissionLedgerEntry.deleteMany({
-          where: { sellerOrderId: fixture!.sellerOrderId },
+        // The commission ledger is intentionally append-only, including in
+        // tests. Keep its FK chain intact and tombstone the synthetic records;
+        // the uniquely named CI database is discarded after the job.
+        await tx.product.updateMany({
+          where: { id: fixture!.productId },
+          data: { status: "ARCHIVED" },
         });
-        await tx.orderItem.deleteMany({
-          where: { sellerOrderId: fixture!.sellerOrderId },
-        });
-        await tx.sellerOrder.deleteMany({
+        await tx.sellerOrder.updateMany({
           where: { id: fixture!.sellerOrderId },
+          data: { status: "CANCELLED" },
         });
-        await tx.payment.deleteMany({
-          where: { parentId: fixture!.parentOrderId },
-        });
-        await tx.parentOrder.deleteMany({
+        await tx.parentOrder.updateMany({
           where: { id: fixture!.parentOrderId },
+          data: { status: "CANCELLED" },
         });
-        await tx.product.deleteMany({ where: { id: fixture!.productId } });
-        await tx.seller.deleteMany({ where: { id: fixture!.sellerId } });
-        await tx.user.deleteMany({ where: { id: fixture!.userId } });
-        await tx.catalogProductType.deleteMany({
-          where: { id: fixture!.productTypeId },
+        await tx.payment.updateMany({
+          where: { parentId: fixture!.parentOrderId },
+          data: { status: "REFUNDED" },
+        });
+        await tx.seller.updateMany({
+          where: { id: fixture!.sellerId },
+          data: { status: "PENDING" },
+        });
+        await tx.user.updateMany({
+          where: { id: fixture!.userId },
+          data: { accountStatus: "SUSPENDED" },
         });
       });
     }
