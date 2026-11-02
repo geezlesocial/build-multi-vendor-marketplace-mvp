@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
 import sharp from 'sharp';
-import { MediaKind, MediaScanStatus, MediaUploadStatus, Role } from '@prisma/client';
+import { MediaKind, MediaPurpose, MediaScanStatus, MediaUploadStatus, Role } from '@prisma/client';
 import { z } from 'zod';
 import { env } from './config.js';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
@@ -12,6 +12,7 @@ import type { ManagedContentStorage } from './content-storage.js';
 import { detectStoreMedia } from './store-media-routes.js';
 import { authorizedBrandingAsset } from './store-branding-access.js';
 import { malwareScanner, scanQuarantinedMedia, type MalwareScanner } from './media-scanner.js';
+import { ALL_THEME_PRESETS } from './store-theme-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const idParam = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -25,7 +26,7 @@ export function registerBrandingMediaRoutes(app: Express, storage: ManagedConten
   const activeStorage = storage ?? localContentStorage;
   app.get('/api/admin/platform/branding-media', requireAuth, requireRole(Role.ADMIN), run(async (_req, res) => {
     res.json(await prisma.mediaAsset.findMany({
-      where: { storeId: null, kind: MediaKind.IMAGE, storageProvider: { in: ['OBJECT', 'LOCAL'] } }, orderBy: { createdAt: 'desc' }, take: 100,
+      where: { storeId: null, purpose: 'PLATFORM_BRANDING', kind: MediaKind.IMAGE, storageProvider: { in: ['OBJECT', 'LOCAL'] } }, orderBy: { createdAt: 'desc' }, take: 100,
       select: { id: true, originalName: true, safeName: true, detectedMime: true, sizeBytes: true, width: true, height: true, scanStatus: true, scanErrorCode: true, scanAttemptCount: true, scanCompletedAt: true, uploadStatus: true, storageProvider: true, createdAt: true }
     }));
   }));
@@ -56,11 +57,39 @@ export function registerBrandingMediaRoutes(app: Express, storage: ManagedConten
     }
   }));
 
+  app.post('/api/admin/store-themes/:preset/preview-media/uploads', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
+    const user = actor(res);
+    const preset = ALL_THEME_PRESETS.find(theme => theme === idParam(req.params.preset));
+    if (!preset) throw fail(404, 'Store theme not found.');
+    const input = z.object({ fileName: z.string().trim().min(1).max(220), contentType: z.string().trim().min(1).max(100), sizeBytes: z.number().int().positive() }).strict().parse(req.body);
+    const extension = path.extname(input.fileName).slice(1).toLowerCase();
+    if (!imageTypes[input.contentType]?.includes(extension)) throw fail(415, 'Choose a PNG, JPEG, WebP, or GIF image with a matching file extension.');
+    if (input.sizeBytes > env.CONTENT_MAX_IMAGE_BYTES) throw fail(413, 'Image exceeds the configured file-size limit.');
+    const id = crypto.randomUUID();
+    const storageKey = `platform/theme-previews/pending/${id}`;
+    const asset = await prisma.mediaAsset.create({ data: {
+      id, storageKey, originalName: `${preset}--${input.fileName}`, safeName: `${preset}--${input.fileName.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 100)}`,
+      kind: MediaKind.IMAGE, detectedMime: input.contentType, sizeBytes: input.sizeBytes,
+      checksum: crypto.createHash('sha256').update(`pending:${id}`).digest('hex'), uploaderId: user.id,
+      purpose: MediaPurpose.THEME_PREVIEW, storageProvider: localMode ? 'LOCAL' : 'OBJECT', uploadStatus: MediaUploadStatus.PENDING, scanStatus: MediaScanStatus.QUARANTINED
+    } });
+    try {
+      const upload = storage
+        ? await storage.createUploadForm(storageKey, input.contentType, input.sizeBytes)
+        : { url: `/api/admin/platform/branding-media/${encodeURIComponent(id)}/local-upload`, fields: { 'x-local-upload': '1' } };
+      await audit(user.id, 'STORE_THEME_PREVIEW_UPLOAD_RESERVED', 'MediaAsset', id, { preset, sizeBytes: input.sizeBytes });
+      res.status(201).json({ id, upload, expiresInSeconds: 300, scanStatus: asset.scanStatus, publicAfterUpload: false });
+    } catch {
+      await prisma.mediaAsset.update({ where: { id }, data: { uploadStatus: MediaUploadStatus.FAILED } });
+      throw fail(503, 'A temporary upload authorization could not be issued. The current theme preview remains active.');
+    }
+  }));
+
   // Local development fallback. Production/staging should use the managed object-storage path above.
   app.put('/api/admin/platform/branding-media/:id/local-upload', requireAuth, requireRole(Role.ADMIN), express.raw({ type: '*/*', limit: env.CONTENT_MAX_IMAGE_BYTES }), run(async (req, res) => {
     if (!localMode) throw fail(404, 'Local branding uploads are disabled when managed object storage is enabled.');
-    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, purpose: 'PLATFORM_BRANDING', uploaderId: actor(res).id, storageProvider: 'LOCAL', uploadStatus: MediaUploadStatus.PENDING } });
-    if (!asset) throw fail(404, 'Pending branding image upload not found.');
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, purpose: { in: [MediaPurpose.PLATFORM_BRANDING, MediaPurpose.THEME_PREVIEW] }, uploaderId: actor(res).id, storageProvider: 'LOCAL', uploadStatus: MediaUploadStatus.PENDING } });
+    if (!asset) throw fail(404, 'Pending platform image upload not found.');
     const rawBody: unknown = req.body;
     const bytes = Buffer.isBuffer(rawBody) ? rawBody : Buffer.alloc(0);
     const contentType = (req.get('content-type') ?? '').split(';')[0]?.trim() ?? '';
@@ -72,7 +101,7 @@ export function registerBrandingMediaRoutes(app: Express, storage: ManagedConten
   app.post('/api/admin/platform/branding-media/:id/finalize', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const user = actor(res);
     if (!activeStorage) throw fail(503, 'Managed shared storage is unavailable. The current published branding image remains active.');
-    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, uploaderId: user.id, kind: MediaKind.IMAGE, storageProvider: { in: ['OBJECT', 'LOCAL'] }, uploadStatus: { in: [MediaUploadStatus.PENDING, MediaUploadStatus.COMPLETE] } } });
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, uploaderId: user.id, purpose: { in: [MediaPurpose.PLATFORM_BRANDING, MediaPurpose.THEME_PREVIEW] }, kind: MediaKind.IMAGE, storageProvider: { in: ['OBJECT', 'LOCAL'] }, uploadStatus: { in: [MediaUploadStatus.PENDING, MediaUploadStatus.COMPLETE] } } });
     if (!asset) throw fail(404, 'Pending branding image upload not found.');
     if (asset.uploadStatus === MediaUploadStatus.COMPLETE) return res.json({ id: asset.id, safeName: asset.safeName, detectedMime: asset.detectedMime, sizeBytes: asset.sizeBytes, width: asset.width, height: asset.height, scanStatus: asset.scanStatus, scanErrorCode: asset.scanErrorCode, scanAttemptCount: asset.scanAttemptCount, uploadStatus: asset.uploadStatus, publicAfterUpload: false, message: 'This upload was already finalized. Its saved scan state is unchanged.' });
     if (asset.createdAt < new Date(Date.now() - uploadTtlMs)) {
@@ -97,16 +126,16 @@ export function registerBrandingMediaRoutes(app: Express, storage: ManagedConten
       if (!metadata.width || !metadata.height || !['png', 'jpeg', 'webp', 'gif'].includes(metadata.format ?? '')) throw fail(415, 'Image data could not be safely decoded.');
       const normalized = await image.rotate().webp({ quality: 86 }).toBuffer();
       if (normalized.length > env.CONTENT_MAX_IMAGE_BYTES) throw fail(413, 'Normalized image exceeds the configured file-size limit.');
-      finalKey = `platform/branding/${asset.id}.webp`;
+      finalKey = `${asset.purpose === MediaPurpose.THEME_PREVIEW ? 'platform/theme-previews' : 'platform/branding'}/${asset.id}.webp`;
       await activeStorage.put(finalKey, normalized, 'image/webp');
       const updated = await prisma.$transaction(async tx => {
         const result = await tx.mediaAsset.updateMany({ where: { id: asset.id, storeId: null, uploaderId: user.id, uploadStatus: MediaUploadStatus.VERIFYING }, data: {
           storageKey: finalKey!, safeName: `${path.parse(asset.safeName).name}.webp`, detectedMime: 'image/webp', sizeBytes: normalized.length,
           width: metadata.width!, height: metadata.height!, checksum: crypto.createHash('sha256').update(normalized).digest('hex'),
-          purpose: 'PLATFORM_BRANDING', uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: MediaScanStatus.QUARANTINED, scanErrorCode: null, scanAttemptId: null, scanStartedAt: null, scanCompletedAt: null, scannerProvider: null
+          purpose: asset.purpose, uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: MediaScanStatus.QUARANTINED, scanErrorCode: null, scanAttemptId: null, scanStartedAt: null, scanCompletedAt: null, scannerProvider: null
         } });
         if (result.count !== 1) throw fail(409, 'Upload is no longer available.');
-        await tx.auditLog.create({ data: { actorId: user.id, action: 'PLATFORM_BRANDING_MEDIA_QUARANTINED', entity: 'MediaAsset', entityId: asset.id, metadata: { sizeBytes: normalized.length, scanStatus: 'QUARANTINED' } } });
+        await tx.auditLog.create({ data: { actorId: user.id, action: asset.purpose === MediaPurpose.THEME_PREVIEW ? 'STORE_THEME_PREVIEW_QUARANTINED' : 'PLATFORM_BRANDING_MEDIA_QUARANTINED', entity: 'MediaAsset', entityId: asset.id, metadata: { purpose: asset.purpose, sizeBytes: normalized.length, scanStatus: 'QUARANTINED' } } });
         return tx.mediaAsset.findUnique({ where: { id: asset.id }, select: { id: true, safeName: true, detectedMime: true, sizeBytes: true, width: true, height: true, scanStatus: true, scanErrorCode: true, scanAttemptCount: true, scanCompletedAt: true, uploadStatus: true } });
       });
       persisted = true;
@@ -126,7 +155,7 @@ export function registerBrandingMediaRoutes(app: Express, storage: ManagedConten
 
   app.post('/api/admin/platform/branding-media/:id/scan-retry', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const user = actor(res);
-    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, purpose: 'PLATFORM_BRANDING', kind: MediaKind.IMAGE, uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: MediaScanStatus.QUARANTINED, storageProvider: { in: ['OBJECT', 'LOCAL'] } } });
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, purpose: { in: [MediaPurpose.PLATFORM_BRANDING, MediaPurpose.THEME_PREVIEW] }, kind: MediaKind.IMAGE, uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: MediaScanStatus.QUARANTINED, storageProvider: { in: ['OBJECT', 'LOCAL'] } } });
     if (!asset) throw fail(404, 'Quarantined platform branding image not found.');
     if (!scanner) {
       const scan = await scanQuarantinedMedia({ assetId: asset.id, bytes: Buffer.alloc(0), scanner, actorId: user.id });
@@ -142,7 +171,7 @@ export function registerBrandingMediaRoutes(app: Express, storage: ManagedConten
   }));
 
   app.get('/api/admin/platform/branding-media/:id/preview', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
-    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, kind: MediaKind.IMAGE, uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: { not: MediaScanStatus.REJECTED } } });
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: idParam(req.params.id), storeId: null, purpose: { in: ['PLATFORM_BRANDING', 'THEME_PREVIEW'] }, kind: MediaKind.IMAGE, uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: { not: MediaScanStatus.REJECTED } } });
     if (!asset) return res.status(404).json({ error: 'Branding image not found.' });
     if (asset.storageProvider === 'OBJECT' && !storage) throw fail(503, 'Managed shared storage is unavailable.');
     res.set({ 'Content-Type': asset.detectedMime, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' });

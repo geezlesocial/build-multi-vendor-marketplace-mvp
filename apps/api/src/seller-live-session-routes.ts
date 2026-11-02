@@ -4,7 +4,10 @@ import { Role } from "@prisma/client";
 import { z } from "zod";
 import { audit, prisma, requireAuth, requireRole } from "./security.js";
 import { liveSessionSchema } from "./validation.js";
-import { canDeleteLiveShow } from "./live-state.js";
+import {
+  canDeleteLiveShow,
+  REPLAY_DELETION_PENDING_ERROR_CODE,
+} from "./live-state.js";
 import {
   eligibleProducts,
   eligibleSeller,
@@ -21,6 +24,13 @@ const parse = <T>(schema: z.ZodType<T>, value: unknown): T =>
   schema.parse(value);
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
+
+function sellerLiveSessionShape<T extends { recordingErrorCode?: string | null }>(session: T) {
+  return {
+    ...publicLiveSession(session),
+    replayDeletionPending: session.recordingErrorCode === REPLAY_DELETION_PENDING_ERROR_CODE,
+  };
+}
 
 export function registerSellerLiveSessionRoutes(app: Express) {
   app.get(
@@ -50,7 +60,7 @@ export function registerSellerLiveSessionRoutes(app: Express) {
         orderBy: { createdAt: "desc" },
         take: 100,
       });
-      res.json(sessions.map(publicLiveSession));
+      res.json(sessions.map(sellerLiveSessionShape));
     }),
   );
   app.post(
@@ -108,7 +118,7 @@ export function registerSellerLiveSessionRoutes(app: Express) {
         session.id,
         { status: session.status, productCount: input.productIds.length },
       );
-      res.status(201).json(publicLiveSession(session));
+      res.status(201).json(sellerLiveSessionShape(session));
     }),
   );
   app.patch(
@@ -225,7 +235,7 @@ export function registerSellerLiveSessionRoutes(app: Express) {
           productCount: input.productIds?.length ?? session.products.length,
         },
       );
-      res.json(publicLiveSession(updated));
+      res.json(sellerLiveSessionShape(updated));
     }),
   );
   app.delete(
@@ -246,17 +256,21 @@ export function registerSellerLiveSessionRoutes(app: Express) {
           id: true,
           status: true,
           recordingStatus: true,
+          recordingErrorCode: true,
           replayPublishedAt: true,
         },
       });
       if (!session)
         return res.status(404).json({ error: "Live show not found." });
-      if (!canDeleteLiveShow(session.status, session.recordingStatus))
+      if (!canDeleteLiveShow(session.status, session.recordingStatus, session.recordingErrorCode)) {
+        if (session.recordingErrorCode === REPLAY_DELETION_PENDING_ERROR_CODE)
+          return res.status(409).json({ error: "Finish deleting the replay before deleting this show." });
         return res.status(409).json({
           error: ["STARTING", "LIVE", "PAUSED"].includes(session.status)
             ? "End the broadcast before deleting this show."
             : "Wait for the replay recording to finish before deleting this show.",
         });
+      }
       const deletedAt = new Date();
       const changed = await prisma.liveSession.updateMany({
         where: {
@@ -313,7 +327,7 @@ export function registerSellerLiveSessionRoutes(app: Express) {
           error:
             "Show was restored but could not be reloaded. Refresh your list.",
         });
-      res.json(publicLiveSession(session));
+      res.json(sellerLiveSessionShape(session));
     }),
   );
   registerSellerLiveSessionLifecycleRoutes(app);
