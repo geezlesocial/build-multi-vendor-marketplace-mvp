@@ -540,6 +540,24 @@ test("seller can stage and publish a Store favicon only after approval, then rem
   await page.route(`**/api/stores/${initial.slug}/content`, (route) =>
     route.fulfill({ json: { posts: [], pages: [] } }),
   );
+  await page.route(`**/api/stores/${initial.slug}/currencies`, (route) =>
+    route.fulfill({
+      json: {
+        baseCurrency: "USD",
+        currencies: [
+          {
+            code: "USD",
+            name: "US Dollar",
+            displayAvailable: true,
+            rate: null,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/account/preferences", (route) =>
+    route.fulfill({ json: { preference: { displayCurrency: "USD" } } }),
+  );
 
   await page.goto("/seller/platform");
   await expect(page.getByLabel("Store name")).toHaveValue(initial.name);
@@ -605,6 +623,9 @@ test("seller can stage and publish a Store favicon only after approval, then rem
     faviconLibrary.locator('option[value="non-image-store-media"]'),
   ).toHaveCount(0);
   await page.goto(`/store/${initial.slug}`);
+  await expect(
+    page.getByRole("link", { name: `${initial.name} Store homepage` }),
+  ).toBeVisible();
   await expect(page.locator("link[data-store-branding-icon]")).toHaveAttribute(
     "href",
     `/content-media/${candidateId}`,
