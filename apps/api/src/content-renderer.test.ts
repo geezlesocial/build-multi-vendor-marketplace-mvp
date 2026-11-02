@@ -22,4 +22,16 @@ describe('crawlable CMS rendering', () => {
     expect(page).not.toContain('data-marketplace-ad-placement');
     expect(page).not.toContain('/api/marketplace-ads/blog-placement.js');
   });
+
+  it('renders a known Store theme and validated token palette on CMS and blog pages without allowing CSS injection', () => {
+    const base = { title: 'A post', description: 'Description', canonical: 'https://localhost/store/demo/blog/example', body: '<p>Post body</p>', type: 'BlogPosting' as const, updatedAt: new Date('2026-01-01T00:00:00.000Z'), breadcrumb: 'Demo Store', chromeHeader: '<header>Store navigation</header>', chromeFooter: '<footer>Store footer</footer>' };
+    const html = renderDocument({ ...base, storeTheme: 'TECH_ELECTRONICS', storeThemeTokens: { surfaceColor: '#10131d', cardColor: '#191e2c', textColor: '#f5f6fb', mutedColor: '#b4bbcf', accentColor: 'red;url(javascript:alert(1))' } });
+    expect(html).toContain('data-store-theme="TECH_ELECTRONICS"');
+    expect(html).toContain('--store-surface:#10131d');
+    expect(html).toContain('--store-theme-accent:#315d47');
+    expect(html).toContain('<header>Store navigation</header>');
+    expect(html).toContain('<footer>Store footer</footer>');
+    const unknown = renderDocument({ ...base, storeTheme: 'UNTRUSTED' });
+    expect(unknown).toContain('data-store-theme="CLASSIC"');
+  });
 });

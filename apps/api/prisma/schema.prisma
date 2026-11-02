@@ -128,6 +128,9 @@ enum StoreThemePreset {
   CLASSIC
   EDITORIAL
   BOUTIQUE
+  TECH_ELECTRONICS
+  GROCERIES
+  ECOMMERCE_MARKETPLACE
 }
 
 enum StorePaymentConnector {
@@ -1650,6 +1653,7 @@ model MarketplaceSettings {
   clubCoinMaxDiscountMinor       Int                      @default(0)
   clubCoinName                   String                   @default("Club Coins")
   clubCoinIconUrl                String?
+  themeCatalogJson               Json?
   updatedAt                      DateTime                 @updatedAt
 }
 

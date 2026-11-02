@@ -78,3 +78,11 @@ jobs:
           NODE_ENV: development
           API_PORT: 4000
         run: npm run e2e
+      - name: Retain Playwright report and attached theme screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-playwright-report-${{ github.sha }}
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
