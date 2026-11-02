@@ -20,10 +20,14 @@ export const brandingSchema = z.object({
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a six-digit hexadecimal color');
 const themeSection = z.object({
-  type: z.enum(['featuredProducts', 'categories', 'promotion', 'productCollection']),
+  type: z.enum(['featuredProducts', 'categories', 'promotion', 'productCollection', 'brandHighlights']),
   title: z.string().trim().max(120),
-  productIds: z.array(z.string().min(1).max(80)).max(50).default([])
+  productIds: z.array(z.string().min(1).max(80)).max(50).default([]),
+  categorySlug: z.string().trim().min(1).max(160).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).nullable().default(null),
+  visible: z.boolean().default(true)
 }).strict();
+
+const internalDestination = z.string().trim().max(500).refine(value => value === '' || (value.startsWith('/') && !value.startsWith('//') && !/[\\\r\n]/.test(value)), 'Use a same-site path beginning with /');
 
 export const storeThemeSchema = z.object({
   themePreset: z.nativeEnum(StoreThemePreset).default(StoreThemePreset.CLASSIC),
@@ -32,9 +36,15 @@ export const storeThemeSchema = z.object({
   faviconMediaId: z.string().min(1).max(80).nullable().default(null),
   bannerMediaId: z.string().min(1).max(80).nullable().default(null),
   description: z.string().trim().max(1000).default(''),
+  heroTitle: z.string().trim().max(120).default(''),
+  heroSubtitle: z.string().trim().max(400).default(''),
+  heroButtonLabel: z.string().trim().max(60).default(''),
+  heroButtonHref: internalDestination.default(''),
   primaryColor: hex.default('#1f6f5b'),
   accentColor: hex.default('#e7b75a'),
   font: z.enum(['system', 'serif', 'rounded']).default('system'),
+  gridDensity: z.enum(['comfortable', 'standard', 'dense']).default('standard'),
+  cardStyle: z.enum(['standard', 'editorial', 'soft', 'technical']).default('standard'),
   sections: z.array(themeSection).max(12).default([]),
   contactLinks: z.array(z.object({ label: z.string().trim().min(1).max(80), url: z.string().url().max(1000) }).strict()).max(10).default([])
 }).strict();
