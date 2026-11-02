@@ -81,7 +81,7 @@ import { registerLiveSocialRoutes } from './live-social-routes.js';
 import { registerLiveShopRoutes } from './live-shop-routes.js';
 import { registerSellerLiveSessionRoutes } from './seller-live-session-routes.js';
 import { purgeExpiredMessageAttachmentDrafts, registerMessageRoutes } from './message-routes.js';
-import { wholesaleConfigurationError, wholesaleQuantityError } from './wholesale-domain.js';
+import { wholesaleQuantityError } from './wholesale-domain.js';
 import { registerSocialAuthRoutes } from './social-auth-routes.js';
 import { registerOnboardingRoutes } from './onboarding-routes.js';
 import { handleSponsoredPaypalEvent, handleSponsoredStripeEvent } from './store-buster-sponsored.js';
