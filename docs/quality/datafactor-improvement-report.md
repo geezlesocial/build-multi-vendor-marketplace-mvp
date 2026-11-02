@@ -1,33 +1,37 @@
 # DataFactor engineering readiness snapshot
 
-**Snapshot date:** 2026-11-02
+**Snapshot date:** 2026-11-03
 
 **Repository:** `geezlesocial/build-multi-vendor-marketplace-mvp`
 
-**Protected `main`:** `d2d8176376443390f51f255caf4ce55a2c1eece0`
+**Protected `main`:** `ff1445cb1fbf25e72f0c3825b273e7db8090582b`
 
-**Readiness:** **BLOCKED for the remaining theme acceptance gate.** The quality changes through PR #66 are integrated and the current mainline CI passed. PR #67's mandatory local ClamAV workflow and three consecutive full browser runs remain incomplete.
+**Readiness:** **BLOCKED for the remaining theme acceptance gate.** PRs #59, #47, #49, #51, #60, #57, #66, and #68 are integrated; post-merge application CI passed on current `main`. PR #67's mandatory local ClamAV workflow and three consecutive full browser runs remain incomplete.
 
 This is a measured engineering snapshot, not an official DataFactor score or a release-readiness claim. It separates current protected-main evidence from work that remains unmerged.
 
 ## Assessment source
 
-The owner-provided DataFactor email reports an approximate overall score of **58.7/100** (rounded to 59 in its report UI). It describes the estimate as non-binding and does not disclose rubric weights. The category values below are retained as source context; this report does not recalculate or predict a score.
+An earlier owner-provided DataFactor email reported **58.7/100**; this is retained as historical context. A newer owner-provided email screenshot, supplied on 2026-11-03, reports **61.3/100** (shown as `frontend: 61.3 (C)`), 8.7 points from the stated offer threshold. Both estimates are described as approximate and non-binding; no rubric weights are disclosed. The newer email does not include an assessed commit SHA or assessment ID, so **61.3 is not attributed to current `main`**.
 
-| Category                  | Reported score | Current evidence and remaining context                                                                                                        |
-| ------------------------- | -------------: | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Architecture & Robustness |             62 | PR #57 extracted product routes from the API entry point. Further module characterization and refactoring remain.                             |
-| Code Cleanliness          |             40 | Merged lint work reduced warnings from 37 to 5 in the API and from 102 to 91 in the web app. Current CI reports zero lint errors.             |
-| Docs & Onboarding         |             70 | PR #49 added environment-example validation; PR #66 documented theme-preview operations.                                                      |
-| Test Coverage             |             68 | Merged tests raised measured API coverage; the absolute coverage remains low. Current floors are 15/15/19/17.                                 |
-| Dependency Health         |             58 | PR #59's dependency remediation is integrated. Current-tree production audit evidence is recorded below.                                      |
-| CI/CD Maturity            |             78 | Application and container-security/integration workflows passed on the integrated mainline tree.                                              |
-| Security Hygiene          |             62 | Scans and integration gates passed on the current tree. Hosted alerting and complete historical secret assurance are not established here.    |
-| History & Maintenance     |             30 | The assessment cites a short history. History is not manufactured; maintainability improves through reviewed changes and ongoing maintenance. |
+The newer screenshot reports these category values: Architecture & Robustness 64, Code Cleanliness 38, Docs & Onboarding 78, Test Coverage 72, Dependency Health 58, CI/CD Maturity 82, Security Hygiene 68, and History & Maintenance 30. These are provider-reported measurements, not recalculated scores or proof that any particular merged PR caused the difference from 58.7.
+
+The assessment's visible file-size fingerprint is consistent with the current code snapshot: DataFactor lists `apps/api/src/index.ts` at 982 LOC, `apps/api/src/store-growth-routes.ts` at 810, and `apps/web/src/StoreThemeStudio.tsx` at 1,105. The corresponding current-main physical-line counts are 1,005, 840, and 1,120; excluding blank lines yields exactly 982, 810, and 1,105. The code tree is identical between `d2d8176` and `ff1445c` (PR #68 changed only this report). This is strong content-scope corroboration, **not commit verification**: the email could refer to either tree or another snapshot, and its Git/history metrics cannot be tied to a SHA. Request the exact assessed SHA/ID before treating 61.3 as a score for a named commit.
+
+| Category                  | Reported score | Current evidence and remaining context                                                                                                                          |
+| ------------------------- | -------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Architecture & Robustness |             64 | Latest email reports 64. PR #57 extracted product routes from the API entry point; further module characterization and refactoring remain.                      |
+| Code Cleanliness          |             38 | Latest email reports 38. Merged lint work reduced warnings from 37 to 5 in the API and from 102 to 91 in the web app; current CI reports zero lint errors.      |
+| Docs & Onboarding         |             78 | Latest email reports 78. PR #49 added environment-example validation; PR #66 documented theme-preview operations.                                               |
+| Test Coverage             |             72 | Latest email reports 72. Merged tests raised measured API coverage; the absolute coverage remains low. Current floors are 15/15/19/17.                          |
+| Dependency Health         |             58 | PR #59's dependency remediation is integrated. Current-tree production audit evidence is recorded below.                                                        |
+| CI/CD Maturity            |             82 | Latest email reports 82. Application and container-security/integration workflows passed on the integrated mainline tree.                                       |
+| Security Hygiene          |             68 | Latest email reports 68. Scans and integration gates passed on recent trees. Hosted alerting and complete historical secret assurance are not established here. |
+| History & Maintenance     |             30 | Latest email reports 30 and cites a short history. History is not manufactured; maintainability improves through reviewed changes and ongoing maintenance.      |
 
 ## Protected-main measurements
 
-The post-merge application run [41479982542](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41479982542) succeeded on protected `main` at `d2d8176`. Its results are the current integrated baseline:
+The post-merge application run [41486224057](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41486224057) succeeded on protected `main` at `ff1445c`. Its results are the current integrated baseline:
 
 | Metric                                                               |            Measured result |
 | -------------------------------------------------------------------- | -------------------------: |
@@ -43,7 +47,7 @@ The post-merge application run [41479982542](https://github.com/geezlesocial/bui
 
 The post-merge workflow passed; the first post-merge attempt after PR #49 encountered a PostgreSQL host-port collision, and its retry passed without skipping required checks. The current baseline is from the later successful run above.
 
-The PR #66 container security/integration run [41477037913](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41477037913) ran on a tree verified identical to merged `main` at `d2d8176`. It reported zero production npm audit vulnerabilities, zero HIGH/CRITICAL findings across the source and three images, zero secret findings, and successful SBOM and isolated PostgreSQL, proxy, Mailpit, ClamAV, and network integration jobs. This is production-audit evidence; it is not a claim that every dependency audit mode or the full repository history is clean.
+The PR #68 container security/integration run [41484072940](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41484072940) passed on its exact report head. Its application source tree is identical to current `main`; PR #68 only changed this documentation file. It reported zero production npm audit vulnerabilities, no HIGH/CRITICAL findings across the source and three images, no secret findings, and successful SBOM and isolated PostgreSQL, proxy, Mailpit, ClamAV, and network integration jobs. This is production-audit evidence; it is not a claim that every dependency audit mode or the full repository history is clean.
 
 ## Integrated changes and CI evidence
 
@@ -58,25 +62,29 @@ These changes are on protected `main`; candidate measurements from their old bra
 | [#60](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/60) | Financial regression and PostgreSQL concurrency tests | `ad0a455`    | [41470901167](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41470901167) passed          |
 | [#57](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/57) | Product-route extraction                              | `63df74c`    | [41475383775](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41475383775) passed          |
 | [#66](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/66) | Theme-preview operations documentation                | `d2d8176`    | [41479982542](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41479982542) passed          |
+| [#68](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/68) | Evidence-based DataFactor readiness report            | `ff1445c`    | [41486224057](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41486224057) passed          |
 
 PRs #51, #60, #57, and #66 received independent `webskilldesign` approvals for their exact reviewed heads before merge. Each integration followed the repository's protected-branch process. PR #60's disposable-PostgreSQL concurrency test passed in exact-head CI; no live payment provider was used.
 
 ## Remaining findings and acceptance gates
 
 - Coverage has improved, but remains below typical mature-project targets. Continue risk-weighted test additions without excluding production source or padding test counts.
+- The latest DataFactor email says 22 files exceed 500 LOC and 5 exceed 1,000, but does not document its file scope or LOC definition. A reproducible current-main audit of 210 production `.js`/`.ts` files under `apps/api/src` and `apps/web/src`, counting physical lines and excluding test/spec files, finds 15 above 500 and 3 above 1,000. These counts are not directly comparable. Proposed PR [#69](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/69) adds a 500-line growth guard while grandfathering those 15 existing production modules at their exact current sizes. At this report snapshot, its application run [41534460324](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41534460324) and container-security run [41534460219](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41534460219) were still in progress; lint, typecheck, API tests, coverage, build, the new size check, and formatting had passed, while browser and image/integration work remained underway. Independent `webskilldesign` review was requested and pending.
 - API and web lint still report 5 and 91 warnings respectively. No lint errors were reported in the current mainline CI.
 - The earlier web bundle advisory of approximately 1.53 MB has not been remeasured or resolved in this snapshot.
 - Hosted error reporting, alert routing, and on-call operations are not verified as configured. No complete historical secret audit is claimed.
+- The existing environment-example guard checks the API Zod configuration schema and Prisma CLI settings; it does not inventory every direct `process.env.NAME` reference in tests and local tooling. A static scan found references absent from `.env.example`, including CI-provided variables, OS variables, disposable test-database names, and staging smoke-test variables. The cited `STORE_EMAIL_SMTP_HOST` and `STORE_EMAIL_FROM` are already present as commented optional values; `STAGING_TEST_MAILPIT_HOST` and `STAGING_TEST_MAILPIT_API` are not in `.env.example` but the local smoke script defaults to loopback and CI supplies explicit values. The remaining work is to classify/document local-only test variables without putting credentials or persistent database URLs in the example file.
+- The assessment labels logging framework and error tracking as absent. The current tree does include operational diagnostics and a structured/redacted runtime logger; external error reporting, alert delivery, and on-call configuration remain unverified. Do not add a second logger package without first identifying a concrete gap.
 - PR #67 remains a draft. Its real ClamAV admin UI flow—upload, quarantine, scan, approval, publish, seller refresh preserving edits/logo, and restore/audit—has not completed successfully with a full Playwright report. Three consecutive full local Playwright runs are also incomplete (0/3 recorded as complete).
 - Keep PR #67 in draft and Issue [#46](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/issues/46) open until those acceptance requirements pass on the final reviewed head. Begin local full browser acceptance only with at least 3 GiB of physical memory free; preserve the 500 MiB runtime floor. GitHub CI does not substitute for these local requirements.
-- No new RAM measurement is asserted here. The most recently recorded samples were below the 3 GiB start threshold, so no new full local browser run is represented as complete.
+- PR #67 remains at exact head `92607b4341d48929c4be00aa9d81b7fa9637e62f`; its exact-head CI passed, but local ClamAV admin UI acceptance and three consecutive complete local Playwright runs remain 0/3. The latest available physical-memory sample was 1.57 GiB free, below the 3 GiB start threshold. No local full browser run was started; retain the 500 MiB runtime floor.
 
-## PR #68 report status
+## PR #68 and current report status
 
-This report is the only intended file change in PR #68. The branch has been reconciled with protected `main` at `d2d8176`. PR #68 remains a draft pending independent review; before merging, require passing application and container-security checks on the exact final report head. The report does not claim that PR #67 is merged or that the remaining acceptance gates are complete.
+PR #68 was independently approved and squash-merged as `ff1445cb1fbf25e72f0c3825b273e7db8090582b`. Its post-merge application CI [run 41486224057](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41486224057) passed. This document update is a new, separate documentation change; it does not claim that PR #67 is merged or that its local acceptance gates are complete.
 
 ## Scope and recommended DataFactor target
 
-The recommended commit for the owner's next DataFactor assessment is protected `main` at **`d2d8176376443390f51f255caf4ce55a2c1eece0`**. It contains the reviewed integrations through PR #66, and its post-merge application CI passed. Record the scan as a snapshot of this exact commit; do not treat it as evidence that PR #67's local acceptance is complete or that the Marketplace is release-ready.
+The recommended commit for the owner's next DataFactor assessment is protected `main` at **`ff1445cb1fbf25e72f0c3825b273e7db8090582b`**. Its post-merge application CI passed. Submit this exact SHA and retain the assessment ID/result so future score comparisons are commit-verifiable. The supplied 61.3 email is not attributed to this SHA until its original assessment commit is confirmed. Neither score nor CI substitutes for PR #67's remaining local acceptance; this report does not claim the Marketplace is fully release-ready.
 
 No Azure or production deployment, persistent database migration, real financial operation, live provider activation, Scrolith change, credential change, DNS change, destructive local cleanup, or branch-protection bypass was performed for this report.
