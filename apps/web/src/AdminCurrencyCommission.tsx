@@ -343,7 +343,6 @@ export function AdminCurrencyCommission({ section }: SectionProps) {
         {policies ? policies.length ? <div className="commissionPolicyList">{policies.map(item => {
           const appliesToFreeStores = item.freeStoreScopeKey === 'FREE_STORES';
           const reason = policyActionReasons[item.id] ?? '';
-          const canChange = appliesToFreeStores && ['DRAFT', 'ACTIVE'].includes(item.status);
           return <article className="commissionPolicyCard" key={item.id}>
             <div className="commissionPolicySummary">
               <div><p className="eyebrow">{appliesToFreeStores ? 'All free Stores' : 'Legacy scoped policy'}</p><h3>{appliesToFreeStores ? `Version ${item.version}` : `${item.store?.name ?? item.planVersion?.plan.name ?? 'Scoped policy'} · v${item.version}`}</h3></div>

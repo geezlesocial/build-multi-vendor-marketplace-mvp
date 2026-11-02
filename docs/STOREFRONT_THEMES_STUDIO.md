@@ -25,6 +25,16 @@ Platform administrators can manage the six-theme catalog order, public availabil
 
 Color tokens are validated server-side for a minimum 4.5:1 contrast against their configured surfaces/cards. Keep text and controls readable at narrow widths, preserve reduced-motion preferences, and verify keyboard focus when changing design tokens or sections.
 
+### Managing theme catalog preview images
+
+In **Platform administration → Themes & Templates Management**, an administrator can replace the catalog preview image for any of the six themes. These are reference/gallery images only; changing one does not change a seller's logo, favicon, banner, selected theme, products, or storefront content. The bundled defaults are `classic.webp`, `editorial.webp`, `boutique.webp`, `tech-electronics.webp`, `groceries.webp`, and `ecommerce-marketplace.webp` under `apps/web/public/theme-previews/`.
+
+Choose a PNG, JPEG, WebP, or GIF file up to 5,000,000 bytes (5 MB) and 40 megapixels. The server checks the file content and image decoding rather than trusting the browser's filename or MIME type, then normalizes the image to WebP. The browser shows a device-local candidate preview and upload progress; it is not yet shared or published. Uploads require configured managed storage and malware scanning. A completed image remains private in quarantine until the scanner approves it. If scanning is unavailable or fails, the existing published image stays active; an administrator can retry the scan later. Rejected or quarantined media is not publicly served. Only an approved image can be published.
+
+After approval, the upload-and-publish action selects the image for that theme. The change is audited and protected by an expected-version check, so stale concurrent edits are rejected instead of silently replacing a newer catalog update. To undo a replacement, use **Restore default image** on that theme's card and confirm; this removes the catalog override and makes the bundled default visible again without deleting the uploaded asset.
+
+Open admin and seller theme catalogs refresh the published preview catalog every 15 seconds while the page is visible, and refresh again when a hidden tab becomes visible. This is polling, not push-based real-time delivery; a transient refresh failure leaves the last loaded catalog in place. See [Content media storage](CONTENT_MEDIA_STORAGE.md) for the shared storage and scanner configuration and operational requirements.
+
 ## Data and API notes
 
 Migration `20261101100000_storefront_themes_studio` is additive. It adds the three preset values to the existing `StoreThemePreset` enum and a nullable marketplace theme-catalog JSON setting; existing Stores without theme data continue to use Classic. Store drafts, published theme JSON, publication time, and revision rows are maintained against the existing Store tenant.

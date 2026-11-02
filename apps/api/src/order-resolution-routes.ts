@@ -4,7 +4,7 @@ import express from 'express';
 import { PaymentMethod, PaymentStatus, Role } from '@prisma/client';
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
-import { ORDER_RESOLUTION_ACTIVE_STATUSES, ORDER_RESOLUTION_REVIEW_STATUSES, canRecordManualCodRefund, refundEventMatchesCase } from './order-resolution-domain.js';
+import { ORDER_RESOLUTION_REVIEW_STATUSES, canRecordManualCodRefund, refundEventMatchesCase } from './order-resolution-domain.js';
 import { reverseClubCoinsForOrder } from './club-coins-awards.js';
 import { createUserNotification } from './notification-delivery.js';
 
@@ -19,7 +19,6 @@ type CaseRow = {
   storeName: string | null; buyerName: string; messages: Array<{ id: string; authorId: string; authorName: string | null; authorRole: string; body: string; createdAt: Date }>;
 };
 
-const activeStatuses = ORDER_RESOLUTION_ACTIVE_STATUSES;
 const finalStatuses = ['RESOLVED', 'REJECTED'];
 const refundEventType: Record<'STRIPE' | 'PAYPAL' | 'PAYMONGO' | 'PAYSTACK', string> = {
   STRIPE: 'charge.refunded', PAYPAL: 'PAYMENT.CAPTURE.REFUNDED',

@@ -8,12 +8,12 @@ import { env } from './config.js';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
 import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
 import { scoreInterestCategories } from './store-buster-domain.js';
-import { createUnsubscribeToken, normalizeSubscriberEmail, verifyUnsubscribeToken } from './store-email-domain.js';
+import { normalizeSubscriberEmail, verifyUnsubscribeToken } from './store-email-domain.js';
 import { accountVerificationEmailStatus, sendStoreEmailConfirmation, storeEmailProviderStatus, storeEmailProviderStatusForStore, verifyStoreEmailSmtp, StoreEmailTransportError } from './store-email-delivery.js';
 import { capturePaypalOrder, createPaypalStoreBusterOrder, createStripeStoreBusterCheckout, stripe } from './payments.js';
 import { convertMinorExact, decimalToMinorExact } from './currency-domain.js';
 import { latestDisplayRate } from './currency-routes.js';
-import { handleSponsoredPaypalEvent, settleStoreBusterClick, settleStoreBusterFunding, settleStoreBusterImpression } from './store-buster-sponsored.js';
+import { settleStoreBusterClick, settleStoreBusterFunding, settleStoreBusterImpression } from './store-buster-sponsored.js';
 import { calculateSponsoredClickSpend, convertQuotedMinorToBaseMinor, minorToDecimal } from './store-buster-sponsored-domain.js';
 import { livePaymentActivationBlock } from './provider-activation.js';
 
