@@ -5,6 +5,7 @@ import {
   FREE_THEME_PRESETS,
   defaultThemeCatalogConfig,
   hasActivePaidThemeSubscription,
+  resolveStoreThemeAccess,
   themeCatalogConfigSchema,
 } from "./store-theme-domain.js";
 
@@ -32,7 +33,94 @@ const activeSubscription = {
   cancelledAt: null,
 };
 
+function themeAccessDb({
+  paid = true,
+  subscription = paid ? activeSubscription : null,
+  allowedThemes = [...FREE_THEME_PRESETS],
+}: {
+  paid?: boolean;
+  subscription?: typeof activeSubscription | null;
+  allowedThemes?: StoreThemePreset[];
+} = {}) {
+  const effectiveFrom = new Date("2026-10-01T00:00:00.000Z");
+  const version = {
+    id: "immutable-plan-version",
+    status: "ACTIVE",
+    effectiveFrom,
+    effectiveUntil: null,
+    monthlyPriceMinor: paid ? 2500 : 0,
+    annualPriceMinor: paid ? 27000 : 0,
+    introPriceMinor: null,
+    freeTrialDays: 0,
+    allowedThemes,
+    plan: { status: "ACTIVE" },
+  };
+  const db = {
+    marketplaceSettings: {
+      findUnique: async () => ({ themeCatalogJson: defaultThemeCatalogConfig }),
+    },
+    store: {
+      findUnique: async () => ({
+        isPlatformStore: false,
+        seller: { status: "APPROVED" },
+      }),
+    },
+    storePlanAssignment: {
+      findFirst: async () => ({
+        source: "SUBSCRIPTION",
+        effectiveFrom,
+        effectiveUntil: null,
+        planVersion: version,
+      }),
+    },
+    storePlanVersion: { findFirst: async () => null },
+    storeSubscription: {
+      findFirst: async () =>
+        subscription
+          ? {
+              status: subscription.subscriptionStatus,
+              provider: subscription.subscriptionProvider,
+              providerSubscriptionId: subscription.providerSubscriptionId,
+              monthlyPriceMinor: subscription.subscriptionMonthlyPriceMinor,
+              currentPeriodStart: subscription.currentPeriodStart,
+              currentPeriodEnd: subscription.currentPeriodEnd,
+              trialEndsAt: subscription.trialEndsAt,
+              expiresAt: subscription.expiresAt,
+              cancelledAt: subscription.cancelledAt,
+            }
+          : null,
+    },
+  };
+  return db as unknown as Parameters<typeof resolveStoreThemeAccess>[0];
+}
+
 describe("storefront theme entitlement policy", () => {
+  it("grants all six themes to active paid subscribers on immutable legacy versions", async () => {
+    const access = await resolveStoreThemeAccess(
+      themeAccessDb({ allowedThemes: [...FREE_THEME_PRESETS] }),
+      "synthetic-paid-store",
+      now,
+    );
+
+    expect(access.premiumEligible).toBe(true);
+    expect(access.allowedThemes).toEqual(ALL_THEME_PRESETS);
+  });
+
+  it("keeps a free plan on the three free themes even if its snapshot lists all six", async () => {
+    const access = await resolveStoreThemeAccess(
+      themeAccessDb({
+        paid: false,
+        subscription: null,
+        allowedThemes: [...ALL_THEME_PRESETS],
+      }),
+      "synthetic-free-store",
+      now,
+    );
+
+    expect(access.premiumEligible).toBe(false);
+    expect(access.allowedThemes).toEqual(FREE_THEME_PRESETS);
+  });
+
   it("keeps the existing three free identifiers and adds three distinct paid identifiers", () => {
     expect(FREE_THEME_PRESETS).toEqual([
       StoreThemePreset.CLASSIC,

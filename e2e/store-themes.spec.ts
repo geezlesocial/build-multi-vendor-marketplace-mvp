@@ -235,7 +235,14 @@ test("paid storefront themes are tenant-scoped, revisioned, and fall back safely
       storeLimit: 1,
       vendorLimit: 1,
       staffSeatLimit: 5,
-      allowedThemes: [...Object.values(StoreThemePreset)],
+      // Existing paid plan versions can legitimately predate paid themes and
+      // remain immutable. Entitlement comes from the verified active paid
+      // subscription, not this historical snapshot.
+      allowedThemes: [
+        StoreThemePreset.CLASSIC,
+        StoreThemePreset.EDITORIAL,
+        StoreThemePreset.BOUTIQUE,
+      ],
       mobileTemplates: [MobileStorefrontTemplate.RESPONSIVE_STANDARD],
     },
   });
@@ -306,8 +313,8 @@ test("paid storefront themes are tenant-scoped, revisioned, and fall back safely
       availableProducts: { id: string }[];
     };
     expect(ownerThemeData.themeAccess).toMatchObject({ premiumEligible: true });
-    expect(ownerThemeData.themeAccess.allowedThemes).toContain(
-      StoreThemePreset.TECH_ELECTRONICS,
+    expect(ownerThemeData.themeAccess.allowedThemes).toEqual(
+      expect.arrayContaining(Object.values(StoreThemePreset)),
     );
     expect(ownerThemeData.availableProducts.map((item) => item.id)).toContain(
       product.id,
@@ -327,9 +334,12 @@ test("paid storefront themes are tenant-scoped, revisioned, and fall back safely
         StoreThemePreset.BOUTIQUE,
       ]),
     );
-    expect(freeThemeData.themeAccess.allowedThemes).not.toContain(
+    for (const paidTheme of [
       StoreThemePreset.TECH_ELECTRONICS,
-    );
+      StoreThemePreset.GROCERIES,
+      StoreThemePreset.ECOMMERCE_MARKETPLACE,
+    ])
+      expect(freeThemeData.themeAccess.allowedThemes).not.toContain(paidTheme);
 
     const deniedFreeSave = await freeAccount.page.request.put(
       "/api/seller/store-theme",

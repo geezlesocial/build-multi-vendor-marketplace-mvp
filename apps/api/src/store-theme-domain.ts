@@ -428,9 +428,11 @@ export async function resolveStoreThemeAccess(
     },
     now,
   );
-  const allowed = eligible
-    ? [...FREE_THEME_PRESETS, ...version.allowedThemes]
-    : FREE_THEME_PRESETS;
+  // Theme availability is a product entitlement, not a snapshot of the
+  // catalog that happened to exist when an immutable plan version was issued.
+  // Any provider-verified active paid subscriber receives the current six-theme
+  // product; free and ineligible accounts remain restricted to the free tier.
+  const allowed = eligible ? ALL_THEME_PRESETS : FREE_THEME_PRESETS;
   return {
     allowedThemes: [
       ...new Set(
