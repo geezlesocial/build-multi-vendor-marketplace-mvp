@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   countPhysicalLines,
   evaluateSourceSize,
+  findStaleSourceSizeExceptions,
 } from "./source-size-policy.mjs";
 
 const repositoryRoot = path.resolve(
@@ -53,11 +54,17 @@ const fileLines = Object.fromEntries(
     ]),
 );
 const violations = evaluateSourceSize(fileLines, baseline);
+const staleExceptions = findStaleSourceSizeExceptions(fileLines, baseline);
 
-if (violations.length > 0) {
+if (violations.length > 0 || staleExceptions.length > 0) {
   for (const { path: file, lines, limit } of violations) {
     console.error(
       `${file}: ${lines} physical lines exceeds the ${limit}-line limit.`,
+    );
+  }
+  for (const file of staleExceptions) {
+    console.error(
+      `${file}: remove this obsolete baseline exception; the file is missing or at/below the default limit.`,
     );
   }
   console.error(

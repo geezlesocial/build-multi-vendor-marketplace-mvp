@@ -42,3 +42,11 @@ export function evaluateSourceSize(fileLines, baseline) {
       limit: baseline.files[path] ?? baseline.defaultMaxLines,
     }));
 }
+
+export function findStaleSourceSizeExceptions(fileLines, baseline) {
+  return Object.keys(baseline.files).filter(
+    (path) =>
+      fileLines[path] === undefined ||
+      fileLines[path] <= baseline.defaultMaxLines,
+  );
+}

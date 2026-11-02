@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   countPhysicalLines,
   evaluateSourceSize,
+  findStaleSourceSizeExceptions,
 } from "./source-size-policy.mjs";
 
 test("counts physical lines consistently for LF, CRLF, and missing final newline", () => {
@@ -52,5 +53,24 @@ test("allows existing modules to shrink without requiring a baseline edit", () =
       { defaultMaxLines: 500, files: { "apps/api/src/index.ts": 1005 } },
     ),
     [],
+  );
+});
+
+test("requires stale exceptions to be removed after a file shrinks or is deleted", () => {
+  const baseline = {
+    defaultMaxLines: 500,
+    files: {
+      "apps/api/src/shrunk.ts": 700,
+      "apps/api/src/removed.ts": 800,
+      "apps/api/src/still-large.ts": 900,
+    },
+  };
+
+  assert.deepEqual(
+    findStaleSourceSizeExceptions(
+      { "apps/api/src/shrunk.ts": 500, "apps/api/src/still-large.ts": 900 },
+      baseline,
+    ),
+    ["apps/api/src/shrunk.ts", "apps/api/src/removed.ts"],
   );
 });
