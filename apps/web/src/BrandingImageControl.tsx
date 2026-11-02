@@ -41,12 +41,18 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 const mediaListRequests = new Map<string, Promise<MediaList>>();
 
 function requestMediaList(path: string) {
-  const existing = mediaListRequests.get(path);
+  const csrfToken = document.cookie
+    .split("; ")
+    .find((value) => value.startsWith("marketplace_csrf="))
+    ?.split("=")[1];
+  const requestKey = `${csrfToken ?? "anonymous"}:${path}`;
+  const existing = mediaListRequests.get(requestKey);
   if (existing) return existing;
   const request = api<MediaList>(path).finally(() => {
-    if (mediaListRequests.get(path) === request) mediaListRequests.delete(path);
+    if (mediaListRequests.get(requestKey) === request)
+      mediaListRequests.delete(requestKey);
   });
-  mediaListRequests.set(path, request);
+  mediaListRequests.set(requestKey, request);
   return request;
 }
 
