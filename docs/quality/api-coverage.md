@@ -18,23 +18,20 @@ provider:
 | Functions  |              19.25% |             19% |
 | Lines      |              17.06% |             17% |
 
-The current protected-main snapshot is
-`4dbefcd92b637999b16412fb8b1ac3e9530cdead`. Its reported API baseline is 405
-tests with 16.74% statements, 16.96% branches, 21.00% functions, and 18.78%
-lines. A local V8 run on reconciled candidate commit
-`732c8c3b5e6c690e8f3862a8366b78c73885896f` passed 79 files / 405 tests and
-measured 16.74%, 16.95%, 21.00%, and 18.78%, respectively. The 0.01-point branch
-difference is a local-versus-CI measurement variance; both are above the 15%
-floor.
+The protected-main snapshot was measured on
+`416fb937fbe1f025c5a6f359e2e29cec2df62279` by [application CI run
+41454763749](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41454763749)
+using Node 22.23.4 and the V8 coverage provider. CI passed 79 files / 405 API
+tests and measured 16.77% statements, 17.02% branches, 21.02% functions, and
+18.80% lines. These are the current-main measurements at the time of the run;
+the later PR #60 database integration test is not part of this baseline.
 
 | Metric     | Current-main measured value | Enforced candidate floor |
 | ---------- | --------------------------: | -----------------------: |
-| Statements |                      16.74% |                      15% |
-| Branches   |               16.95–16.96%* |                      15% |
-| Functions  |                      21.00% |                      19% |
-| Lines      |                      18.78% |                      17% |
-
-*Local V8 run: 16.95%; supplied/CI baseline: 16.96%.
+| Statements |                      16.77% |                      15% |
+| Branches   |                      17.02% |                      15% |
+| Functions  |                      21.02% |                      19% |
+| Lines      |                      18.80% |                      17% |
 
 The 15/15/19/17 floors raise the previous protected-main gate of 11/12/14/12
 while retaining at least 1.7 percentage points of margin under the current
