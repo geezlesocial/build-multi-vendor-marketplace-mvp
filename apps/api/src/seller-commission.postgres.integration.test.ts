@@ -13,9 +13,9 @@ const isDisposableTarget = isDisposableWalletFundingDatabaseUrl(
   databaseUrl,
   sandboxId,
 );
-if (process.env.GITHUB_ACTIONS === "true" && !isDisposableTarget) {
+if (sandboxId && !isDisposableTarget) {
   throw new Error(
-    "CI requires a matching loopback-only disposable database for commission concurrency tests",
+    "A provided commission-test sandbox ID requires a matching loopback-only disposable database",
   );
 }
 
