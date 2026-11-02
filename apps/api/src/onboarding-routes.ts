@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { availableGlobalDisplayCurrencies } from './currency-routes.js';
 import { onboardingCompletionBlock, onboardingCompletionSchema } from './onboarding-domain.js';
 import { env } from './config.js';
-import { audit, prisma, requireAuth, requireRole } from './security.js';
+import { prisma, requireAuth, requireRole } from './security.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const actor = (res: Response) => res.locals.user as { id: string; role: Role };

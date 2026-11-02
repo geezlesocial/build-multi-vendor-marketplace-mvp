@@ -174,7 +174,6 @@ export function Dashboard() {
     setTabs(current => ({ ...current, [target]: tab }));
     writeDashboardLocation(target, tab);
   };
-  const activeTab = tabs[mode];
   const applyForSeller = async () => {
     try {
       await request('/api/sellers/apply', { method: 'POST', body: '{}' });

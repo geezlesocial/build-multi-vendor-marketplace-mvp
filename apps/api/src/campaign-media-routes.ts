@@ -8,7 +8,7 @@ import { MediaKind, MediaPurpose, MediaScanStatus, MediaStorageProvider, MediaUp
 import { z } from 'zod';
 import { env } from './config.js';
 import { localContentStorage, objectContentStorage } from './content-storage.js';
-import { campaignMediaFailure, safeCampaignDestination } from './campaign-media-domain.js';
+import { safeCampaignDestination } from './campaign-media-domain.js';
 import { detectStoreMedia } from './store-media-routes.js';
 import { malwareScanner, scanQuarantinedMedia, type MalwareScanner } from './media-scanner.js';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
@@ -25,8 +25,6 @@ function decodedHeader(req: Request, name: string) {
 }
 const reasonHeader = (req: Request) => decodedHeader(req, 'x-audit-reason').trim();
 const previewUrl = (campaignId: string, assetId: string) => `/api/admin/campaigns/${encodeURIComponent(campaignId)}/media/${encodeURIComponent(assetId)}/preview`;
-const campaignMediaInclude = { orderBy: { position: 'asc' as const }, include: { mediaAsset: { select: { id: true, kind: true, originalName: true, sizeBytes: true, scanStatus: true, scanErrorCode: true, uploadStatus: true, detectedMime: true } } } };
-
 function mediaDto(item: { campaignId: string; mediaAssetId: string; position: number; destinationUrl: string | null; altText: string | null; buttonLabel: string | null; mediaAsset: { kind: MediaKind; originalName: string; sizeBytes: number; scanStatus: MediaScanStatus; scanErrorCode: string | null; uploadStatus: MediaUploadStatus; detectedMime: string } }) {
   return { id: item.mediaAssetId, kind: item.mediaAsset.kind, position: item.position, href: item.destinationUrl, altText: item.altText, buttonLabel: item.buttonLabel, originalName: item.mediaAsset.originalName, sizeBytes: item.mediaAsset.sizeBytes, detectedMime: item.mediaAsset.detectedMime, scanStatus: item.mediaAsset.scanStatus, scanErrorCode: item.mediaAsset.scanErrorCode, uploadStatus: item.mediaAsset.uploadStatus, previewUrl: previewUrl(item.campaignId, item.mediaAssetId) };
 }
@@ -110,7 +108,7 @@ export function registerCampaignMediaRoutes(app: Express, scanner: MalwareScanne
     await storage.put(storageKey, bytes, storedMime);
     let attached = false;
     try {
-      const media = await prisma.$transaction(async tx => {
+      await prisma.$transaction(async tx => {
         await tx.$queryRaw`SELECT "id" FROM "MarketingCampaign" WHERE "id" = ${campaignId} FOR UPDATE`;
         const campaign = await tx.marketingCampaign.findUnique({ where: { id: campaignId }, select: { id: true, status: true } });
         if (!campaign) throw fail(404, 'Promotion campaign not found.');

@@ -395,14 +395,14 @@ export function registerWalletRoutes(app: Express) {
     }
   }));
 
-  app.post('/api/wallet/withdrawals', requireAuth, run(async (req, res) => {
-    const input = withdrawalSchema.parse(req.body);
+  app.post('/api/wallet/withdrawals', requireAuth, run(async (req, _res) => {
+    withdrawalSchema.parse(req.body);
     const setting = await settings();
     if (!isWalletActionEnabled('walletWithdrawalsEnabled', walletGateSettings(setting), env.MONEY_MOVEMENT_HARD_DISABLED)) throw fail(409, 'Wallet withdrawals are disabled until an approved settlement workflow is configured');
     throw fail(503, 'Wallet withdrawal provider workflow is not configured');
   }));
 
-  app.post('/api/wallet/checkout-authorize', requireAuth, run(async (_req, res) => {
+  app.post('/api/wallet/checkout-authorize', requireAuth, run(async (_req, _res) => {
     const setting = await settings();
     if (!isWalletActionEnabled('walletCheckoutEnabled', walletGateSettings(setting), env.MONEY_MOVEMENT_HARD_DISABLED)) throw fail(409, 'Wallet checkout is disabled');
     throw fail(503, 'Wallet checkout integration is pending order-lifecycle approval');
