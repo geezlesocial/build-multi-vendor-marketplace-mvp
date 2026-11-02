@@ -9,6 +9,7 @@ import {
   canTransitionLiveSession,
   requireLiveShopping,
 } from "./live-domain.js";
+import { REPLAY_DELETION_PENDING_ERROR_CODE } from "./live-state.js";
 import { liveProvider } from "./live-provider.js";
 import {
   liveReplayStorageReady,
@@ -389,22 +390,58 @@ export function registerSellerLiveSessionLifecycleRoutes(app: Express) {
           id: routeParam(req.params.id),
           sellerId: user.sellerId,
           status: "ENDED",
-          recordingStatus: "READY",
           replayPublishedAt: null,
           recordingStorageKey: { not: null },
+          OR: [
+            { recordingStatus: "READY" },
+            {
+              recordingStatus: "FAILED",
+              recordingErrorCode: REPLAY_DELETION_PENDING_ERROR_CODE,
+            },
+          ],
         },
-        select: { id: true, recordingStorageKey: true },
+        select: {
+          id: true,
+          recordingStatus: true,
+          recordingStorageKey: true,
+        },
       });
       if (!session?.recordingStorageKey)
         return res
           .status(409)
           .json({ error: "Unpublish the replay before deleting it." });
+      if (session.recordingStatus === "READY") {
+        const claimed = await prisma.liveSession.updateMany({
+          where: {
+            id: session.id,
+            sellerId: user.sellerId,
+            status: "ENDED",
+            recordingStatus: "READY",
+            replayPublishedAt: null,
+            recordingStorageKey: session.recordingStorageKey,
+          },
+          data: {
+            recordingStatus: "FAILED",
+            recordingErrorCode: REPLAY_DELETION_PENDING_ERROR_CODE,
+          },
+        });
+        if (!claimed.count)
+          return res.status(409).json({
+            error:
+              "Replay state changed while deleting; refresh and try again.",
+          });
+      }
+
+      // Claim the database row before deleting the external object. If a publish
+      // wins the compare-and-swap, this request must not remove its replay file.
       await removeReplayObject(session.recordingStorageKey);
       const updated = await prisma.liveSession.updateMany({
         where: {
           id: session.id,
           sellerId: user.sellerId,
-          recordingStatus: "READY",
+          status: "ENDED",
+          recordingStatus: "FAILED",
+          recordingErrorCode: REPLAY_DELETION_PENDING_ERROR_CODE,
           replayPublishedAt: null,
           recordingStorageKey: session.recordingStorageKey,
         },
