@@ -62,7 +62,8 @@ describe.skipIf(!prisma)("seller commission PostgreSQL concurrency", () => {
         },
         include: { seller: true },
       });
-      if (!user.seller) throw new Error("Synthetic seller fixture was not created");
+      if (!user.seller)
+        throw new Error("Synthetic seller fixture was not created");
 
       const productType = await tx.catalogProductType.create({
         data: {
@@ -125,7 +126,8 @@ describe.skipIf(!prisma)("seller commission PostgreSQL concurrency", () => {
         include: { sellerOrders: true },
       });
       const sellerOrder = order.sellerOrders[0];
-      if (!sellerOrder) throw new Error("Synthetic seller order was not created");
+      if (!sellerOrder)
+        throw new Error("Synthetic seller order was not created");
 
       return {
         parentOrderId: order.id,
@@ -138,8 +140,10 @@ describe.skipIf(!prisma)("seller commission PostgreSQL concurrency", () => {
     });
     fixture = created;
 
-    const { accrueSellerCommissionsForPaidOrder, reverseSellerCommissionForOrder } =
-      await import("./seller-commission.js");
+    const {
+      accrueSellerCommissionsForPaidOrder,
+      reverseSellerCommissionForOrder,
+    } = await import("./seller-commission.js");
 
     const accrualResults = await Promise.all([
       db.$transaction((tx) =>
@@ -195,9 +199,9 @@ describe.skipIf(!prisma)("seller commission PostgreSQL concurrency", () => {
       orderBy: { entryType: "asc" },
     });
     expect(ledger).toHaveLength(2);
-    expect(ledger.filter((entry) => entry.entryType === "REVERSAL")).toMatchObject([
-      { amountMinor: -1_000, eligibleBaseMinor: 10_000 },
-    ]);
+    expect(
+      ledger.filter((entry) => entry.entryType === "REVERSAL"),
+    ).toMatchObject([{ amountMinor: -1_000, eligibleBaseMinor: 10_000 }]);
     expect(
       await db.$transaction((tx) =>
         reverseSellerCommissionForOrder(
@@ -222,13 +226,21 @@ afterAll(async () => {
         await tx.orderItem.deleteMany({
           where: { sellerOrderId: fixture!.sellerOrderId },
         });
-        await tx.sellerOrder.deleteMany({ where: { id: fixture!.sellerOrderId } });
-        await tx.payment.deleteMany({ where: { parentId: fixture!.parentOrderId } });
-        await tx.parentOrder.deleteMany({ where: { id: fixture!.parentOrderId } });
+        await tx.sellerOrder.deleteMany({
+          where: { id: fixture!.sellerOrderId },
+        });
+        await tx.payment.deleteMany({
+          where: { parentId: fixture!.parentOrderId },
+        });
+        await tx.parentOrder.deleteMany({
+          where: { id: fixture!.parentOrderId },
+        });
         await tx.product.deleteMany({ where: { id: fixture!.productId } });
         await tx.seller.deleteMany({ where: { id: fixture!.sellerId } });
         await tx.user.deleteMany({ where: { id: fixture!.userId } });
-        await tx.catalogProductType.deleteMany({ where: { id: fixture!.productTypeId } });
+        await tx.catalogProductType.deleteMany({
+          where: { id: fixture!.productTypeId },
+        });
       });
     }
   } finally {
