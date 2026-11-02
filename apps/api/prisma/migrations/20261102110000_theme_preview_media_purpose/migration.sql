@@ -1,0 +1,1 @@
+ALTER TYPE "MediaPurpose" ADD VALUE 'THEME_PREVIEW';

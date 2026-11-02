@@ -85,7 +85,7 @@ async function publicMediaAsset(id: string) {
   if (!asset || asset.scanStatus !== MediaScanStatus.APPROVED) return null;
   if (asset.uploadStatus !== 'COMPLETE') return null;
   const publishedNow = { status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
-  const [posts, pages, storePosts, storePages, branding, stores, products, productAttachments, sponsoredCreative, authPage, marketingCampaignMedia, chromeConfigurations] = await Promise.all([
+  const [posts, pages, storePosts, storePages, branding, stores, products, productAttachments, sponsoredCreative, authPage, marketingCampaignMedia, chromeConfigurations, themeCatalog] = await Promise.all([
     prisma.blogPost.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
     prisma.contentPage.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, ogImageId: true } }),
     prisma.blogPost.findMany({ where: { ...publishedNow, store: { seller: { status: 'APPROVED' } } }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
@@ -110,9 +110,10 @@ async function publicMediaAsset(id: string) {
       },
       select: { mediaAssetId: true }
     }),
-    prisma.siteChromeConfiguration.findMany({ where: { publishedJson: { not: Prisma.JsonNull } }, select: { publishedJson: true } })
+    prisma.siteChromeConfiguration.findMany({ where: { publishedJson: { not: Prisma.JsonNull } }, select: { publishedJson: true } }),
+    prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { themeCatalogJson: true } })
   ]);
-  const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || chromeConfigurations.some(configuration => JSON.stringify(configuration.publishedJson).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative) || authPage?.logoMediaId === id || Boolean(marketingCampaignMedia);
+  const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || chromeConfigurations.some(configuration => JSON.stringify(configuration.publishedJson).includes(id)) || (asset.purpose === MediaPurpose.THEME_PREVIEW && asset.storeId === null && JSON.stringify(themeCatalog?.themeCatalogJson ?? {}).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative) || authPage?.logoMediaId === id || Boolean(marketingCampaignMedia);
   return referencedInPublishedContent ? asset : null;
 }
 

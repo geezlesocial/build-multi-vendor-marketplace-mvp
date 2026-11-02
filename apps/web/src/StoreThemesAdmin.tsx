@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 type Preset =
   | "CLASSIC"
@@ -20,12 +20,14 @@ type ThemeInfo = {
   tier: "FREE" | "PAID";
   description: string;
   features: string[];
+  previewImageUrl: string;
   defaultTokens: Tokens;
 };
 type Config = {
   displayOrder: Preset[];
   visibleThemes: Preset[];
   tokens: Record<Preset, Tokens>;
+  previewImages: Partial<Record<Preset, string>>;
 };
 type Store = {
   id: string;
@@ -41,6 +43,14 @@ type Audit = {
   metadata: { reason?: string; config?: Config } | null;
   actor: { name: string | null; email: string } | null;
 };
+type PreviewMedia = {
+  id: string;
+  originalName: string;
+  scanStatus: "QUARANTINED" | "REJECTED" | "APPROVED";
+  scanErrorCode: string | null;
+  uploadStatus: string;
+  createdAt: string;
+};
 type AdminData = {
   themes: ThemeInfo[];
   config: Config;
@@ -48,6 +58,11 @@ type AdminData = {
   usage: Record<Preset, number>;
   stores: Store[];
   history: Audit[];
+  previewMedia: PreviewMedia[];
+};
+type CatalogPreviewResponse = {
+  themes: ThemeInfo[];
+  configUpdatedAt: string | null;
 };
 type PreviewStore = {
   name: string;
@@ -62,6 +77,8 @@ type PreviewStore = {
     category: { name: string; slug: string } | null;
   }[];
 };
+const maxThemePreviewBytes = 5_000_000;
+const maxThemePreviewPixels = 40_000_000;
 
 function contrastRatio(first: string, second: string) {
   const luminance = (hex: string) => {
@@ -99,30 +116,81 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.status === 204 ? (undefined as T) : response.json();
 }
 
-function ThemeArtwork({ preset }: { preset: Preset }) {
+function ThemeArtwork({
+  preset,
+  name,
+  src,
+}: {
+  preset: Preset;
+  name: string;
+  src: string;
+}) {
   return (
-    <div className="themeArtwork" data-theme={preset} aria-hidden="true">
-      <div className="themeArtworkTop">
-        <span />
-        <i />
-        <i />
-        <i />
-      </div>
-      <div className="themeArtworkBody">
-        <div className="themeArtworkHero">
-          <span />
-          <b />
-          <b />
-          <small />
-        </div>
-        <div className="themeArtworkCards">
-          <i />
-          <i />
-          <i />
-        </div>
-      </div>
-    </div>
+    <figure className="themeArtwork" data-theme={preset}>
+      <img
+        src={src}
+        alt={`${name} storefront theme preview`}
+        loading="lazy"
+        decoding="async"
+      />
+      <figcaption>{name}</figcaption>
+    </figure>
   );
+}
+
+function uploadThemePreviewFile(
+  url: string,
+  fields: Record<string, string>,
+  file: File,
+  progress: (value: number) => void,
+) {
+  return new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    const localUpload = fields["x-local-upload"] === "1";
+    request.open(localUpload ? "PUT" : "POST", url);
+    request.withCredentials = false;
+    request.timeout = 120_000;
+    if (localUpload) {
+      request.setRequestHeader("Content-Type", file.type);
+      const csrf = document.cookie
+        .split("; ")
+        .find((value) => value.startsWith("marketplace_csrf="))
+        ?.split("=")[1];
+      if (csrf) request.setRequestHeader("x-csrf-token", csrf);
+    }
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable)
+        progress(Math.round((event.loaded / event.total) * 100));
+    };
+    request.onload = () =>
+      request.status >= 200 && request.status < 300
+        ? resolve()
+        : reject(
+            new Error(
+              "Media storage rejected the upload; the current theme image remains active.",
+            ),
+          );
+    request.onerror = () =>
+      reject(
+        new Error(
+          "Media storage could not be reached; the current theme image remains active.",
+        ),
+      );
+    request.ontimeout = () =>
+      reject(
+        new Error(
+          "The image upload timed out; the current theme image remains active.",
+        ),
+      );
+    if (localUpload) {
+      request.send(file);
+      return;
+    }
+    const form = new FormData();
+    Object.entries(fields).forEach(([key, value]) => form.append(key, value));
+    form.append("file", file);
+    request.send(form);
+  });
 }
 
 export function StoreThemesAdmin() {
@@ -142,6 +210,15 @@ export function StoreThemesAdmin() {
     "desktop" | "tablet" | "mobile"
   >("desktop");
   const [previewStore, setPreviewStore] = useState<PreviewStore | null>(null);
+  const [candidateUrls, setCandidateUrls] = useState<
+    Partial<Record<Preset, string>>
+  >({});
+  const [selectedFiles, setSelectedFiles] = useState<
+    Partial<Record<Preset, File>>
+  >({});
+  const [previewBusy, setPreviewBusy] = useState<Preset | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const candidateUrlSet = useRef(new Set<string>());
 
   const load = async () => {
     const result = await api<AdminData>("/api/admin/store-themes");
@@ -151,6 +228,37 @@ export function StoreThemesAdmin() {
   };
   useEffect(() => {
     void load().catch((error) => setMessage((error as Error).message));
+  }, []);
+  useEffect(
+    () => () => {
+      for (const url of candidateUrlSet.current) URL.revokeObjectURL(url);
+      candidateUrlSet.current.clear();
+    },
+    [],
+  );
+  useEffect(() => {
+    let active = true;
+    const refreshPreviewImages = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const result = await api<CatalogPreviewResponse>(
+          "/api/store-themes/catalog",
+        );
+        if (active)
+          setData((current) =>
+            current ? { ...current, themes: result.themes } : current,
+          );
+      } catch {
+        /* The current, already-loaded catalog remains usable during a transient refresh failure. */
+      }
+    };
+    const timer = window.setInterval(() => void refreshPreviewImages(), 15_000);
+    document.addEventListener("visibilitychange", refreshPreviewImages);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshPreviewImages);
+    };
   }, []);
   useEffect(() => {
     if (!previewSlug) {
@@ -193,6 +301,255 @@ export function StoreThemesAdmin() {
       setMessage((error as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const rememberCandidate = (preset: Preset, file?: File) => {
+    const prior = candidateUrls[preset];
+    if (prior) {
+      URL.revokeObjectURL(prior);
+      candidateUrlSet.current.delete(prior);
+    }
+    setSelectedFiles((current) => ({ ...current, [preset]: file }));
+    if (!file) {
+      setCandidateUrls((current) => {
+        const next = { ...current };
+        delete next[preset];
+        return next;
+      });
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    candidateUrlSet.current.add(url);
+    setCandidateUrls((current) => ({ ...current, [preset]: url }));
+  };
+
+  const applyPreviewImage = async (preset: Preset, assetId: string | null) => {
+    const item = data?.themes.find((theme) => theme.id === preset);
+    if (!item) return;
+    setPreviewBusy(preset);
+    setMessage(
+      assetId
+        ? `Applying the approved ${item.name} theme preview…`
+        : `Restoring the default ${item.name} preview…`,
+    );
+    try {
+      const result = await api<{
+        previewImageUrl: string;
+        configUpdatedAt: string;
+      }>(
+        `/api/admin/store-themes/${encodeURIComponent(preset)}/preview-image`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            assetId,
+            expectedUpdatedAt,
+            reason: `${assetId ? "Updated" : "Restored default"} ${item.name} theme preview image`,
+          }),
+        },
+      );
+      setExpectedUpdatedAt(result.configUpdatedAt);
+      setConfig((current) => {
+        if (!current) return current;
+        const previewImages = { ...current.previewImages };
+        if (assetId) previewImages[preset] = assetId;
+        else delete previewImages[preset];
+        return { ...current, previewImages };
+      });
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              configUpdatedAt: result.configUpdatedAt,
+              themes: current.themes.map((theme) =>
+                theme.id === preset
+                  ? { ...theme, previewImageUrl: result.previewImageUrl }
+                  : theme,
+              ),
+            }
+          : current,
+      );
+      rememberCandidate(preset);
+      setMessage(
+        `${item.name} theme preview updated. The approved image is now visible in the admin and seller theme catalogs.`,
+      );
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setPreviewBusy(null);
+      setUploadProgress(null);
+    }
+  };
+
+  const uploadPreviewImage = async (preset: Preset) => {
+    const file = selectedFiles[preset];
+    const item = data?.themes.find((theme) => theme.id === preset);
+    if (!file || !item) return;
+    if (
+      !(
+        ["image/jpeg", "image/png", "image/webp", "image/gif"] as string[]
+      ).includes(file.type)
+    ) {
+      setMessage(
+        "Choose a JPEG, PNG, WebP, or GIF image. SVG and HTML uploads are not accepted.",
+      );
+      return;
+    }
+    setPreviewBusy(preset);
+    setMessage(`Uploading and scanning the ${item.name} theme preview…`);
+    setUploadProgress(0);
+    try {
+      if (file.size > maxThemePreviewBytes)
+        throw new Error("Theme preview images must be 5 MB or smaller.");
+      if (typeof createImageBitmap === "function") {
+        const bitmap = await createImageBitmap(file);
+        try {
+          if (
+            bitmap.width <= 0 ||
+            bitmap.height <= 0 ||
+            bitmap.width * bitmap.height > maxThemePreviewPixels
+          )
+            throw new Error(
+              "The image dimensions are invalid or exceed the 40-megapixel safety limit.",
+            );
+        } finally {
+          bitmap.close();
+        }
+      }
+      const reservation = await api<{
+        id: string;
+        upload: { url: string; fields: Record<string, string> };
+      }>(
+        `/api/admin/store-themes/${encodeURIComponent(preset)}/preview-media/uploads`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type,
+            sizeBytes: file.size,
+          }),
+        },
+      );
+      await uploadThemePreviewFile(
+        reservation.upload.url,
+        reservation.upload.fields,
+        file,
+        setUploadProgress,
+      );
+      const finalized = await api<{
+        scanStatus: string;
+        scanErrorCode?: string | null;
+        uploadStatus: string;
+        message?: string;
+      }>(
+        `/api/admin/platform/branding-media/${encodeURIComponent(reservation.id)}/finalize`,
+        { method: "POST", body: "{}" },
+      );
+      const mediaRecord: PreviewMedia = {
+        id: reservation.id,
+        originalName: `${preset}--${file.name}`,
+        scanStatus:
+          finalized.scanStatus === "APPROVED"
+            ? "APPROVED"
+            : finalized.scanStatus === "REJECTED"
+              ? "REJECTED"
+              : "QUARANTINED",
+        scanErrorCode: finalized.scanErrorCode ?? null,
+        uploadStatus: finalized.uploadStatus,
+        createdAt: new Date().toISOString(),
+      };
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              previewMedia: [
+                mediaRecord,
+                ...current.previewMedia.filter(
+                  (asset) => asset.id !== mediaRecord.id,
+                ),
+              ],
+            }
+          : current,
+      );
+      if (finalized.uploadStatus !== "COMPLETE")
+        throw new Error(
+          finalized.message ??
+            "The image upload could not be completed. The currently published theme preview remains active.",
+        );
+      if (finalized.scanStatus === "REJECTED") {
+        setMessage(
+          finalized.message ??
+            "The scanner rejected this image. The currently published theme preview remains active.",
+        );
+        return;
+      }
+      if (finalized.scanStatus !== "APPROVED") {
+        if (finalized.scanStatus === "REJECTED") {
+          setMessage(
+            finalized.message ??
+              "The scanner rejected this image. The current theme preview is unchanged.",
+          );
+          return;
+        }
+        setMessage(
+          "The upload is safely quarantined while scanning is unavailable. It is not public; retry the scan when the scanner is ready.",
+        );
+        return;
+      }
+      await applyPreviewImage(preset, reservation.id);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setPreviewBusy(null);
+      setUploadProgress(null);
+    }
+  };
+
+  const retryPreviewScan = async (preset: Preset, assetId: string) => {
+    setPreviewBusy(preset);
+    try {
+      const result = await api<{
+        scanStatus: string;
+        scanErrorCode?: string | null;
+      }>(
+        `/api/admin/platform/branding-media/${encodeURIComponent(assetId)}/scan-retry`,
+        { method: "POST", body: "{}" },
+      );
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              previewMedia: current.previewMedia.map((asset) =>
+                asset.id === assetId
+                  ? {
+                      ...asset,
+                      scanStatus:
+                        result.scanStatus === "APPROVED"
+                          ? "APPROVED"
+                          : result.scanStatus === "REJECTED"
+                            ? "REJECTED"
+                            : "QUARANTINED",
+                      scanErrorCode: result.scanErrorCode ?? null,
+                    }
+                  : asset,
+              ),
+            }
+          : current,
+      );
+      if (result.scanStatus === "APPROVED")
+        await applyPreviewImage(preset, assetId);
+      else if (result.scanErrorCode === "MALWARE_DETECTED") {
+        setMessage(
+          "The scanner rejected the upload. It remains private and the existing theme preview is unchanged.",
+        );
+      } else
+        setMessage(
+          "The image remains private in quarantine; try again when scanning is available.",
+        );
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setPreviewBusy(null);
     }
   };
 
@@ -262,7 +619,11 @@ export function StoreThemesAdmin() {
             contrastRatio(tokens.accentColor, tokens.surfaceColor) < 4.5;
           return (
             <article className="themeAdminCard" key={preset}>
-              <ThemeArtwork preset={preset} />
+              <ThemeArtwork
+                preset={preset}
+                name={item.name}
+                src={candidateUrls[preset] ?? item.previewImageUrl}
+              />
               <div className="themeAdminCardBody">
                 <header>
                   <div>
@@ -304,6 +665,121 @@ export function StoreThemesAdmin() {
                       : "Hidden from new selections"}
                 </label>
                 <p>{item.description}</p>
+                <fieldset className="themePreviewImageControl">
+                  <legend>Theme catalog preview image</legend>
+                  <p className="muted">
+                    This is catalog artwork, not a seller’s Store logo. New
+                    images are normalized, malware-scanned, and published only
+                    after approval.
+                  </p>
+                  <label>
+                    Replace {item.name} preview image
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      onChange={(event) => {
+                        rememberCandidate(
+                          preset,
+                          event.currentTarget.files?.[0],
+                        );
+                        event.currentTarget.value = "";
+                      }}
+                      disabled={previewBusy !== null}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    aria-pressed={previewPreset === preset}
+                    onClick={() => {
+                      setPreviewPreset(preset);
+                      document
+                        .getElementById("theme-admin-preview")
+                        ?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
+                    }}
+                  >
+                    View preview
+                  </button>
+                  {candidateUrls[preset] && (
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={previewBusy !== null}
+                      onClick={() => void uploadPreviewImage(preset)}
+                    >
+                      {previewBusy === preset
+                        ? "Uploading…"
+                        : `Upload & publish ${item.name} preview`}
+                    </button>
+                  )}
+                  {previewBusy === preset && uploadProgress !== null && (
+                    <progress
+                      max="100"
+                      value={uploadProgress}
+                      aria-label={`${item.name} preview upload progress`}
+                    />
+                  )}
+                  {data.previewMedia
+                    .filter(
+                      (asset) =>
+                        asset.originalName.startsWith(`${preset}--`) &&
+                        asset.uploadStatus === "COMPLETE",
+                    )
+                    .map((asset) => (
+                      <p className="muted" key={asset.id}>
+                        {asset.originalName.slice(preset.length + 2)}:{" "}
+                        {asset.scanStatus === "REJECTED" ? (
+                          "rejected by the malware scanner; the image remains private."
+                        ) : asset.scanStatus === "APPROVED" ? (
+                          <>
+                            approved and private until selected.{" "}
+                            {config.previewImages[preset] !== asset.id && (
+                              <button
+                                type="button"
+                                disabled={previewBusy !== null}
+                                onClick={() =>
+                                  void applyPreviewImage(preset, asset.id)
+                                }
+                              >
+                                Publish approved preview
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            private pending malware scan.{" "}
+                            <button
+                              type="button"
+                              disabled={previewBusy !== null}
+                              onClick={() =>
+                                void retryPreviewScan(preset, asset.id)
+                              }
+                            >
+                              Retry scan
+                            </button>
+                          </>
+                        )}
+                      </p>
+                    ))}
+                  {config.previewImages[preset] && (
+                    <button
+                      type="button"
+                      disabled={previewBusy !== null}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Restore the original ${item.name} theme preview image for all users?`,
+                          )
+                        )
+                          void applyPreviewImage(preset, null);
+                      }}
+                    >
+                      Restore default image
+                    </button>
+                  )}
+                </fieldset>
                 <ol>
                   {item.features.map((feature) => (
                     <li key={feature}>{feature}</li>
@@ -375,7 +851,10 @@ export function StoreThemesAdmin() {
           );
         })}
       </div>
-      <section className="card cardBody themeAdminPreview">
+      <section
+        id="theme-admin-preview"
+        className="card cardBody themeAdminPreview"
+      >
         <header className="themeStudioPreviewHead">
           <div>
             <p className="eyebrow">Authorized public-catalog preview</p>
@@ -433,6 +912,15 @@ export function StoreThemesAdmin() {
             <span>Approved catalog</span>
             <small>Cart</small>
           </div>
+          {previewTheme && (
+            <img
+              className="themePreviewReferenceImage"
+              src={candidateUrls[previewPreset] ?? previewTheme.previewImageUrl}
+              alt={`${previewTheme.name} theme reference preview`}
+              loading="lazy"
+              decoding="async"
+            />
+          )}
           <div className="themePreviewHero">
             <small>PRIVATE ADMIN PREVIEW</small>
             <h3>{previewTheme?.name}</h3>

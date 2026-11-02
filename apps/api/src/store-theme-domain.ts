@@ -26,6 +26,24 @@ export const ALL_THEME_PRESETS = [
   ...PAID_THEME_PRESETS,
 ] as const;
 
+export const DEFAULT_THEME_PREVIEW_IMAGES: Record<StoreThemePreset, string> = {
+  [StoreThemePreset.CLASSIC]: "/theme-previews/classic.webp",
+  [StoreThemePreset.EDITORIAL]: "/theme-previews/editorial.webp",
+  [StoreThemePreset.BOUTIQUE]: "/theme-previews/boutique.webp",
+  [StoreThemePreset.TECH_ELECTRONICS]: "/theme-previews/tech-electronics.webp",
+  [StoreThemePreset.GROCERIES]: "/theme-previews/groceries.webp",
+  [StoreThemePreset.ECOMMERCE_MARKETPLACE]:
+    "/theme-previews/ecommerce-marketplace.webp",
+};
+
+export function themePreviewAssetMatchesPreset(
+  preset: StoreThemePreset,
+  originalName: string,
+) {
+  const prefix = `${preset}--`;
+  return originalName.startsWith(prefix) && originalName.length > prefix.length;
+}
+
 export const STORE_THEME_CATALOG = [
   {
     id: StoreThemePreset.CLASSIC,
@@ -180,6 +198,17 @@ export const themeCatalogConfigSchema = z
         (values) => new Set(values).size === values.length,
         "Each available theme may be listed only once.",
       ),
+    previewImages: z
+      .record(z.string(), z.string().uuid())
+      .default({})
+      .refine(
+        (images) =>
+          Object.keys(images).every((theme) =>
+            ALL_THEME_PRESETS.includes(theme as StoreThemePreset),
+          ) &&
+          new Set(Object.values(images)).size === Object.keys(images).length,
+        "Preview images must map known themes to distinct media assets.",
+      ),
     tokens: z
       .record(z.string(), tokensSchema)
       .refine(
@@ -239,6 +268,7 @@ export const defaultThemeCatalogConfig: ThemeCatalogConfig = {
   tokens: Object.fromEntries(
     STORE_THEME_CATALOG.map((theme) => [theme.id, theme.defaultTokens]),
   ),
+  previewImages: {},
 };
 
 type ThemeDb = typeof prisma | Prisma.TransactionClient;
@@ -480,10 +510,34 @@ export async function readThemeCatalogConfig(
 
 export async function publicStoreThemeCatalog(db: ThemeDb = prisma) {
   const config = await readThemeCatalogConfig(db);
-  return storeThemeCatalog(config).filter((theme) => theme.available);
+  const previewIds = Object.values(config.previewImages);
+  const approvedPreviewIds = previewIds.length
+    ? new Set(
+        (
+          await db.mediaAsset.findMany({
+            where: {
+              id: { in: previewIds },
+              storeId: null,
+              purpose: "THEME_PREVIEW",
+              kind: "IMAGE",
+              uploadStatus: "COMPLETE",
+              scanStatus: "APPROVED",
+              storageProvider: { in: ["OBJECT", "LOCAL"] },
+            },
+            select: { id: true },
+          })
+        ).map((asset) => asset.id),
+      )
+    : new Set<string>();
+  return storeThemeCatalog(config, approvedPreviewIds).filter(
+    (theme) => theme.available,
+  );
 }
 
-export function storeThemeCatalog(config: ThemeCatalogConfig) {
+export function storeThemeCatalog(
+  config: ThemeCatalogConfig,
+  approvedPreviewIds: ReadonlySet<string> = new Set(),
+) {
   const order = new Map(
     config.displayOrder.map((preset, index) => [preset, index]),
   );
@@ -493,5 +547,10 @@ export function storeThemeCatalog(config: ThemeCatalogConfig) {
       ...theme,
       defaultTokens: config.tokens[theme.id],
       available: config.visibleThemes.includes(theme.id),
+      previewImageUrl:
+        config.previewImages[theme.id] &&
+        approvedPreviewIds.has(config.previewImages[theme.id]!)
+          ? `/content-media/${encodeURIComponent(config.previewImages[theme.id]!)}`
+          : DEFAULT_THEME_PREVIEW_IMAGES[theme.id],
     }));
 }
