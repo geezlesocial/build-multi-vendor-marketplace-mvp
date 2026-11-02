@@ -225,7 +225,7 @@ export function registerEmailProviderConfigurationRoutes(app: Express) {
     if (Boolean(username) !== Boolean(password)) throw Object.assign(new Error('SMTP username and password/API credential must be supplied together.'), { statusCode: 400 });
     const user = res.locals.user as { id: string };
     const wasActive = (await prisma.platformEmailProviderSelection.findUnique({ where: { id: 'default' }, select: { provider: true } }))?.provider === provider;
-    const saved = await prisma.$transaction(async tx => {
+    await prisma.$transaction(async tx => {
       const result = await tx.emailProviderConfiguration.upsert({
         where: { provider },
         create: { provider, host: input.host, port: input.port, secure: input.secure, requireTls: input.requireTls, username, passwordCiphertext: password ? encrypt(password) : null, senderName: input.senderName, senderEmail: input.senderEmail, replyTo: input.replyTo || null, updatedById: user.id },
