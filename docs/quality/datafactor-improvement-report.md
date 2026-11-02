@@ -14,32 +14,32 @@ This is a measured engineering snapshot, not an official DataFactor score or a r
 
 The owner-provided DataFactor email reports an approximate overall score of **58.7/100** (rounded to 59 in its report UI). It describes the estimate as non-binding and does not disclose rubric weights. The category values below are retained as source context; this report does not recalculate or predict a score.
 
-| Category | Reported score | Current evidence and remaining context |
-| --- | ---: | --- |
-| Architecture & Robustness | 62 | PR #57 extracted product routes from the API entry point. Further module characterization and refactoring remain. |
-| Code Cleanliness | 40 | Merged lint work reduced warnings from 37 to 5 in the API and from 102 to 91 in the web app. Current CI reports zero lint errors. |
-| Docs & Onboarding | 70 | PR #49 added environment-example validation; PR #66 documented theme-preview operations. |
-| Test Coverage | 68 | Merged tests raised measured API coverage; the absolute coverage remains low. Current floors are 15/15/19/17. |
-| Dependency Health | 58 | PR #59's dependency remediation is integrated. Current-tree production audit evidence is recorded below. |
-| CI/CD Maturity | 78 | Application and container-security/integration workflows passed on the integrated mainline tree. |
-| Security Hygiene | 62 | Scans and integration gates passed on the current tree. Hosted alerting and complete historical secret assurance are not established here. |
-| History & Maintenance | 30 | The assessment cites a short history. History is not manufactured; maintainability improves through reviewed changes and ongoing maintenance. |
+| Category                  | Reported score | Current evidence and remaining context                                                                                                        |
+| ------------------------- | -------------: | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Architecture & Robustness |             62 | PR #57 extracted product routes from the API entry point. Further module characterization and refactoring remain.                             |
+| Code Cleanliness          |             40 | Merged lint work reduced warnings from 37 to 5 in the API and from 102 to 91 in the web app. Current CI reports zero lint errors.             |
+| Docs & Onboarding         |             70 | PR #49 added environment-example validation; PR #66 documented theme-preview operations.                                                      |
+| Test Coverage             |             68 | Merged tests raised measured API coverage; the absolute coverage remains low. Current floors are 15/15/19/17.                                 |
+| Dependency Health         |             58 | PR #59's dependency remediation is integrated. Current-tree production audit evidence is recorded below.                                      |
+| CI/CD Maturity            |             78 | Application and container-security/integration workflows passed on the integrated mainline tree.                                              |
+| Security Hygiene          |             62 | Scans and integration gates passed on the current tree. Hosted alerting and complete historical secret assurance are not established here.    |
+| History & Maintenance     |             30 | The assessment cites a short history. History is not manufactured; maintainability improves through reviewed changes and ongoing maintenance. |
 
 ## Protected-main measurements
 
 The post-merge application run [41479982542](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41479982542) succeeded on protected `main` at `d2d8176`. Its results are the current integrated baseline:
 
-| Metric | Measured result |
-| --- | ---: |
-| API tests | 424 passed across 83 files |
-| Statement coverage | 18.70% |
-| Branch coverage | 18.85% |
-| Function coverage | 23.12% |
-| Line coverage | 21.04% |
-| Enforced coverage floors (statements / branches / functions / lines) | 15% / 15% / 19% / 17% |
-| Playwright browser tests | 103 passed, 1 skipped |
-| API lint | 5 warnings, 0 errors |
-| Web lint | 91 warnings, 0 errors |
+| Metric                                                               |            Measured result |
+| -------------------------------------------------------------------- | -------------------------: |
+| API tests                                                            | 424 passed across 83 files |
+| Statement coverage                                                   |                     18.70% |
+| Branch coverage                                                      |                     18.85% |
+| Function coverage                                                    |                     23.12% |
+| Line coverage                                                        |                     21.04% |
+| Enforced coverage floors (statements / branches / functions / lines) |      15% / 15% / 19% / 17% |
+| Playwright browser tests                                             |      103 passed, 1 skipped |
+| API lint                                                             |       5 warnings, 0 errors |
+| Web lint                                                             |      91 warnings, 0 errors |
 
 The post-merge workflow passed; the first post-merge attempt after PR #49 encountered a PostgreSQL host-port collision, and its retry passed without skipping required checks. The current baseline is from the later successful run above.
 
@@ -49,15 +49,15 @@ The PR #66 container security/integration run [41477037913](https://github.com/g
 
 These changes are on protected `main`; candidate measurements from their old branches are not added together. The final row is the current mainline run.
 
-| PR | Integrated change | Merge commit | Post-merge application CI |
-| --- | --- | --- | --- |
-| [#59](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/59) | Dependency remediation | `310818e` | [41453249187](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41453249187) passed |
-| [#47](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/47) | API and web lint improvements | `416fb93` | Included in later protected-main runs |
-| [#49](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/49) | Environment-example validation | `88eb857` | [41462426162](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41462426162) passed on retry |
-| [#51](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/51) | Measured API coverage floors | `db96d6f` | [41466536734](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41466536734) passed |
-| [#60](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/60) | Financial regression and PostgreSQL concurrency tests | `ad0a455` | [41470901167](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41470901167) passed |
-| [#57](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/57) | Product-route extraction | `63df74c` | [41475383775](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41475383775) passed |
-| [#66](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/66) | Theme-preview operations documentation | `d2d8176` | [41479982542](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41479982542) passed |
+| PR                                                                                | Integrated change                                     | Merge commit | Post-merge application CI                                                                                                  |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| [#59](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/59) | Dependency remediation                                | `310818e`    | [41453249187](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41453249187) passed          |
+| [#47](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/47) | API and web lint improvements                         | `416fb93`    | Included in later protected-main runs                                                                                      |
+| [#49](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/49) | Environment-example validation                        | `88eb857`    | [41462426162](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41462426162) passed on retry |
+| [#51](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/51) | Measured API coverage floors                          | `db96d6f`    | [41466536734](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41466536734) passed          |
+| [#60](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/60) | Financial regression and PostgreSQL concurrency tests | `ad0a455`    | [41470901167](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41470901167) passed          |
+| [#57](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/57) | Product-route extraction                              | `63df74c`    | [41475383775](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41475383775) passed          |
+| [#66](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/66) | Theme-preview operations documentation                | `d2d8176`    | [41479982542](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41479982542) passed          |
 
 PRs #51, #60, #57, and #66 received independent `webskilldesign` approvals for their exact reviewed heads before merge. Each integration followed the repository's protected-branch process. PR #60's disposable-PostgreSQL concurrency test passed in exact-head CI; no live payment provider was used.
 
