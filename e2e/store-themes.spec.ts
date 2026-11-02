@@ -959,7 +959,10 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
       .getByRole("button", { name: "Themes & templates", exact: true })
       .click();
     await expect(
-      page.getByRole("heading", { name: "Theme management", exact: true }),
+      page.getByRole("heading", {
+        name: "Themes & Templates Management",
+        exact: true,
+      }),
     ).toBeVisible();
     const editorialCard = page.locator(".themeAdminCard").filter({
       has: page.getByRole("heading", { name: "Editorial", exact: true }),
