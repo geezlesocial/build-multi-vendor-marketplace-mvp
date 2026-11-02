@@ -2,10 +2,13 @@ import { StoreThemePreset } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import {
   ALL_THEME_PRESETS,
+  DEFAULT_THEME_PREVIEW_IMAGES,
   FREE_THEME_PRESETS,
   defaultThemeCatalogConfig,
   hasActivePaidThemeSubscription,
   resolveStoreThemeAccess,
+  storeThemeCatalog,
+  themePreviewAssetMatchesPreset,
   themeCatalogConfigSchema,
 } from "./store-theme-domain.js";
 
@@ -193,6 +196,66 @@ describe("storefront theme entitlement policy", () => {
         },
       }),
     ).toThrow(/accent\/link color/i);
+  });
+
+  it("provides a named default preview image for each theme and uses uploaded previews only when approved", () => {
+    const defaults = storeThemeCatalog(defaultThemeCatalogConfig);
+    expect(defaults).toHaveLength(6);
+    for (const theme of defaults) {
+      expect(theme.previewImageUrl).toBe(
+        DEFAULT_THEME_PREVIEW_IMAGES[theme.id],
+      );
+      expect(theme.previewImageUrl).toMatch(
+        /^\/theme-previews\/[a-z-]+\.webp$/,
+      );
+    }
+
+    const customConfig = {
+      ...defaultThemeCatalogConfig,
+      previewImages: { CLASSIC: "a7a1a901-69f4-4aef-91a8-c08293b3a7fa" },
+    };
+    const unapproved = storeThemeCatalog(customConfig).find(
+      (theme) => theme.id === StoreThemePreset.CLASSIC,
+    );
+    expect(unapproved?.previewImageUrl).toBe(
+      DEFAULT_THEME_PREVIEW_IMAGES.CLASSIC,
+    );
+    const approved = storeThemeCatalog(
+      customConfig,
+      new Set(["a7a1a901-69f4-4aef-91a8-c08293b3a7fa"]),
+    ).find((theme) => theme.id === StoreThemePreset.CLASSIC);
+    expect(approved?.previewImageUrl).toBe(
+      "/content-media/a7a1a901-69f4-4aef-91a8-c08293b3a7fa",
+    );
+  });
+
+  it("keeps legacy stored catalog JSON valid with no preview-image field", () => {
+    const legacyConfig = { ...defaultThemeCatalogConfig } as Record<
+      string,
+      unknown
+    >;
+    delete legacyConfig.previewImages;
+    expect(themeCatalogConfigSchema.parse(legacyConfig).previewImages).toEqual(
+      {},
+    );
+  });
+
+  it("binds uploaded preview assets to the theme-specific immutable filename prefix", () => {
+    expect(
+      themePreviewAssetMatchesPreset(
+        StoreThemePreset.CLASSIC,
+        "CLASSIC--classic-preview.webp",
+      ),
+    ).toBe(true);
+    expect(
+      themePreviewAssetMatchesPreset(
+        StoreThemePreset.CLASSIC,
+        "EDITORIAL--editorial-preview.webp",
+      ),
+    ).toBe(false);
+    expect(
+      themePreviewAssetMatchesPreset(StoreThemePreset.GROCERIES, "GROCERIES--"),
+    ).toBe(false);
   });
 
   it("grants paid themes only for a provider-backed active subscription and current paid period", () => {

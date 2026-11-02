@@ -1,6 +1,14 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import express from "express";
-import { Prisma, Role, StoreThemePreset } from "@prisma/client";
+import {
+  MediaKind,
+  MediaPurpose,
+  MediaScanStatus,
+  MediaUploadStatus,
+  Prisma,
+  Role,
+  StoreThemePreset,
+} from "@prisma/client";
 import { z } from "zod";
 import { prisma, requireAuth, requireRole } from "./security.js";
 import { authorizedBrandingStore } from "./store-branding-access.js";
@@ -11,6 +19,7 @@ import {
   readThemeCatalogConfig,
   resolveStoreThemeAccess,
   storeThemeCatalog,
+  themePreviewAssetMatchesPreset,
   themeCatalogConfigSchema,
 } from "./store-theme-domain.js";
 import { storeThemeSchema } from "./platform-domain.js";
@@ -40,14 +49,31 @@ const catalogSaveSchema = z
 const restoreSchema = z
   .object({ expectedVersion: z.number().int().min(0) })
   .strict();
+const previewImageSchema = z
+  .object({
+    assetId: z.string().uuid().nullable(),
+    expectedUpdatedAt: z.string().datetime({ offset: true }).nullable(),
+    reason: z.string().trim().min(5).max(500),
+  })
+  .strict();
 
 export function registerStoreThemeRoutes(app: Express) {
   app.get(
     "/api/store-themes/catalog",
     run(async (_req, res) => {
-      const config = await readThemeCatalogConfig();
+      const [config, settings] = await Promise.all([
+        readThemeCatalogConfig(),
+        prisma.marketplaceSettings.findUnique({
+          where: { id: "default" },
+          select: { updatedAt: true },
+        }),
+      ]);
       res.setHeader("Cache-Control", "no-store");
-      res.json({ themes: await publicStoreThemeCatalog(), config });
+      res.json({
+        themes: await publicStoreThemeCatalog(),
+        config,
+        configUpdatedAt: settings?.updatedAt.toISOString() ?? null,
+      });
     }),
   );
 
@@ -176,7 +202,7 @@ export function registerStoreThemeRoutes(app: Express) {
     requireAuth,
     requireRole(Role.ADMIN),
     run(async (_req, res) => {
-      const [settings, stores, history] = await Promise.all([
+      const [settings, stores, history, previewMedia] = await Promise.all([
         prisma.marketplaceSettings.findUnique({
           where: { id: "default" },
           select: { themeCatalogJson: true, updatedAt: true },
@@ -205,6 +231,32 @@ export function registerStoreThemeRoutes(app: Express) {
             actor: { select: { name: true, email: true } },
           },
         }),
+        prisma.mediaAsset.findMany({
+          where: {
+            storeId: null,
+            purpose: MediaPurpose.THEME_PREVIEW,
+            kind: MediaKind.IMAGE,
+            uploadStatus: MediaUploadStatus.COMPLETE,
+            scanStatus: {
+              in: [
+                MediaScanStatus.APPROVED,
+                MediaScanStatus.QUARANTINED,
+                MediaScanStatus.REJECTED,
+              ],
+            },
+            storageProvider: { in: ["OBJECT", "LOCAL"] },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+          select: {
+            id: true,
+            originalName: true,
+            scanStatus: true,
+            scanErrorCode: true,
+            uploadStatus: true,
+            createdAt: true,
+          },
+        }),
       ]);
       const config = themeCatalogConfigSchema.safeParse(
         settings?.themeCatalogJson,
@@ -212,6 +264,25 @@ export function registerStoreThemeRoutes(app: Express) {
       const resolvedConfig = config.success
         ? config.data
         : defaultThemeCatalogConfig;
+      const previewIds = Object.values(resolvedConfig.previewImages);
+      const approvedPreviewIds = previewIds.length
+        ? new Set(
+            (
+              await prisma.mediaAsset.findMany({
+                where: {
+                  id: { in: previewIds },
+                  storeId: null,
+                  purpose: MediaPurpose.THEME_PREVIEW,
+                  kind: MediaKind.IMAGE,
+                  uploadStatus: MediaUploadStatus.COMPLETE,
+                  scanStatus: MediaScanStatus.APPROVED,
+                  storageProvider: { in: ["OBJECT", "LOCAL"] },
+                },
+                select: { id: true },
+              })
+            ).map((asset) => asset.id),
+          )
+        : new Set<string>();
       const usage = Object.fromEntries(
         ALL_THEME_PRESETS.map((preset) => [preset, 0]),
       ) as Record<StoreThemePreset, number>;
@@ -229,7 +300,7 @@ export function registerStoreThemeRoutes(app: Express) {
       }
       res.setHeader("Cache-Control", "no-store");
       res.json({
-        themes: storeThemeCatalog(resolvedConfig),
+        themes: storeThemeCatalog(resolvedConfig, approvedPreviewIds),
         config: resolvedConfig,
         configUpdatedAt: settings?.updatedAt.toISOString() ?? null,
         usage,
@@ -248,6 +319,153 @@ export function registerStoreThemeRoutes(app: Express) {
           publishedAt: store.themePublishedAt,
         })),
         history,
+        previewMedia,
+      });
+    }),
+  );
+
+  app.put(
+    "/api/admin/store-themes/:preset/preview-image",
+    requireAuth,
+    requireRole(Role.ADMIN),
+    run(async (req, res) => {
+      const currentActor = actor(res);
+      const preset = ALL_THEME_PRESETS.find(
+        (theme) => theme === param(req.params.preset),
+      );
+      if (!preset) throw fail(404, "Store theme not found.");
+      const input = previewImageSchema.parse(req.body);
+      const result = await prisma.$transaction(async (tx) => {
+        await tx.marketplaceSettings.upsert({
+          where: { id: "default" },
+          update: {},
+          create: { id: "default" },
+        });
+        await tx.$queryRaw`SELECT "id" FROM "MarketplaceSettings" WHERE "id" = 'default' FOR UPDATE`;
+        const current = await tx.marketplaceSettings.findUniqueOrThrow({
+          where: { id: "default" },
+        });
+        const expectedChanged =
+          input.expectedUpdatedAt === null
+            ? current.themeCatalogJson !== null
+            : current.updatedAt.toISOString() !==
+              new Date(input.expectedUpdatedAt).toISOString();
+        if (expectedChanged)
+          return { conflict: true as const, updatedAt: current.updatedAt };
+
+        const parsed = themeCatalogConfigSchema.safeParse(
+          current.themeCatalogJson,
+        );
+        const config = parsed.success ? parsed.data : defaultThemeCatalogConfig;
+        const previewImages = { ...config.previewImages };
+        const previousAssetId = previewImages[preset] ?? null;
+
+        if (input.assetId) {
+          await tx.$queryRaw`SELECT "id" FROM "MediaAsset" WHERE "id" = ${input.assetId} FOR UPDATE`;
+          const asset = await tx.mediaAsset.findUnique({
+            where: { id: input.assetId },
+            select: {
+              id: true,
+              storeId: true,
+              originalName: true,
+              purpose: true,
+              kind: true,
+              uploadStatus: true,
+              scanStatus: true,
+              storageProvider: true,
+            },
+          });
+          if (
+            !asset ||
+            asset.storeId !== null ||
+            asset.kind !== MediaKind.IMAGE ||
+            asset.uploadStatus !== MediaUploadStatus.COMPLETE ||
+            asset.scanStatus !== MediaScanStatus.APPROVED ||
+            !["OBJECT", "LOCAL"].includes(asset.storageProvider) ||
+            asset.purpose !== MediaPurpose.THEME_PREVIEW ||
+            !themePreviewAssetMatchesPreset(preset, asset.originalName)
+          )
+            throw fail(
+              400,
+              "Choose a completed, malware-approved image uploaded specifically for this theme. Quarantined, Store-owned, and other-theme media cannot be used.",
+            );
+          if (
+            Object.entries(previewImages).some(
+              ([otherPreset, otherId]) =>
+                otherPreset !== preset && otherId === input.assetId,
+            )
+          )
+            throw fail(409, "Each theme must use its own preview image asset.");
+          previewImages[preset] = input.assetId;
+        } else {
+          delete previewImages[preset];
+        }
+
+        const nextConfig = themeCatalogConfigSchema.parse({
+          ...config,
+          previewImages,
+        });
+        const selectedIds = Object.values(nextConfig.previewImages);
+        if (selectedIds.length) {
+          const approved = await tx.mediaAsset.findMany({
+            where: {
+              id: { in: selectedIds },
+              storeId: null,
+              purpose: MediaPurpose.THEME_PREVIEW,
+              kind: MediaKind.IMAGE,
+              uploadStatus: MediaUploadStatus.COMPLETE,
+              scanStatus: MediaScanStatus.APPROVED,
+              storageProvider: { in: ["OBJECT", "LOCAL"] },
+            },
+            select: { id: true },
+          });
+          if (approved.length !== selectedIds.length)
+            throw fail(
+              409,
+              "A selected theme image is no longer approved. The current public catalog remains unchanged.",
+            );
+        }
+        const saved = await tx.marketplaceSettings.update({
+          where: { id: "default" },
+          data: { themeCatalogJson: json(nextConfig) },
+        });
+        await tx.auditLog.create({
+          data: {
+            actorId: currentActor.id,
+            action: "STORE_THEME_CATALOG_UPDATED",
+            entity: "MarketplaceSettings",
+            entityId: "default",
+            metadata: json({
+              reason: input.reason,
+              change: "THEME_PREVIEW_IMAGE",
+              preset,
+              previousAssetId,
+              assetId: input.assetId,
+              restoredDefault: input.assetId === null,
+              config: nextConfig,
+              updatedAt: saved.updatedAt.toISOString(),
+            }),
+          },
+        });
+        return { saved, config: nextConfig };
+      });
+      if ("conflict" in result && result.conflict)
+        return res.status(409).json({
+          code: "THEME_CATALOG_CONFLICT",
+          error:
+            "Theme catalog changed in another session. Reload before updating this image.",
+          updatedAt: result.updatedAt.toISOString(),
+        });
+      const selectedId = result.config.previewImages[preset];
+      res.json({
+        preset,
+        assetId: selectedId ?? null,
+        previewImageUrl: selectedId
+          ? `/content-media/${encodeURIComponent(selectedId)}`
+          : storeThemeCatalog(defaultThemeCatalogConfig).find(
+              (theme) => theme.id === preset,
+            )?.previewImageUrl,
+        configUpdatedAt: result.saved.updatedAt.toISOString(),
       });
     }),
   );
@@ -276,6 +494,39 @@ export function registerStoreThemeRoutes(app: Express) {
               new Date(input.expectedUpdatedAt).toISOString();
         if (expectedChanged)
           return { conflict: true as const, updatedAt: current.updatedAt };
+        const previewIds = Object.values(input.config.previewImages);
+        if (previewIds.length) {
+          const approved = await tx.mediaAsset.findMany({
+            where: {
+              id: { in: previewIds },
+              storeId: null,
+              purpose: MediaPurpose.THEME_PREVIEW,
+              kind: MediaKind.IMAGE,
+              uploadStatus: MediaUploadStatus.COMPLETE,
+              scanStatus: MediaScanStatus.APPROVED,
+              storageProvider: { in: ["OBJECT", "LOCAL"] },
+            },
+            select: { id: true, originalName: true },
+          });
+          const approvedById = new Map(
+            approved.map((asset) => [asset.id, asset.originalName]),
+          );
+          if (
+            approved.length !== previewIds.length ||
+            Object.entries(input.config.previewImages).some(
+              ([preset, assetId]) =>
+                !approvedById.has(assetId) ||
+                !themePreviewAssetMatchesPreset(
+                  preset as StoreThemePreset,
+                  approvedById.get(assetId) ?? "",
+                ),
+            )
+          )
+            throw fail(
+              400,
+              "Each theme preview must reference its own completed, approved platform image.",
+            );
+        }
         const saved = await tx.marketplaceSettings.update({
           where: { id: "default" },
           data: { themeCatalogJson: json(input.config) },

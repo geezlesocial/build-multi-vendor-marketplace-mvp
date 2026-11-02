@@ -46,6 +46,7 @@ type CatalogTheme = {
   tier: "FREE" | "PAID";
   description: string;
   features: readonly string[];
+  previewImageUrl: string;
   defaultTokens: {
     surfaceColor: string;
     cardColor: string;
@@ -149,29 +150,25 @@ function normalized(value: Partial<Theme>): Theme {
   };
 }
 
-function ThemeArtwork({ theme }: { theme: ThemePreset }) {
+function ThemeArtwork({
+  theme,
+  name,
+  src,
+}: {
+  theme: ThemePreset;
+  name: string;
+  src: string;
+}) {
   return (
-    <div className="themeArtwork" data-theme={theme} aria-hidden="true">
-      <div className="themeArtworkTop">
-        <span />
-        <i />
-        <i />
-        <i />
-      </div>
-      <div className="themeArtworkBody">
-        <div className="themeArtworkHero">
-          <span />
-          <b />
-          <b />
-          <small />
-        </div>
-        <div className="themeArtworkCards">
-          <i />
-          <i />
-          <i />
-        </div>
-      </div>
-    </div>
+    <figure className="themeArtwork" data-theme={theme}>
+      <img
+        src={src}
+        alt={`${name} storefront theme preview`}
+        loading="lazy"
+        decoding="async"
+      />
+      <figcaption>{name}</figcaption>
+    </figure>
   );
 }
 
@@ -212,6 +209,15 @@ function ThemePreview({
         <span>Search products</span>
         <small>Cart</small>
       </div>
+      {meta && (
+        <img
+          className="themePreviewReferenceImage"
+          src={meta.previewImageUrl}
+          alt={`${meta.name} theme reference preview`}
+          loading="lazy"
+          decoding="async"
+        />
+      )}
       <div className="themePreviewHero">
         {theme.bannerMediaId && (
           <span className="themePreviewImageMark">Store banner selected</span>
@@ -381,6 +387,34 @@ export function StoreThemeStudio() {
       });
     return () => {
       active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refreshThemePreviewImages = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const result = await api<{ themes: CatalogTheme[] }>(
+          "/api/store-themes/catalog",
+        );
+        if (active) setCatalog(result.themes);
+      } catch {
+        // Keep the last published theme preview available during a transient network failure.
+      }
+    };
+    const timer = window.setInterval(
+      () => void refreshThemePreviewImages(),
+      15_000,
+    );
+    document.addEventListener("visibilitychange", refreshThemePreviewImages);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener(
+        "visibilitychange",
+        refreshThemePreviewImages,
+      );
     };
   }, []);
 
@@ -590,7 +624,11 @@ export function StoreThemeStudio() {
                 className={`themeGalleryCard ${previewPreset === item.id ? "is-previewing" : ""}`}
                 key={item.id}
               >
-                <ThemeArtwork theme={item.id} />
+                <ThemeArtwork
+                  theme={item.id}
+                  name={item.name}
+                  src={item.previewImageUrl}
+                />
                 <div className="themeGalleryCardBody">
                   <div className="themeGalleryCardTitle">
                     <h3>{item.name}</h3>
