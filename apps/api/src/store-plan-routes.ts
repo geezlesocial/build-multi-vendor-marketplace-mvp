@@ -8,6 +8,7 @@ import { asStorePlanEntitlements, dropshippingPlanBlock, effectiveStorePlan, sel
 import { formatMinorAmount, isFreePlan, planPricingInputSchema, resolvePlanPricing } from './store-plan-pricing.js';
 import { env } from './config.js';
 import { stripeStoreBillingProvider, storePlanBillingSandboxEnabled, stripeStoreBillingTermsSupported } from './stripe-store-billing.js';
+import { FREE_THEME_PRESETS, PAID_THEME_PRESETS, resolveStoreThemeAccess } from './store-theme-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -45,6 +46,9 @@ function versionData(name: string, entitlements: z.infer<typeof storePlanEntitle
   let resolvedPricing: ReturnType<typeof resolvePlanPricing>;
   try { resolvedPricing = resolvePlanPricing(pricing); }
   catch (error) { throw fail(400, error instanceof Error ? error.message : 'Invalid pricing terms.'); }
+  if (isFreePlan(resolvedPricing) && entitlements.allowedThemes.some(theme => (PAID_THEME_PRESETS as readonly string[]).includes(theme))) {
+    throw fail(400, 'Free Store plans may include only Classic, Editorial and Boutique themes.');
+  }
   const providerPolicyBlock = sellerOwnedConnectionsPlanBlock(resolvedPricing, entitlements);
   if (providerPolicyBlock) throw fail(400, providerPolicyBlock);
   const dropshippingBlock = dropshippingPlanBlock(resolvedPricing, entitlements);
@@ -263,6 +267,7 @@ export function registerStorePlanRoutes(app: Express) {
     ]);
     const adminOverride = user.role === Role.ADMIN && seller.store.isPlatformStore;
     const entitlements = await storeEntitlements(prisma, seller.store.id, effective.version);
+    const themeAccess = await resolveStoreThemeAccess(prisma, seller.store.id);
     res.json({
       adminOverride,
       store: { id: seller.store.id, name: seller.store.name, slug: seller.store.slug },
@@ -289,7 +294,8 @@ export function registerStorePlanRoutes(app: Express) {
         expirationBehavior: 'DOWNGRADE_TO_LEGACY', cancellationPolicy: 'CANCEL_ANYTIME', freeTrialDays: 0,
         introPriceMinor: null, introDurationDays: null, effectiveFrom: null, effectiveUntil: null
       },
-      entitlements,
+      entitlements: { ...entitlements, allowedThemes: themeAccess.allowedThemes },
+      themeAccess: { premiumEligible: themeAccess.premiumEligible, reason: themeAccess.reason, freeThemes: FREE_THEME_PRESETS },
       usage: { products: productCount, stores: storeCount, vendors: 1, staffSeats: seller._count.staff, blogPosts: blogPostCount, contentPages: contentPageCount, mediaStorageBytes: mediaBytes._sum.sizeBytes ?? 0 },
       notes: adminOverride ? {
         connectors: 'Platform admin entitlements bypass Store plan gates. External payment-provider onboarding, credentials, and operational activation remain separately controlled.',

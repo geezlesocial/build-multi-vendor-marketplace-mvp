@@ -8,7 +8,7 @@ import { env } from './config.js';
 import { renderBlocks, renderDocument } from './content-renderer.js';
 import { defaultSiteChrome, resolvePublishedSiteChrome, storeContentPageKey } from './site-chrome-domain.js';
 import { renderSiteChromeFooter, renderSiteChromeHeader } from './site-chrome-renderer.js';
-import { storeThemeSchema } from './platform-domain.js';
+import { readThemeCatalogConfig, resolvePublishedStoreTheme } from './store-theme-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -253,16 +253,17 @@ export function registerStoreContentRoutes(app: Express) {
       return res.status(404).type('html').send('<!doctype html><title>Not found</title><h1>Not found</h1>');
     }
     const excerpt = kind === 'post' ? (item as { excerpt?: string | null }).excerpt : null;
-    const theme = store.themePublishedJson && typeof store.themePublishedJson === 'object' && !Array.isArray(store.themePublishedJson) ? store.themePublishedJson as { faviconMediaId?: unknown } : {};
-    const faviconId = typeof theme.faviconMediaId === 'string' ? theme.faviconMediaId : null;
+    const resolvedTheme = await resolvePublishedStoreTheme(prisma, store);
+    const theme = resolvedTheme.theme;
+    const catalogConfig = await readThemeCatalogConfig();
+    const faviconId = theme.faviconMediaId;
     const favicon = faviconId ? await prisma.mediaAsset.findFirst({ where: { id: faviconId, storeId: store.id, kind: MediaKind.IMAGE, uploadStatus: MediaUploadStatus.COMPLETE, scanStatus: MediaScanStatus.APPROVED }, select: { id: true } }) : null;
     const chromeState = await resolvePublishedSiteChrome({ storeId: store.id, pageKey: storeContentPageKey(kind === 'post' ? 'POST' : 'PAGE', item.id) });
     const chrome = chromeState.configuration ?? defaultSiteChrome();
-    const parsedTheme = storeThemeSchema.safeParse(store.themePublishedJson ?? {});
-    const brand = { title: store.name, tagline: '', description: store.description ?? (parsedTheme.success ? parsedTheme.data.description : ''), logoMediaId: parsedTheme.success ? parsedTheme.data.logoMediaId ?? store.logoMediaId : store.logoMediaId, path: `/store/${store.slug}` };
+    const brand = { title: store.name, tagline: '', description: store.description ?? theme.description, logoMediaId: theme.logoMediaId ?? store.logoMediaId, path: `/store/${store.slug}` };
     const categories = chrome.header.showCategoryLinks ? await prisma.category.findMany({ where: { status: 'ACTIVE' }, select: { name: true, slug: true }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }], take: 12 }) : [];
     const chromeStylesHref = `/api/site-chrome/public.css?storeSlug=${encodeURIComponent(store.slug)}&v=${chromeState.publishedVersion ?? 0}`;
-    res.type('html').send(renderDocument({ title: item.seoTitle || item.title, description: item.seoDescription || excerpt || item.title, canonical: `${env.SITE_URL}/store/${store.slug}/${kind === 'post' ? 'blog' : 'pages'}/${item.slug}`, body: renderBlocks(item.bodyJson), type: kind === 'post' ? 'BlogPosting' : 'WebPage', publishedAt: item.publishedAt, updatedAt: item.updatedAt, noIndex: false, noFollow: false, imageUrl: null, breadcrumb: store.name, siteName: store.name, faviconUrl: favicon ? `/content-media/${encodeURIComponent(favicon.id)}` : null, marketplaceAdPlacement: kind === 'post', chromeHeader: renderSiteChromeHeader(chrome, brand, categories), chromeFooter: renderSiteChromeFooter(chrome, brand, chromeState.footerSuppressed), chromeStylesHref, platformDisclosure: `Platform payments are collected by the marketplace owner; automated seller payouts are not included.` }));
+    res.type('html').send(renderDocument({ title: item.seoTitle || item.title, description: item.seoDescription || excerpt || item.title, canonical: `${env.SITE_URL}/store/${store.slug}/${kind === 'post' ? 'blog' : 'pages'}/${item.slug}`, body: renderBlocks(item.bodyJson), type: kind === 'post' ? 'BlogPosting' : 'WebPage', publishedAt: item.publishedAt, updatedAt: item.updatedAt, noIndex: false, noFollow: false, imageUrl: null, breadcrumb: store.name, siteName: store.name, faviconUrl: favicon ? `/content-media/${encodeURIComponent(favicon.id)}` : null, marketplaceAdPlacement: kind === 'post', chromeHeader: renderSiteChromeHeader(chrome, brand, categories), chromeFooter: renderSiteChromeFooter(chrome, brand, chromeState.footerSuppressed), chromeStylesHref, platformDisclosure: `Platform payments are collected by the marketplace owner; automated seller payouts are not included.`, storeTheme: theme.themePreset, storeThemeTokens: catalogConfig.tokens[theme.themePreset] }));
   });
   app.get('/store/:storeSlug/blog/:contentSlug', renderStoreContent('post'));
   app.get('/store/:storeSlug/pages/:contentSlug', renderStoreContent('page'));

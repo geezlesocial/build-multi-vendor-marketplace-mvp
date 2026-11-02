@@ -24,4 +24,9 @@ describe('seller live-show lifecycle controls', () => {
     expect(canDeleteLiveShow('ENDED', 'RECORDING')).toBe(false);
     expect(canDeleteLiveShow('ENDED', 'PROCESSING')).toBe(false);
   });
+
+  it('keeps a show recoverable while its replay deletion is pending', () => {
+    expect(canDeleteLiveShow('ENDED', 'FAILED', 'SELLER_REPLAY_DELETE_PENDING')).toBe(false);
+    expect(canDeleteLiveShow('ENDED', 'FAILED', 'SELLER_DELETED_REPLAY')).toBe(true);
+  });
 });

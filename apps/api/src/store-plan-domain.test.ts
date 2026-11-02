@@ -38,6 +38,8 @@ describe('Store plan entitlements', () => {
     expect(legacyCompatibleEntitlements.vendorLimit).toBe(1);
     expect(legacyCompatibleEntitlements.staffSeatLimit).toBeGreaterThan(1_000_000);
     expect(legacyCompatibleEntitlements.customDomainEligible).toBe(false);
+    expect(legacyCompatibleEntitlements.allowedThemes).toEqual(['CLASSIC', 'EDITORIAL', 'BOUTIQUE']);
+    expect(storePlanEntitlementsSchema.parse({ ...legacyCompatibleEntitlements, staffSeatLimit: 100_000, allowedThemes: ['CLASSIC', 'EDITORIAL', 'BOUTIQUE', 'TECH_ELECTRONICS', 'GROCERIES', 'ECOMMERCE_MARKETPLACE'] }).allowedThemes).toHaveLength(6);
     expect(legacyCompatibleEntitlements.sellerManagedPaymentsEnabled).toBe(false);
     expect(legacyCompatibleEntitlements.sellerManagedCarrierAccountsEnabled).toBe(false);
     expect(legacyCompatibleEntitlements.dropshippingEnabled).toBe(false);
