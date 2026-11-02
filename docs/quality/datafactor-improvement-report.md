@@ -73,7 +73,7 @@ PRs #51, #60, #57, and #66 received independent `webskilldesign` approvals for t
 
 ## PR #68 report status
 
-This report is the only intended file change in PR #68. The branch has been reconciled with protected `main` at `d2d8176`; exact-head application and container-security checks must pass on the updated report head. PR #68 remains a draft pending those checks and independent review. The report does not claim that PR #67 is merged or that the remaining acceptance gates are complete.
+This report is the only intended file change in PR #68. The branch has been reconciled with protected `main` at `d2d8176`. PR #68 remains a draft pending independent review; before merging, require passing application and container-security checks on the exact final report head. The report does not claim that PR #67 is merged or that the remaining acceptance gates are complete.
 
 ## Scope and recommended DataFactor target
 
