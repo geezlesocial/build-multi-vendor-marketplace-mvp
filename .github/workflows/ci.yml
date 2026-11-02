@@ -61,6 +61,8 @@ jobs:
       - run: npm run lint
       - run: node --test scripts/format-base.test.mjs
       - run: npm run format:check
+      - run: node --test scripts/check-env-example.test.mjs
+      - run: npm run env:example:check
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:coverage -w apps/api
