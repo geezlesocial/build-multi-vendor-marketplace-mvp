@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import process from "node:process";
+import { selectFormatBase } from "./format-base.mjs";
 
 const require = createRequire(import.meta.url);
 const run = (command, args) =>
@@ -9,36 +10,25 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "inherit"],
   }).trim();
 
-const requestedBase =
-  process.env.FORMAT_BASE_REF ||
-  (process.env.GITHUB_BASE_REF
-    ? `origin/${process.env.GITHUB_BASE_REF}`
-    : "origin/main");
-const baseCandidates = [
-  requestedBase,
-  process.env.GITHUB_BASE_REF
-    ? `origin/${process.env.GITHUB_BASE_REF}`
-    : "origin/main",
-].filter(
-  (candidate, index, candidates) => candidates.indexOf(candidate) === index,
-);
-const isCommit = (ref) => {
+const hasCommit = (revision) => {
   try {
-    execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
-      stdio: "ignore",
-    });
+    execFileSync(
+      "git",
+      ["rev-parse", "--verify", "--quiet", `${revision}^{commit}`],
+      {
+        stdio: "ignore",
+      },
+    );
     return true;
   } catch {
     return false;
   }
 };
-const base = baseCandidates.find(isCommit);
-if (!base) {
-  console.error(
-    `Could not resolve a formatting comparison base (${baseCandidates.join(", ")}).`,
-  );
-  process.exit(1);
-}
+const base = selectFormatBase({
+  requestedBase: process.env.FORMAT_BASE_REF,
+  githubBaseRef: process.env.GITHUB_BASE_REF,
+  hasCommit,
+});
 const trackedChanges = run("git", [
   "diff",
   "--name-status",
