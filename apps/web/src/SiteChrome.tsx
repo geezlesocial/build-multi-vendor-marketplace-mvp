@@ -2,7 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { HeaderActivity } from './HeaderActivity.js';
 import { SiteChromeSocialIcon } from './SiteChromeSocialIcon.js';
 import type { SessionUser } from './session.js';
-import type { SiteChromeBrand, SiteChromeConfiguration, SiteChromeSocial } from './site-chrome-types.js';
+import type { SiteChromeBrand, SiteChromeConfiguration } from './site-chrome-types.js';
 import './SiteChrome.css';
 import './SiteChromeAccessibility.css';
 

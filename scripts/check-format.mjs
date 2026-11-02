@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import process from "node:process";
+import { selectFormatBase } from "./format-base.mjs";
 
 const require = createRequire(import.meta.url);
 const run = (command, args) =>
@@ -9,11 +10,25 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "inherit"],
   }).trim();
 
-const base =
-  process.env.FORMAT_BASE_REF ||
-  (process.env.GITHUB_BASE_REF
-    ? `origin/${process.env.GITHUB_BASE_REF}`
-    : "origin/main");
+const hasCommit = (revision) => {
+  try {
+    execFileSync(
+      "git",
+      ["rev-parse", "--verify", "--quiet", `${revision}^{commit}`],
+      {
+        stdio: "ignore",
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+};
+const base = selectFormatBase({
+  requestedBase: process.env.FORMAT_BASE_REF,
+  githubBaseRef: process.env.GITHUB_BASE_REF,
+  hasCommit,
+});
 const trackedChanges = run("git", [
   "diff",
   "--name-status",

@@ -181,8 +181,16 @@ function assertAdCreator(user: Actor) {
   if (reason) throw fail(403, reason);
 }
 
-function publicAdShape(ad: any) {
-  const creatives = (ad.creatives ?? []).filter((creative: any) => creative.mediaAsset.scanStatus === MediaScanStatus.APPROVED && creative.mediaAsset.uploadStatus === MediaUploadStatus.COMPLETE);
+const publicMarketplaceAdInclude = {
+  product: { include: { inventory: true, images: { take: 1 }, category: { select: { name: true } } } },
+  store: { select: { id: true, name: true, slug: true } },
+  creatives: { orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true, originalName: true, scanStatus: true, uploadStatus: true } } } }
+} satisfies Prisma.MarketplaceProductAdInclude;
+
+type PublicMarketplaceAd = Prisma.MarketplaceProductAdGetPayload<{ include: typeof publicMarketplaceAdInclude }> & { impressionToken: string };
+
+function publicAdShape(ad: PublicMarketplaceAd) {
+  const creatives = ad.creatives.filter(creative => creative.mediaAsset.scanStatus === MediaScanStatus.APPROVED && creative.mediaAsset.uploadStatus === MediaUploadStatus.COMPLETE);
   return {
     id: ad.id,
     headline: ad.headline,
@@ -203,7 +211,7 @@ function publicAdShape(ad: any) {
       image: ad.product.images?.[0] ?? null
     },
     store: ad.store ? { id: ad.store.id, name: ad.store.name, slug: ad.store.slug } : null,
-    creatives: creatives.map((creative: any) => ({ id: creative.mediaAsset.id, kind: creative.mediaAsset.kind, name: creative.mediaAsset.originalName, url: `/api/marketplace-ads/${encodeURIComponent(ad.id)}/media/${encodeURIComponent(creative.mediaAsset.id)}` }))
+    creatives: creatives.map(creative => ({ id: creative.mediaAsset.id, kind: creative.mediaAsset.kind, name: creative.mediaAsset.originalName, url: `/api/marketplace-ads/${encodeURIComponent(ad.id)}/media/${encodeURIComponent(creative.mediaAsset.id)}` }))
   };
 }
 
@@ -523,7 +531,7 @@ export function registerMarketplaceAdRoutes(app: Express) {
     const settings = await adSettings();
     if (!settings.enabled) return res.json({ items: [] });
     const now = new Date();
-    const ads = await prisma.marketplaceProductAd.findMany({ where: { placements: { has: placement }, status: MarketplaceProductAdStatus.APPROVED, startsAt: { lte: now }, endsAt: { gt: now }, reservedMinor: { gt: 0 }, product: { status: ProductStatus.APPROVED, inventory: { quantity: { gt: 0 } }, seller: { status: SellerStatus.APPROVED, store: { isNot: null } } } }, include: { product: { include: { inventory: true, images: { take: 1 }, category: { select: { name: true } } } }, store: { select: { id: true, name: true, slug: true } }, creatives: { orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true, originalName: true, scanStatus: true, uploadStatus: true } } } } }, orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }], take: 6 });
+    const ads = await prisma.marketplaceProductAd.findMany({ where: { placements: { has: placement }, status: MarketplaceProductAdStatus.APPROVED, startsAt: { lte: now }, endsAt: { gt: now }, reservedMinor: { gt: 0 }, product: { status: ProductStatus.APPROVED, inventory: { quantity: { gt: 0 } }, seller: { status: SellerStatus.APPROVED, store: { isNot: null } } } }, include: publicMarketplaceAdInclude, orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }], take: 6 });
     const items = await Promise.all(ads.map(async ad => {
       const impressionToken = crypto.randomBytes(32).toString('base64url');
       const tokenHash = crypto.createHash('sha256').update(impressionToken).digest('hex');
