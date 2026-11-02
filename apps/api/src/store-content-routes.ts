@@ -1,8 +1,6 @@
 import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
-import crypto from 'node:crypto';
 import { ContentStatus, MediaKind, MediaScanStatus, MediaUploadStatus, Role, SellerStatus, Prisma } from '@prisma/client';
-import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
 import { contentActionSchema, contentWriteSchema, pageWriteSchema } from './content-validation.js';
 import { storeEntitlements } from './store-plan-domain.js';

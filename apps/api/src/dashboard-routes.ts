@@ -12,7 +12,6 @@ import { selectCasesForSellerOrders } from './order-resolution-routes.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
-const id = z.string().cuid();
 const addressInput = z.object({ label: z.string().trim().min(1).max(80), line1: z.string().trim().min(2).max(150), line2: z.string().trim().max(150).optional(), city: z.string().trim().min(2).max(80), region: z.string().trim().min(2).max(80), postalCode: z.string().trim().min(2).max(20), country: z.string().trim().length(2).transform(value => value.toUpperCase()), latitude: z.number().finite().min(-90).max(90).optional(), longitude: z.number().finite().min(-180).max(180).optional(), isDefault: z.boolean().optional() }).strict().superRefine((value, context) => { if ((value.latitude == null) !== (value.longitude == null)) context.addIssue({ code: 'custom', message: 'Latitude and longitude must be supplied together.' }); });
 const actor = (res: Response) => res.locals.user as { id: string; role: Role; sellerId?: string };
 
