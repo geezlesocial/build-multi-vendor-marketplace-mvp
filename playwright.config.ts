@@ -20,7 +20,18 @@ const e2eDatabaseURL = process.env.E2E_DATABASE_URL;
 const validatedE2EDatabase = validateE2EDatabaseURL(e2eDatabaseURL);
 const liveShoppingSimulator =
   process.env.E2E_LIVE_SHOPPING_SIMULATOR === "true";
+const realClamAvEnabled = process.env.E2E_REAL_CLAMAV === "true";
+const e2eClamAvHost = process.env.E2E_CLAMAV_HOST ?? "127.0.0.1";
+const e2eClamAvPort = Number(process.env.E2E_CLAMAV_PORT ?? 3310);
 const e2eLiveKitPort = Number(process.env.E2E_LIVEKIT_PORT ?? 9399);
+if (
+  realClamAvEnabled &&
+  !["127.0.0.1", "localhost", "::1"].includes(e2eClamAvHost)
+) {
+  throw new Error(
+    "Real ClamAV browser acceptance may connect only to a local scanner host.",
+  );
+}
 if (liveShoppingSimulator) {
   const sandboxId = process.env.WALLET_FUNDING_SANDBOX_ID ?? "";
   if (
@@ -79,7 +90,9 @@ const webServerEnv = {
   // Keep E2E behavior explicit and safe when no scanner policy is supplied.
   CONTENT_SCAN_REQUIRED: process.env.CONTENT_SCAN_REQUIRED ?? "true",
   // Keep browser tests deterministic and isolated from a developer's local ClamAV service.
-  CONTENT_SCANNER_AVAILABLE: "false",
+  CONTENT_SCANNER_AVAILABLE: realClamAvEnabled ? "true" : "false",
+  CONTENT_SCANNER_HOST: e2eClamAvHost,
+  CONTENT_SCANNER_PORT: String(e2eClamAvPort),
 };
 
 export default defineConfig({
@@ -90,7 +103,7 @@ export default defineConfig({
   projects: [
     {
       name: "default",
-      testIgnore: "**/site-chrome.spec.ts",
+      testIgnore: ["**/site-chrome.spec.ts"],
     },
     {
       name: "site-chrome-extended",
