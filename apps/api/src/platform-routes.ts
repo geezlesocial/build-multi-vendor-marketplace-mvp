@@ -1,14 +1,15 @@
 import type { Express, Request, Response, NextFunction } from 'express';
 import express from 'express';
 import { z } from 'zod';
-import { ApprovalPolicy, ContentStatus, MediaKind, MediaScanStatus, OrderStatus, PaymentMethod, PaymentStatus, PayoutMethodStatus, PayoutMethodType, ProductStatus, Role, SellerPayoutLedgerType, SellerPayoutStatus, SellerStatus, TaxonomyStatus, Prisma } from '@prisma/client';
+import { MediaKind, MediaScanStatus, OrderStatus, PaymentMethod, PaymentStatus, PayoutMethodStatus, PayoutMethodType, ProductStatus, Role, SellerPayoutLedgerType, SellerPayoutStatus, SellerStatus, Prisma } from '@prisma/client';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
 import { env } from './config.js';
-import { effectiveStorePlan, sellerPayoutConnectorAllowed, storeEntitlements } from './store-plan-domain.js';
+import { sellerPayoutConnectorAllowed, storeEntitlements } from './store-plan-domain.js';
 import { authorizedBrandingStore } from './store-branding-access.js';
-import { brandingSchema, decryptPayoutDetails, encryptPayoutDetails, maskIdentifier, payoutMethodEnabled, payoutMethodSchema, payoutStatusTransitionAllowed, platformSettingsSchema, reservedStoreSlug, safePayoutMethod, storeSettingsSchema, storeSlugFromName, storeThemeSchema, taxonomySchema } from './platform-domain.js';
+import { brandingSchema, encryptPayoutDetails, maskIdentifier, payoutMethodEnabled, payoutMethodSchema, payoutStatusTransitionAllowed, platformSettingsSchema, reservedStoreSlug, safePayoutMethod, storeSettingsSchema, storeSlugFromName, storeThemeSchema, taxonomySchema } from './platform-domain.js';
 import { payoutEligibilityFailure, remainingSaleMinor } from './payout-eligibility.js';
 import { enabledMarketplaceLanguages } from './marketplace-domain.js';
+import { readThemeCatalogConfig, resolvePublishedStoreTheme, resolveStoreThemeAccess } from './store-theme-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
@@ -22,6 +23,11 @@ const availabilityInput = z.object({
   languages: z.array(z.enum(['en', 'fil'])).min(1).max(2).refine(languages => languages.includes('en'), 'English must remain enabled as the platform fallback.'),
   reason: z.string().trim().min(5).max(500)
 }).strict();
+const storeThemeSaveSchema = storeSettingsSchema.extend({
+  expectedVersion: z.number().int().min(0).optional(),
+  changeNote: z.string().trim().max(500).optional()
+}).strict();
+const storeThemePublishSchema = z.object({ expectedVersion: z.number().int().min(0).optional() }).strict();
 
 function storeNameChangeWindow(now = new Date()) {
   return {
@@ -126,6 +132,12 @@ async function mediaCheck(ids: Array<string | null | undefined>, publish: boolea
   if (assets.length !== clean.length) throw fail(400, 'Referenced media asset does not exist');
   if (assets.some(asset => asset.scanStatus === MediaScanStatus.REJECTED)) throw fail(409, 'Rejected branding or theme media cannot be used');
   if (publish && assets.some(asset => asset.scanStatus !== MediaScanStatus.APPROVED)) throw fail(409, 'Branding or theme media must be approved before publishing');
+}
+async function themeProductsCheck(db: typeof prisma | Prisma.TransactionClient, sellerId: string, theme: z.infer<typeof storeThemeSchema>) {
+  const productIds = [...new Set(theme.sections.flatMap(section => section.productIds))];
+  if (!productIds.length) return;
+  const approved = await db.product.findMany({ where: { id: { in: productIds }, sellerId, status: ProductStatus.APPROVED }, select: { id: true } });
+  if (approved.length !== productIds.length) throw fail(400, 'Theme sections may reference only approved products owned by this Store.');
 }
 function publicBranding(value: unknown) {
   const parsed = brandingSchema.safeParse(value);
@@ -339,18 +351,24 @@ export function registerPlatformRoutes(app: Express) {
     if (!actor.sellerId) throw fail(403, 'Seller scope required');
     const store = await authorizedBrandingStore(actor);
     if (!store) throw fail(403, 'Approved Store owner or authorized branding staff required');
+    const [themeAccess, latestRevision, availableProducts] = await Promise.all([
+      resolveStoreThemeAccess(prisma, store.id),
+      prisma.storeThemeRevision.findFirst({ where: { storeId: store.id }, orderBy: { version: 'desc' }, select: { version: true } }),
+      prisma.product.findMany({ where: { sellerId: store.sellerId, status: ProductStatus.APPROVED }, orderBy: { createdAt: 'desc' }, take: 250, select: { id: true, name: true, category: { select: { name: true, slug: true } } } })
+    ]);
     const nameChanges = actor.role === Role.ADMIN && store.isPlatformStore
       ? { limit: null, used: 0, remaining: null, resetsAt: null, unlimited: true }
       : { ...await storeNameChangeUsage(prisma, store.id), unlimited: false };
-    res.json({ storeId: store.id, name: store.name, slug: store.slug, publicPath: `/store/${store.slug}`, draft: store.themeDraftJson ?? store.themePublishedJson ?? storeThemeSchema.parse({}), published: store.themePublishedJson, publishedAt: store.themePublishedAt, nameChanges });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ storeId: store.id, name: store.name, slug: store.slug, publicPath: `/store/${store.slug}`, draft: store.themeDraftJson ?? store.themePublishedJson ?? storeThemeSchema.parse({}), published: store.themePublishedJson, publishedAt: store.themePublishedAt, draftVersion: latestRevision?.version ?? 0, themeAccess, availableProducts, nameChanges });
   }));
   app.put('/api/seller/store-theme', requireAuth, requireRole(...storeBrandingRoles), run(async (req, res) => {
     const actor = user(res);
     if (!actor.sellerId) throw fail(403, 'Seller scope required');
     const store = await authorizedBrandingStore(actor);
     if (!store) throw fail(404, 'Store not found');
-    const input = storeSettingsSchema.parse(req.body);
-    const { name, ...theme } = input;
+    const input = storeThemeSaveSchema.parse(req.body);
+    const { name, expectedVersion, changeNote, ...theme } = input;
     const nextName = name ?? store.name;
     const nextSlug = name === undefined ? store.slug : storeSlugFromName(nextName);
     if (!nextSlug) throw fail(400, 'Store name must produce a valid public URL');
@@ -362,6 +380,10 @@ export function registerPlatformRoutes(app: Express) {
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
       const current = await tx.store.findUnique({ where: { id: store.id } });
       if (!current) throw fail(404, 'Store not found');
+      await themeProductsCheck(tx, current.sellerId, theme);
+      const latestRevision = await tx.storeThemeRevision.findFirst({ where: { storeId: store.id }, orderBy: { version: 'desc' }, select: { version: true } });
+      const latestVersion = latestRevision?.version ?? 0;
+      if (expectedVersion !== undefined && expectedVersion !== latestVersion) return { conflict: true as const, latestVersion };
       await mediaCheck([theme.logoMediaId, theme.faviconMediaId, theme.bannerMediaId], false, store.id, tx);
       const nameChanged = current.name !== nextName;
       const platformAdmin = actor.role === Role.ADMIN && current.isPlatformStore;
@@ -371,51 +393,57 @@ export function registerPlatformRoutes(app: Express) {
       }
       const priorTheme = storeThemeSchema.safeParse(current.themeDraftJson ?? {});
       const prior = priorTheme.success ? priorTheme.data : storeThemeSchema.parse({});
-      const entitlements = await storeEntitlements(tx, store.id);
-      if (!entitlements.allowedThemes.includes(theme.themePreset) && theme.themePreset !== prior.themePreset) return { denied: 'themePreset' as const };
+      const [entitlements, themeAccess] = await Promise.all([storeEntitlements(tx, store.id), resolveStoreThemeAccess(tx, store.id)]);
+      if (!themeAccess.allowedThemes.includes(theme.themePreset)) return { denied: 'themePreset' as const };
       if (!entitlements.mobileTemplates.includes(theme.mobileTemplate) && theme.mobileTemplate !== prior.mobileTemplate) return { denied: 'mobileTemplate' as const };
 
       const updated = await tx.store.update({ where: { id: store.id }, data: { name: nextName, ...(nextSlug !== current.slug ? { slug: nextSlug } : {}), themeDraftJson: inputJson(theme) } });
-      const latest = await tx.storeThemeRevision.findFirst({ where: { storeId: store.id }, orderBy: { version: 'desc' }, select: { version: true } });
-      await tx.storeThemeRevision.create({ data: { storeId: store.id, version: (latest?.version ?? 0) + 1, themeJson: inputJson(theme), editorId: actor.id, changeNote: typeof req.body.changeNote === 'string' ? req.body.changeNote.slice(0, 500) : undefined } });
+      const revision = await tx.storeThemeRevision.create({ data: { storeId: store.id, version: latestVersion + 1, themeJson: inputJson(theme), editorId: actor.id, changeNote } });
       if (nextSlug !== current.slug) {
         await tx.slugRedirect.updateMany({ where: { destinationPath: `/store/${current.slug}` }, data: { destinationPath: `/store/${nextSlug}` } });
         await tx.slugRedirect.upsert({ where: { fromPath: `/store/${current.slug}` }, update: { destinationPath: `/store/${nextSlug}`, statusCode: 301, createdById: actor.id }, create: { fromPath: `/store/${current.slug}`, destinationPath: `/store/${nextSlug}`, statusCode: 301, createdById: actor.id } });
       }
       await tx.auditLog.create({ data: { actorId: actor.id, action: nameChanged ? (platformAdmin ? 'PLATFORM_OFFICIAL_STORE_RENAMED' : 'SELLER_STORE_NAME_CHANGED') : 'SELLER_STORE_SETTINGS_SAVED', entity: 'Store', entityId: updated.id, metadata: inputJson({ oldName: current.name, newName: updated.name, oldSlug: current.slug, newSlug: updated.slug, nameChanged, themePreset: theme.themePreset, mobileTemplate: theme.mobileTemplate }) } });
-      return { updated };
+      return { updated, draftVersion: revision.version };
     });
+    if ('conflict' in result) return res.status(409).json({ code: 'THEME_VERSION_CONFLICT', error: 'The Store theme changed in another session. Reload before saving.', currentVersion: result.latestVersion });
     if ('denied' in result) {
       if (result.denied === 'storeNameLimit') return res.status(429).json({ code: 'STORE_NAME_CHANGE_LIMIT_REACHED', error: `You have used all ${STORE_NAME_CHANGE_LIMIT} Store name changes for this month. The limit resets on ${new Date(result.nameChanges.resetsAt).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'long', day: 'numeric', year: 'numeric' })} (UTC).`, nameChanges: result.nameChanges });
       return res.status(409).json({ code: 'PLAN_ENTITLEMENT_REQUIRED', entitlement: result.denied, upgradeRequired: true, error: `This Store plan does not include the selected ${result.denied === 'themePreset' ? 'theme' : 'mobile template'}.`, planUrl: '/seller/plan' });
     }
-    res.json({ ...result.updated, publicPath: `/store/${result.updated.slug}` });
+    res.json({ ...result.updated, draftVersion: result.draftVersion, publicPath: `/store/${result.updated.slug}` });
   }));
-  app.post('/api/seller/store-theme/publish', requireAuth, requireRole(...storeBrandingRoles), run(async (_req, res) => {
+  app.post('/api/seller/store-theme/publish', requireAuth, requireRole(...storeBrandingRoles), run(async (req, res) => {
     const actor = user(res);
     if (!actor.sellerId) throw fail(403, 'Seller scope required');
     const store = await authorizedBrandingStore(actor);
     if (!store || !store.themeDraftJson) throw fail(404, 'Store theme draft not found');
+    const input = storeThemePublishSchema.parse(req.body);
     const result = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
       const current = await tx.store.findUnique({ where: { id: store.id } });
       if (!current?.themeDraftJson) throw fail(404, 'Store theme draft not found');
+      const latestRevision = await tx.storeThemeRevision.findFirst({ where: { storeId: store.id }, orderBy: { version: 'desc' }, select: { version: true } });
+      const latestVersion = latestRevision?.version ?? 0;
+      if (input.expectedVersion !== undefined && input.expectedVersion !== latestVersion) return { conflict: true as const, latestVersion };
       const theme = storeThemeSchema.parse(current.themeDraftJson);
+      await themeProductsCheck(tx, current.sellerId, theme);
       await mediaCheck([theme.logoMediaId, theme.faviconMediaId, theme.bannerMediaId], true, store.id, tx);
-      const priorPublished = storeThemeSchema.safeParse(current.themePublishedJson ?? {});
-      const prior = priorPublished.success ? priorPublished.data : storeThemeSchema.parse({});
-      const entitlements = await storeEntitlements(tx, store.id);
-      if (!entitlements.allowedThemes.includes(theme.themePreset) && theme.themePreset !== prior.themePreset) return { denied: 'themePreset' as const };
+      const publishedTheme = storeThemeSchema.safeParse(current.themePublishedJson ?? {});
+      const prior = publishedTheme.success ? publishedTheme.data : storeThemeSchema.parse({});
+      const [entitlements, themeAccess] = await Promise.all([storeEntitlements(tx, store.id), resolveStoreThemeAccess(tx, store.id)]);
+      if (!themeAccess.allowedThemes.includes(theme.themePreset)) return { denied: 'themePreset' as const };
       if (!entitlements.mobileTemplates.includes(theme.mobileTemplate) && theme.mobileTemplate !== prior.mobileTemplate) return { denied: 'mobileTemplate' as const };
       const updated = await tx.store.update({ where: { id: store.id }, data: { themePublishedJson: inputJson(theme), themePublishedAt: new Date() } });
       await tx.auditLog.create({ data: { actorId: actor.id, action: 'STORE_THEME_PUBLISHED', entity: 'Store', entityId: updated.id } });
-      return { updated };
+      return { updated, latestVersion };
     });
+    if ('conflict' in result) return res.status(409).json({ code: 'THEME_VERSION_CONFLICT', error: 'The Store theme changed in another session. Reload before publishing.', currentVersion: result.latestVersion });
     if ('denied' in result) return res.status(409).json({ code: 'PLAN_ENTITLEMENT_REQUIRED', entitlement: result.denied, upgradeRequired: true, error: `This Store plan does not include the selected ${result.denied === 'themePreset' ? 'theme' : 'mobile template'}.`, planUrl: '/seller/plan' });
-    res.json(result.updated);
+    res.json({ ...result.updated, draftVersion: result.latestVersion });
   }));
-  app.get('/api/stores/:slug', run(async (req, res) => { const slug = param(req.params.slug); const store = await prisma.store.findFirst({ where: { slug, seller: { status: SellerStatus.APPROVED } }, include: { seller: { select: { products: { where: { status: ProductStatus.APPROVED }, include: { category: true, brand: true, featureAssignments: { include: { feature: true } }, inventory: true, images: true, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true, detectedMime: true, originalName: true } } } }, variants: { where: { status: ProductStatus.APPROVED }, orderBy: { name: 'asc' } } }, orderBy: { createdAt: 'desc' } } } } } }); if (!store) { const redirect = await prisma.slugRedirect.findUnique({ where: { fromPath: `/store/${slug}` } }); if (redirect) return res.json({ redirectTo: redirect.destinationPath, statusCode: redirect.statusCode }); return res.status(404).json({ error: 'Store not found' }); } const theme = storeThemeSchema.safeParse(store.themePublishedJson ?? {}); const publishedTheme = theme.success ? theme.data : storeThemeSchema.parse({}); res.json({ storeId: store.id, name: store.name, slug: store.slug, publicPath: `/store/${store.slug}`, theme: publishedTheme, publishedAt: store.themePublishedAt, products: store.seller.products.map(product => ({ id: product.id, name: product.name, slug: product.slug, description: product.description, priceMinor: product.priceMinor, salePriceMinor: product.salePriceMinor, currency: product.currency, wholesaleEnabled: product.wholesaleEnabled, wholesaleMinQuantity: product.wholesaleMinQuantity, wholesaleMaxQuantity: product.wholesaleMaxQuantity, availableStock: product.inventory?.quantity ?? 0, category: product.category ? { name: product.category.name, slug: product.category.slug } : null, brand: product.brand ? { name: product.brand.name, slug: product.brand.slug } : null, color: product.color, features: product.featureAssignments.map(item => ({ id: item.feature.id, name: item.feature.name })), images: product.images.map(image => ({ url: image.url, alt: image.alt })), mediaAttachments: product.mediaAttachments.map(({ mediaAsset, ...attachment }) => ({ ...attachment, kind: mediaAsset.kind, originalName: mediaAsset.originalName, detectedMime: mediaAsset.detectedMime, url: `/content-media/${encodeURIComponent(mediaAsset.id)}` })), variants: product.variants.map(variant => ({ id: variant.id, name: variant.name, priceMinor: variant.priceMinor, currency: variant.currency, stock: variant.stock })) })) }); }));
-  app.get('/api/stores/:slug/theme', run(async (req, res) => { const store = await prisma.store.findFirst({ where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } }, include: { seller: true } }); if (!store || !store.themePublishedJson) return res.status(404).json({ error: 'Store theme not found' }); res.json({ storeId: store.id, slug: store.slug, theme: store.themePublishedJson, publishedAt: store.themePublishedAt }); }));
+  app.get('/api/stores/:slug', run(async (req, res) => { const slug = param(req.params.slug); const store = await prisma.store.findFirst({ where: { slug, seller: { status: SellerStatus.APPROVED } }, include: { seller: { select: { products: { where: { status: ProductStatus.APPROVED }, include: { category: true, brand: true, featureAssignments: { include: { feature: true } }, inventory: true, images: true, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true, detectedMime: true, originalName: true } } } }, variants: { where: { status: ProductStatus.APPROVED }, orderBy: { name: 'asc' } } }, orderBy: { createdAt: 'desc' } } } } } }); if (!store) { const redirect = await prisma.slugRedirect.findUnique({ where: { fromPath: `/store/${slug}` } }); if (redirect) return res.json({ redirectTo: redirect.destinationPath, statusCode: redirect.statusCode }); return res.status(404).json({ error: 'Store not found' }); } const effective = await resolvePublishedStoreTheme(prisma, { id: store.id, themePublishedJson: store.themePublishedJson }); const catalog = await readThemeCatalogConfig(); const publishedTheme = effective.theme; res.setHeader('Cache-Control', 'no-store'); res.json({ storeId: store.id, name: store.name, slug: store.slug, publicPath: `/store/${store.slug}`, theme: publishedTheme, designTokens: catalog.tokens[publishedTheme.themePreset], publishedAt: store.themePublishedAt, products: store.seller.products.map(product => ({ id: product.id, name: product.name, slug: product.slug, description: product.description, priceMinor: product.priceMinor, salePriceMinor: product.salePriceMinor, currency: product.currency, wholesaleEnabled: product.wholesaleEnabled, wholesaleMinQuantity: product.wholesaleMinQuantity, wholesaleMaxQuantity: product.wholesaleMaxQuantity, availableStock: product.inventory?.quantity ?? 0, category: product.category ? { name: product.category.name, slug: product.category.slug } : null, brand: product.brand ? { name: product.brand.name, slug: product.brand.slug } : null, color: product.color, features: product.featureAssignments.map(item => ({ id: item.feature.id, name: item.feature.name })), images: product.images.map(image => ({ url: image.url, alt: image.alt })), mediaAttachments: product.mediaAttachments.map(({ mediaAsset, ...attachment }) => ({ ...attachment, kind: mediaAsset.kind, originalName: mediaAsset.originalName, detectedMime: mediaAsset.detectedMime, url: `/content-media/${encodeURIComponent(mediaAsset.id)}` })), variants: product.variants.map(variant => ({ id: variant.id, name: variant.name, priceMinor: variant.priceMinor, currency: variant.currency, stock: variant.stock })) })) }); }));
+  app.get('/api/stores/:slug/theme', run(async (req, res) => { const store = await prisma.store.findFirst({ where: { slug: param(req.params.slug), seller: { status: SellerStatus.APPROVED } }, select: { id: true, slug: true, themePublishedJson: true, themePublishedAt: true } }); if (!store) return res.status(404).json({ error: 'Store not found' }); const effective = await resolvePublishedStoreTheme(prisma, store); const catalog = await readThemeCatalogConfig(); res.setHeader('Cache-Control', 'no-store'); res.json({ storeId: store.id, slug: store.slug, theme: effective.theme, designTokens: catalog.tokens[effective.theme.themePreset], publishedAt: store.themePublishedAt }); }));
 
   app.get('/api/seller/payout-methods', requireAuth, requireRole(...sellerRoles), run(async (_req, res) => { const actor = user(res); if (!actor.sellerId) throw fail(403, 'Seller scope required'); const methods = await prisma.sellerPayoutMethod.findMany({ where: { sellerId: actor.sellerId }, orderBy: { createdAt: 'desc' } }); res.json(methods.map(safePayoutMethod)); }));
   app.post('/api/seller/payout-methods', requireAuth, requireRole(...sellerRoles), run(async (req, res, next) => {

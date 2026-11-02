@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint src --ext .ts,.tsx --max-warnings=102",
+    "lint": "eslint src --ext .ts,.tsx --max-warnings=91",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

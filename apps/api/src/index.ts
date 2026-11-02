@@ -5,11 +5,11 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import { z } from 'zod';
-import { AffiliateAdjustmentType, ApprovalPolicy, LiveSessionStatus, Prisma, PaymentMethod, PaymentStatus, ProductStatus, Role, SellerStatus, OrderStatus } from '@prisma/client';
+import { AffiliateAdjustmentType, LiveSessionStatus, Prisma, PaymentMethod, PaymentStatus, ProductStatus, Role, SellerStatus, OrderStatus } from '@prisma/client';
 import type { Stripe as StripeType } from 'stripe';
 import { env } from './config.js';
 import { prisma, hashPassword, verifyPassword, createSession, currentUser, requireAuth, requireRole, audit, safeUser, resolvePlatformPositionName } from './security.js';
-import { registerSchema, loginSchema, checkoutSchema, productSchema, variantSchema, posSchema, settingSchema, liveReportSchema } from './validation.js';
+import { registerSchema, loginSchema, checkoutSchema, posSchema, settingSchema, liveReportSchema } from './validation.js';
 import { capturePaypalOrder, createPaymongoCheckout, createPaypalOrder, createPaystackTransaction, createStripeCheckout, stripe, verifyPaypalWebhook } from './payments.js';
 import { liveShoppingState, publicLiveSession, requireLiveShopping } from './live-domain.js';
 import { liveProvider } from './live-provider.js';
@@ -27,6 +27,7 @@ import { registerWalletRoutes } from './wallet-routes.js';
 import { registerMarketplaceAdRoutes, releaseExpiredMarketplaceAdBudgets } from './marketplace-ad-routes.js';
 import { registerAvatarRoutes } from './avatar-routes.js';
 import { registerStorePlanRoutes } from './store-plan-routes.js';
+import { registerStoreThemeRoutes } from './store-theme-routes.js';
 import { registerPlatformStoreRoutes } from './platform-store-routes.js';
 import { registerStoreSubscriptionRoutes } from './store-subscription-routes.js';
 import { expireDueStoreSubscriptions } from './store-subscription-lifecycle.js';
@@ -43,7 +44,9 @@ import { refreshGlobalReferenceRates, registerCurrencyRoutes } from './currency-
 import { enabledMarketplaceLanguages } from './marketplace-domain.js';
 import { processStoreEmailDeliveryBatch, processTransactionalEmailOutboxBatch } from './store-email-worker.js';
 import { registerCommissionRoutes } from './commission-routes.js';
-import { registerCatalogRoutes, validateProductCatalogSelection } from './catalog-routes.js';
+import { registerCatalogRoutes } from './catalog-routes.js';
+import { registerProductRoutes } from './product-routes.js';
+import { registerProductVariantRoutes } from './product-variant-routes.js';
 import { registerProductDiscountRoutes, resolveCartProductDiscount } from './product-discount-routes.js';
 import { registerOrderShippingRoutes } from './order-shipping-routes.js';
 import { registerOrderResolutionRoutes } from './order-resolution-routes.js';
@@ -55,13 +58,12 @@ import { registerCarrierRoutes } from './carrier-routes.js';
 import { registerDropshippingRoutes } from './dropshipping-routes.js';
 import { applicableSellerCommissionPolicy, makeCommissionSnapshot, accrueSellerCommissionsForPaidOrder, reverseSellerCommissionForOrder } from './seller-commission.js';
 import { livePaymentActivationBlock } from './provider-activation.js';
-import { effectiveStorePlan, isAtLimit, storeEntitlements } from './store-plan-domain.js';
 import { reverseAffiliateForOrderInTransaction, settleAffiliateForPaidOrderInTransaction } from './affiliate-ledger.js';
 import { referralTokenHash, verifySignedReferralToken } from './growth-domain.js';
 import { createApiRateLimiters, resolveApiRateLimitOptions } from './api-rate-limits.js';
 import { assertShippingSelectionsMatch, buildSellerShippingQuote, verifyCheckoutShippingQuote, type ShippingCartRecord } from './shipping-routes.js';
 import { convertMinorExact, decimalToMinorExact } from './currency-domain.js';
-import { effectiveProductPriceMinor, effectiveUnitPriceMinor, isValidSalePrice } from './product-pricing.js';
+import { effectiveProductPriceMinor, effectiveUnitPriceMinor } from './product-pricing.js';
 import { latestDisplayRate } from './currency-routes.js';
 import { matchesPersistedPaymentEvent, reconcileVerifiedPaymentEvent, type VerifiedPaymentEvent } from './payment-webhook-reconciliation.js';
 import { paypalWebhookEventToVerifiedPaymentEvent } from './paypal-webhook-event.js';
@@ -130,6 +132,7 @@ registerWalletRoutes(app);
 registerMarketplaceAdRoutes(app);
 registerAvatarRoutes(app);
 registerStorePlanRoutes(app);
+registerStoreThemeRoutes(app);
 registerPlatformStoreRoutes(app);
 registerStoreSubscriptionRoutes(app);
 registerIntegrationRoutes(app);
@@ -272,18 +275,7 @@ app.post('/api/live-sessions/:id/reports', requireAuth, asyncRoute(async (req, r
   res.status(201).json({ id: report.id, status: report.status });
 }));
 registerSellerLiveSessionRoutes(app);
-
-app.get('/api/products', asyncRoute(async (req, res) => {
-  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-  const category = typeof req.query.category === 'string' ? req.query.category : undefined;
-  const page = Math.max(1, Number(req.query.page ?? 1));
-  const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize ?? 12)));
-  const where: Prisma.ProductWhereInput = { status: ProductStatus.APPROVED, AND: [{ OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] }, ...(q ? [{ OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { description: { contains: q, mode: 'insensitive' as const } }] }] : []), ...(category ? [{ category: { slug: category } }] : [])] };
-  const [items, total] = await Promise.all([prisma.product.findMany({ where, include: { seller: { include: { store: true } }, category: true, brand: true, productType: true, featureAssignments: { include: { feature: true } }, inventory: true, images: true }, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }), prisma.product.count({ where })]);
-  res.json({ items: items.map(p => ({ ...p, availableStock: p.inventory?.quantity ?? 0 })), page, pageSize, total });
-}));
-app.get('/api/products/:id', asyncRoute(async (req, res) => { const p = await prisma.product.findFirst({ where: { id: routeParam(req.params.id), status: ProductStatus.APPROVED, OR: [{ sellerId: null }, { seller: { status: SellerStatus.APPROVED } }] }, include: { seller: { include: { store: true } }, category: true, brand: true, productType: true, featureAssignments: { include: { feature: true } }, inventory: true, images: true, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true, detectedMime: true, safeName: true, originalName: true } } } } } }); if (!p) return res.status(404).json({ error: 'Product not found' }); const mediaAttachments = p.mediaAttachments.map(({ mediaAsset, ...attachment }) => ({ ...attachment, kind: mediaAsset.kind, detectedMime: mediaAsset.detectedMime, originalName: mediaAsset.originalName, url: `/content-media/${encodeURIComponent(mediaAsset.id)}` })); res.json({ ...p, features: p.featureAssignments.map(item => item.feature), mediaAttachments, availableStock: p.inventory?.quantity ?? 0 }); }));
-app.get('/api/categories', asyncRoute(async (_req, res) => res.json(await prisma.category.findMany({ where: { status: 'ACTIVE' }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }] }))));
+registerProductRoutes(app);
 
 app.post('/api/sellers/apply', requireAuth, asyncRoute(async (_req, res) => {
   const user = res.locals.user as { id: string; role: Role };
@@ -310,92 +302,7 @@ app.post('/api/sellers/apply', requireAuth, asyncRoute(async (_req, res) => {
   res.status(201).json(seller);
 }));
 
-app.post('/api/products', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asyncRoute(async (req, res) => {
-  const user = res.locals.user as { id: string; role: Role; sellerId?: string };
-  const input = parse(productSchema, req.body);
-  if (!isValidSalePrice(input.priceMinor, input.salePriceMinor)) return res.status(400).json({ error: 'Sale price must be lower than the regular price.' });
-  const wholesaleEnabled = input.wholesaleEnabled ?? false;
-  const wholesaleMinQuantity = wholesaleEnabled ? input.wholesaleMinQuantity ?? null : null;
-  const wholesaleMaxQuantity = wholesaleEnabled ? input.wholesaleMaxQuantity ?? null : null;
-  const wholesaleError = wholesaleConfigurationError({ wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity });
-  if (wholesaleError) return res.status(400).json({ error: wholesaleError, code: 'WHOLESALE_CONFIGURATION_INVALID' });
-  const scopedSellerId = user.role === Role.ADMIN
-    ? (await prisma.store.findFirst({ where: { isPlatformStore: true }, select: { sellerId: true } }))?.sellerId
-    : user.sellerId;
-  const seller = scopedSellerId
-    ? await prisma.seller.findFirst({ where: { id: scopedSellerId, status: SellerStatus.APPROVED }, include: { store: true } })
-    : null;
-  if (user.role !== Role.ADMIN && !seller) return res.status(403).json({ error: 'Approved seller required' });
-  const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' } });
-  if (seller && user.role !== Role.ADMIN && !settings?.multiVendorEnabled) return res.status(409).json({ error: 'Multi-vendor mode is disabled' });
-  const productData = { sellerId: seller?.id, name: input.name, slug: `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 7)}`, description: input.description, priceMinor: input.priceMinor, salePriceMinor: input.salePriceMinor ?? null, color: input.color ?? null, currency: seller?.store?.baseCurrency ?? env.CURRENCY, barcode: input.barcode, wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity, status: user.role === Role.ADMIN || settings?.productApprovalPolicy === ApprovalPolicy.AUTOMATIC ? ProductStatus.APPROVED : ProductStatus.PENDING, inventory: { create: { quantity: input.stock } } };
-  if (seller) {
-    const store = seller.store ? { id: seller.store.id } : null;
-    if (!store) return res.status(409).json({ error: 'Complete Store setup before adding products.' });
-    const result = await prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT "id" FROM "Store" WHERE "id" = ${store.id} FOR UPDATE`;
-      const effective = await effectiveStorePlan(tx, store.id);
-      const entitlements = await storeEntitlements(tx, store.id, effective.version);
-      const usage = await tx.product.count({ where: { sellerId: seller.id, status: { not: ProductStatus.ARCHIVED } } });
-      if (isAtLimit(usage, entitlements.productLimit)) return { limitReached: true as const, usage, limit: entitlements.productLimit };
-      const taxonomy = await validateProductCatalogSelection(input, tx);
-      return { product: await tx.product.create({ data: { ...productData, categoryId: taxonomy.categoryId, brandId: taxonomy.brandId, productTypeId: taxonomy.productTypeId, featureAssignments: { create: taxonomy.featureIds.map(featureId => ({ featureId })) } } }) };
-    });
-    if ('limitReached' in result) return res.status(409).json({ code: 'PLAN_LIMIT_REACHED', entitlement: 'productLimit', upgradeRequired: true, error: 'Your Store has reached its product limit. Archive a listing or ask an administrator about a plan change.', usage: result.usage, limit: result.limit, planUrl: '/seller/plan' });
-    res.status(201).json(result.product);
-    return;
-  }
-  const product = await prisma.$transaction(async tx => {
-    const taxonomy = await validateProductCatalogSelection(input, tx);
-    return tx.product.create({ data: { ...productData, categoryId: taxonomy.categoryId, brandId: taxonomy.brandId, productTypeId: taxonomy.productTypeId, featureAssignments: { create: taxonomy.featureIds.map(featureId => ({ featureId })) } } });
-  });
-  res.status(201).json(product);
-}));
-app.patch('/api/products/:id', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asyncRoute(async (req, res) => {
-  const user = res.locals.user as { role: Role; sellerId?: string };
-  const input = parse(productSchema.partial(), req.body);
-  const existing = await prisma.product.findUnique({ where: { id: routeParam(req.params.id) }, include: { featureAssignments: { select: { featureId: true } } } });
-  if (!existing || (user.role !== Role.ADMIN && existing.sellerId !== user.sellerId)) return res.status(404).json({ error: 'Product not found' });
-  const nextPriceMinor = input.priceMinor ?? existing.priceMinor;
-  const nextSalePriceMinor = input.salePriceMinor !== undefined ? input.salePriceMinor : existing.salePriceMinor;
-  if (!isValidSalePrice(nextPriceMinor, nextSalePriceMinor)) return res.status(400).json({ error: 'Sale price must be lower than the regular price.' });
-  const wholesaleEnabled = input.wholesaleEnabled ?? existing.wholesaleEnabled;
-  const wholesaleMinQuantity = wholesaleEnabled ? input.wholesaleMinQuantity !== undefined ? input.wholesaleMinQuantity : existing.wholesaleMinQuantity : null;
-  const wholesaleMaxQuantity = wholesaleEnabled ? input.wholesaleMaxQuantity !== undefined ? input.wholesaleMaxQuantity : existing.wholesaleMaxQuantity : null;
-  const wholesaleError = wholesaleConfigurationError({ wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity });
-  if (wholesaleError) return res.status(400).json({ error: wholesaleError, code: 'WHOLESALE_CONFIGURATION_INVALID' });
-  const product = await prisma.$transaction(async tx => {
-    const taxonomy = await validateProductCatalogSelection({ categoryId: input.categoryId !== undefined ? input.categoryId : existing.categoryId, brandId: input.brandId !== undefined ? input.brandId : existing.brandId, productTypeId: input.productTypeId !== undefined ? input.productTypeId : existing.productTypeId, featureIds: input.featureIds ?? existing.featureAssignments.map(item => item.featureId) }, tx);
-    const updated = await tx.product.update({ where: { id: existing.id }, data: { ...(input.name ? { name: input.name } : {}), ...(input.description ? { description: input.description } : {}), ...(input.priceMinor !== undefined ? { priceMinor: input.priceMinor } : {}), ...(input.salePriceMinor !== undefined ? { salePriceMinor: input.salePriceMinor } : {}), ...(input.categoryId !== undefined ? { categoryId: taxonomy.categoryId } : {}), ...(input.brandId !== undefined ? { brandId: taxonomy.brandId } : {}), ...(input.productTypeId !== undefined ? { productTypeId: taxonomy.productTypeId } : {}), ...(input.color !== undefined ? { color: input.color } : {}), ...(input.barcode !== undefined ? { barcode: input.barcode } : {}), wholesaleEnabled, wholesaleMinQuantity, wholesaleMaxQuantity } });
-    if (input.featureIds !== undefined || input.categoryId !== undefined || input.productTypeId !== undefined) {
-      await tx.productFeatureAssignment.deleteMany({ where: { productId: existing.id } });
-      if (taxonomy.featureIds.length) await tx.productFeatureAssignment.createMany({ data: taxonomy.featureIds.map(featureId => ({ productId: existing.id, featureId })) });
-    }
-    if (input.stock !== undefined) await tx.inventory.update({ where: { productId: existing.id }, data: { quantity: input.stock } });
-    return updated;
-  });
-  res.json(product);
-}));
-
-app.get('/api/products/:id/variants', asyncRoute(async (req, res) => {
-  const variants = await prisma.productVariant.findMany({ where: { productId: routeParam(req.params.id), status: ProductStatus.APPROVED }, orderBy: { name: 'asc' } });
-  res.json(variants);
-}));
-app.post('/api/products/:id/variants', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asyncRoute(async (req, res) => {
-  const user = res.locals.user as { role: Role; sellerId?: string };
-  const input = parse(variantSchema, req.body);
-  const product = await prisma.product.findUnique({ where: { id: routeParam(req.params.id) } });
-  if (!product || (user.role !== Role.ADMIN && product.sellerId !== user.sellerId)) return res.status(404).json({ error: 'Product not found' });
-  const variant = await prisma.productVariant.create({ data: { productId: product.id, ...input, currency: product.currency, status: user.role === Role.ADMIN ? ProductStatus.APPROVED : ProductStatus.PENDING } });
-  res.status(201).json(variant);
-}));
-app.patch('/api/products/:id/variants/:variantId', requireAuth, requireRole(Role.SELLER, Role.ADMIN), asyncRoute(async (req, res) => {
-  const user = res.locals.user as { role: Role; sellerId?: string };
-  const input = parse(variantSchema.partial(), req.body);
-  const variant = await prisma.productVariant.findFirst({ where: { id: routeParam(req.params.variantId), product: { id: routeParam(req.params.id), ...(user.role === Role.ADMIN ? {} : { sellerId: user.sellerId }) } } });
-  if (!variant) return res.status(404).json({ error: 'Variant not found' });
-  res.json(await prisma.productVariant.update({ where: { id: variant.id }, data: input }));
-}));
+registerProductVariantRoutes(app);
 
 app.get('/api/cart', requireAuth, asyncRoute(async (_req, res) => { const user = res.locals.user as { id: string }; const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { productType: true, inventory: true, seller: { include: { store: true } } } } } } } }); res.json(cart ?? { items: [] }); }));
 app.post('/api/cart/items', requireAuth, asyncRoute(async (req, res) => {

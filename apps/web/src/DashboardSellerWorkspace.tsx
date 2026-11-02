@@ -141,6 +141,7 @@ export function SellerDashboard({
           </div>
           <a href={`/store/${data.store.slug}`}>View store</a>
           <a href="/seller/platform">Edit store settings</a>
+          <a href="/seller/themes">Open Themes &amp; Templates Studio</a>
         </section>
       )}
       {tab === "payouts" && (
