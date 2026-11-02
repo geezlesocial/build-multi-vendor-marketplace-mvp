@@ -1,10 +1,17 @@
 name: ci
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       PASSWORD_PEPPER: ci-test-only-placeholder-pepper-123456
       CONTENT_SCAN_REQUIRED: "true"
@@ -26,12 +33,13 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: npm
       - name: Create isolated per-run test database
         shell: bash
@@ -51,6 +59,7 @@ jobs:
       - run: npm run db:deploy
       - run: npm run db:seed
       - run: npm run lint
+      - run: node --test scripts/format-base.test.mjs
       - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
@@ -69,3 +78,11 @@ jobs:
           NODE_ENV: development
           API_PORT: 4000
         run: npm run e2e
+      - name: Retain Playwright report and attached theme screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-playwright-report-${{ github.sha }}
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14

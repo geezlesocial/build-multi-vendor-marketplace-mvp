@@ -12,3 +12,26 @@ uploads/
 
 # Runtime CMS uploads
 /apps/api/storage/content/
+
+# Local IDE state and workspace-specific settings
+/.vscode/
+/.idea/
+/.fleet/
+
+# Local database files and exported database backups. Keep Prisma migrations tracked.
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.dump
+*.backup
+*.bak
+
+# Private keys and local certificate bundles
+*.key
+*.pem
+*.p12
+*.pfx
+*.p8
+*.jks
+*.keystore
