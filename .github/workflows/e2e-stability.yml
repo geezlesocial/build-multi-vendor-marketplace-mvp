@@ -18,7 +18,7 @@ jobs:
       matrix:
         pass: [1, 2, 3]
     env:
-      CONTENT_SCAN_REQUIRED: 'true'
+      CONTENT_SCAN_REQUIRED: "true"
       DATABASE_URL: postgresql://marketplace@127.0.0.1:55432/postgres?schema=public
       SITE_URL: http://127.0.0.1:4000
       WEB_ORIGIN: http://127.0.0.1:5173
@@ -85,3 +85,12 @@ jobs:
         env:
           NODE_ENV: development
         run: npm run e2e
+
+      - name: Retain Playwright report and attached theme screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marketplace-playwright-stability-${{ github.run_id }}-pass-${{ matrix.pass }}
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import process from "node:process";
+import { selectFormatBase } from "./format-base.mjs";
 
 const require = createRequire(import.meta.url);
 const run = (command, args) =>
@@ -9,36 +10,25 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "inherit"],
   }).trim();
 
-const baseCandidates = [
-  process.env.FORMAT_BASE_REF,
-  process.env.GITHUB_BASE_REF
-    ? `origin/${process.env.GITHUB_BASE_REF}`
-    : undefined,
-  "origin/main",
-];
-const base = baseCandidates.find((candidate) => {
-  if (
-    !candidate?.trim() ||
-    /^0+$/.test(candidate.trim()) ||
-    candidate.startsWith("-")
-  ) {
-    return false;
-  }
-
+const hasCommit = (revision) => {
   try {
-    run("git", ["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`]);
+    execFileSync(
+      "git",
+      ["rev-parse", "--verify", "--quiet", `${revision}^{commit}`],
+      {
+        stdio: "ignore",
+      },
+    );
     return true;
   } catch {
     return false;
   }
+};
+const base = selectFormatBase({
+  requestedBase: process.env.FORMAT_BASE_REF,
+  githubBaseRef: process.env.GITHUB_BASE_REF,
+  hasCommit,
 });
-
-if (!base) {
-  throw new Error(
-    "No valid formatter comparison base was found; fetch the pull-request base or origin/main.",
-  );
-}
-
 const trackedChanges = run("git", [
   "diff",
   "--name-status",
