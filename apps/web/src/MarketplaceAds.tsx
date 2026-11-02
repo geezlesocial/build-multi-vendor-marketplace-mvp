@@ -40,7 +40,6 @@ export function MarketplaceAds({ admin = false }: { admin?: boolean }) {
   const [adminSettings, setAdminSettings] = useState<Settings | null>(null);
   const [adminCurrency, setAdminCurrency] = useState('');
   const [adminExponent, setAdminExponent] = useState(2);
-  const [reason, setReason] = useState('');
   const [reviewReasons, setReviewReasons] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -227,7 +226,7 @@ export function MarketplaceAds({ admin = false }: { admin?: boolean }) {
         {!products.length && <p className="adsCallout">No eligible products are available to promote yet. Products must be approved, in stock, and belong to an approved store.</p>}
       </form>
       <div className="adsListHeading"><div><p className="eyebrow">Campaign management</p><h2>Your campaign history</h2></div><button type="button" onClick={() => void load()}>Refresh</button></div>
-      <div className="adsCampaignGrid">{ads.map(ad => <OwnerAdCard key={ad.id} ad={ad} currency={ad.currency} exponent={config?.minorUnitExponent ?? 2} saving={saving} edit={() => editDraft(ad)} action={action => void ownerAction(ad, action)} submit={() => void submitAd(ad)} />)}</div>
+      <div className="adsCampaignGrid">{ads.map(ad => <OwnerAdCard key={ad.id} ad={ad} currency={ad.currency} saving={saving} edit={() => editDraft(ad)} action={action => void ownerAction(ad, action)} submit={() => void submitAd(ad)} />)}</div>
       {!ads.length && <div className="adsEmpty"><h3>Your ads start here</h3><p>Save a draft, upload optional media, and submit it for a policy and safety review.</p></div>}
     </>}
   </section>;
@@ -239,7 +238,7 @@ function LocalPreview({ file }: { file: File }) {
   return <div className="adsPreviewTile">{file.type.startsWith('video/') ? <video src={url} controls playsInline muted preload="metadata" aria-label={`Preview ${file.name}`} /> : <img src={url} alt={`Preview ${file.name}`} />}</div>;
 }
 
-function OwnerAdCard({ ad, currency, exponent, saving, edit, action, submit }: { ad: Ad; currency: string; exponent: number; saving: boolean; edit: () => void; action: (action: 'pause' | 'resume' | 'delete') => void; submit: () => void }) {
+function OwnerAdCard({ ad, currency, saving, edit, action, submit }: { ad: Ad; currency: string; saving: boolean; edit: () => void; action: (action: 'pause' | 'resume' | 'delete') => void; submit: () => void }) {
   const media = ad.creatives ?? [];
   const estimatedViews = ad.pricePerHundredViewsSnapshotMinor ? Math.floor(ad.budgetMinor / (ad.pricePerHundredViewsSnapshotMinor / 100)) : 0;
   const inputBudgetMinor = ad.budgetInputMinor ?? ad.budgetMinor;

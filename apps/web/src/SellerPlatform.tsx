@@ -9,17 +9,19 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 const slugPreview = (name: string) => name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-type Theme = { themePreset: string; mobileTemplate: string; description: string; primaryColor: string; accentColor: string; font: string; sections: { type: 'featuredProducts'; title: string; productIds: string[] }[]; contactLinks: { label: string; url: string }[]; logoMediaId: string | null; faviconMediaId: string | null; bannerMediaId: string | null };
+type Theme = { themePreset: string; mobileTemplate: string; description: string; heroTitle: string; heroSubtitle: string; heroButtonLabel: string; heroButtonHref: string; primaryColor: string; accentColor: string; font: string; gridDensity: string; cardStyle: string; sections: { type: 'featuredProducts' | 'categories' | 'promotion' | 'productCollection' | 'brandHighlights'; title: string; productIds: string[]; categorySlug: string | null; visible: boolean }[]; contactLinks: { label: string; url: string }[]; logoMediaId: string | null; faviconMediaId: string | null; bannerMediaId: string | null };
 type StorePlanEntitlements = { allowedThemes: string[]; mobileTemplates: string[] };
 type StoreNameChanges = { limit: number | null; used: number; remaining: number | null; resetsAt: string | null; unlimited: boolean };
 type SellerPayoutMethod = { id: string; type: string; status: string; country: string; currency: string; label: string; maskedIdentifier: string | null; providerConfigured: boolean; providerStatus: string | null; isDefault: boolean; createdAt: string; updatedAt: string };
-const emptyTheme: Theme = { themePreset: 'CLASSIC', mobileTemplate: 'RESPONSIVE_STANDARD', description: '', primaryColor: '#1f6f5b', accentColor: '#e7b75a', font: 'system', sections: [], contactLinks: [], logoMediaId: null, faviconMediaId: null, bannerMediaId: null };
+const emptyTheme: Theme = { themePreset: 'CLASSIC', mobileTemplate: 'RESPONSIVE_STANDARD', description: '', heroTitle: '', heroSubtitle: '', heroButtonLabel: '', heroButtonHref: '', primaryColor: '#1f6f5b', accentColor: '#e7b75a', font: 'system', gridDensity: 'standard', cardStyle: 'standard', sections: [], contactLinks: [], logoMediaId: null, faviconMediaId: null, bannerMediaId: null };
+const normalizeTheme = (value: Partial<Theme>): Theme => ({ ...emptyTheme, ...value, sections: (value.sections ?? []).map(section => ({ ...section, categorySlug: section.categorySlug ?? null, visible: section.visible ?? true })) });
 
 export function SellerPlatform() {
   const [storeName, setStoreName] = useState('');
   const [slug, setSlug] = useState('');
   const [theme, setTheme] = useState<Theme>(emptyTheme);
   const [publishedTheme, setPublishedTheme] = useState<Theme | null>(null);
+  const [draftVersion, setDraftVersion] = useState(0);
   const [brandingStaff, setBrandingStaff] = useState<{ userId: string; canManageStoreBranding: boolean; canManageShipping: boolean; canManageCurrency: boolean; user: { name: string | null; email: string } }[]>([]);
   const [methods, setMethods] = useState<SellerPayoutMethod[]>([]);
   const [planEntitlements, setPlanEntitlements] = useState<StorePlanEntitlements>({ allowedThemes: ['CLASSIC', 'EDITORIAL', 'BOUTIQUE'], mobileTemplates: ['RESPONSIVE_STANDARD', 'MOBILE_COMPACT', 'MOBILE_EDITORIAL'] });
@@ -32,15 +34,16 @@ export function SellerPlatform() {
 
   const load = async () => {
     const [current, payoutMethods, plan, staff] = await Promise.all([
-      api<{ name: string; slug: string; draft: Theme; published: Theme | null; nameChanges: StoreNameChanges }>('/api/seller/store-theme'),
+      api<{ name: string; slug: string; draft: Theme; published: Theme | null; draftVersion: number; nameChanges: StoreNameChanges }>('/api/seller/store-theme'),
       api<typeof methods>('/api/seller/payout-methods'),
       api<{ entitlements: StorePlanEntitlements }>('/api/seller/plan'),
       api<typeof brandingStaff>('/api/seller/store-branding/staff').catch(() => [])
     ]);
     setStoreName(current.name);
     setSlug(current.slug);
-    setTheme({ ...emptyTheme, ...current.draft });
-    setPublishedTheme(current.published ? { ...emptyTheme, ...current.published } : null);
+    setTheme(normalizeTheme(current.draft));
+    setPublishedTheme(current.published ? normalizeTheme(current.published) : null);
+    setDraftVersion(current.draftVersion);
     setMethods(payoutMethods);
     setPlanEntitlements(plan.entitlements);
     setNameChanges(current.nameChanges);
@@ -58,28 +61,32 @@ export function SellerPlatform() {
     let draftSaved = false;
     let themePublished = false;
     try {
-      const saved = await api<{ slug: string }>('/api/seller/store-theme', { method: 'PUT', body: JSON.stringify({ ...theme, name: storeName }) });
+      const saved = await api<{ slug: string; draftVersion: number }>('/api/seller/store-theme', { method: 'PUT', body: JSON.stringify({ ...theme, name: storeName, expectedVersion: draftVersion }) });
       draftSaved = true;
+      const latestVersion = saved.draftVersion;
+      setDraftVersion(latestVersion);
       setSlug(saved.slug);
       if (publish) {
-        await api('/api/seller/store-theme/publish', { method: 'POST', body: '{}' });
+        await api('/api/seller/store-theme/publish', { method: 'POST', body: JSON.stringify({ expectedVersion: latestVersion }) });
         themePublished = true;
       }
-      const current = await api<{ name: string; slug: string; draft: Theme; published: Theme | null; nameChanges: StoreNameChanges }>('/api/seller/store-theme');
+      const current = await api<{ name: string; slug: string; draft: Theme; published: Theme | null; draftVersion: number; nameChanges: StoreNameChanges }>('/api/seller/store-theme');
       setStoreName(current.name);
       setSlug(current.slug);
-      setTheme({ ...emptyTheme, ...current.draft });
-      setPublishedTheme(current.published ? { ...emptyTheme, ...current.published } : null);
+      setTheme(normalizeTheme(current.draft));
+      setPublishedTheme(current.published ? normalizeTheme(current.published) : null);
+      setDraftVersion(current.draftVersion);
       setNameChanges(current.nameChanges);
       setMessage(publish ? 'Store settings and theme published' : 'Store settings draft saved');
     } catch (error) {
       if (draftSaved) {
         try {
-          const current = await api<{ name: string; slug: string; draft: Theme; published: Theme | null; nameChanges: StoreNameChanges }>('/api/seller/store-theme');
+          const current = await api<{ name: string; slug: string; draft: Theme; published: Theme | null; draftVersion: number; nameChanges: StoreNameChanges }>('/api/seller/store-theme');
           setStoreName(current.name);
           setSlug(current.slug);
-          setTheme({ ...emptyTheme, ...current.draft });
-          setPublishedTheme(current.published ? { ...emptyTheme, ...current.published } : null);
+          setTheme(normalizeTheme(current.draft));
+          setPublishedTheme(current.published ? normalizeTheme(current.published) : null);
+          setDraftVersion(current.draftVersion);
           setNameChanges(current.nameChanges);
         } catch { /* Keep the confirmed server save state message below. */ }
         setMessage(themePublished ? 'Store appearance was published, but the page could not refresh its saved state.' : `Store appearance draft was saved, but ${publish ? 'publishing failed' : 'the page could not refresh'}: ${(error as Error).message}`);
@@ -119,6 +126,7 @@ export function SellerPlatform() {
         <p className="muted">Your store URL is generated from the store name. The server checks reserved names and URL collisions before saving. Sellers can change the Store name up to three times per calendar month. New branding uploads remain private until scanning approves them.</p>
         <p><a href="/seller/plan">View plan and usage</a></p>
         <p><a href="/seller/site-chrome">Customize storefront header &amp; footer</a></p>
+        <p><a href="/seller/themes">Open Themes &amp; Templates Studio</a></p>
         <p><a href="/seller/currency">Manage Store currency and display offers</a> · <a href="/seller/commissions">View commission statement</a></p>
         <label>Store name<input aria-label="Store name" value={storeName} onChange={event => setStoreName(event.target.value)} maxLength={120} required disabled={!nameChanges.unlimited && nameChanges.remaining === 0} /></label>
         <p className="muted" role="status" aria-live="polite">{nameChangeHint}</p>

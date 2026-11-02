@@ -8,7 +8,6 @@ import { decryptDropshippingCredentials, encryptDropshippingCredentials, CJ_API_
 import { decimalToMinorExact } from './currency-domain.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
-const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
 const fail = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 const actor = (res: Response) => res.locals.user as { id: string; role: Role; sellerId?: string };
 const connectSchema = z.object({ apiKey: z.string().trim().min(24).max(200) }).strict();

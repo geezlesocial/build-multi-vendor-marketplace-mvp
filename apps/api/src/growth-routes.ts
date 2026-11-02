@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import type { Express, Request, Response } from 'express';
-import { AffiliateAdjustmentType, AffiliateAttributionRule, AffiliatePayoutStatus, AffiliateStatus, CommissionEntryType, CommissionStatus, MediaScanStatus, MediaUploadStatus, MessageReactionKind, Prisma, ProductStatus, Role, SellerStatus, WholesaleStatus } from '@prisma/client';
+import { AffiliateAdjustmentType, AffiliateAttributionRule, AffiliatePayoutStatus, AffiliateStatus, CommissionStatus, MediaScanStatus, MediaUploadStatus, MessageReactionKind, Prisma, ProductStatus, Role, SellerStatus, WholesaleStatus } from '@prisma/client';
 import { z } from 'zod';
 import { audit, currentUser, prisma, requireAuth, requireRole } from './security.js';
 import { env } from './config.js';
-import { generatedReferralCode, referralTokenHash, safeInternalPath, signedReferralToken, verifySignedReferralToken, escapeHtmlAttribute } from './growth-domain.js';
+import { generatedReferralCode, referralTokenHash, safeInternalPath, signedReferralToken, escapeHtmlAttribute } from './growth-domain.js';
 import { reverseAffiliateForOrder } from './affiliate-ledger.js';
 import { effectiveStorePlan, storeEntitlements } from './store-plan-domain.js';
 import { createUserNotification } from './notification-delivery.js';

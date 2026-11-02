@@ -371,6 +371,7 @@ export function registerWalletRoutes(app: Express) {
         if (sourceAccount.status !== WalletAccountStatus.ACTIVE || destinationAccount.status !== WalletAccountStatus.ACTIVE) throw fail(409, 'Wallet transfer is unavailable');
         const sourceBalance = await ensureWalletBalance(tx, sourceAccount.id, input.currency);
         const destinationBalance = await ensureWalletBalance(tx, destinationAccount.id, input.currency);
+        if (!Number.isSafeInteger(sourceBalance.availableMinor) || sourceBalance.availableMinor < input.amountMinor) throw fail(409, 'Insufficient available wallet funds');
         assertTransferAllowed({ senderId: user.id, recipientId: recipient.id, amountMinor: input.amountMinor, currency: input.currency }, sourceBalance.availableMinor, walletGateSettings(setting), env.MONEY_MOVEMENT_HARD_DISABLED);
         const debit = await tx.walletBalance.updateMany({ where: { id: sourceBalance.id, availableMinor: { gte: input.amountMinor } }, data: { availableMinor: { decrement: input.amountMinor } } });
         if (debit.count !== 1) throw fail(409, 'Insufficient available wallet funds');
@@ -394,14 +395,14 @@ export function registerWalletRoutes(app: Express) {
     }
   }));
 
-  app.post('/api/wallet/withdrawals', requireAuth, run(async (req, res) => {
-    const input = withdrawalSchema.parse(req.body);
+  app.post('/api/wallet/withdrawals', requireAuth, run(async (req, _res) => {
+    withdrawalSchema.parse(req.body);
     const setting = await settings();
     if (!isWalletActionEnabled('walletWithdrawalsEnabled', walletGateSettings(setting), env.MONEY_MOVEMENT_HARD_DISABLED)) throw fail(409, 'Wallet withdrawals are disabled until an approved settlement workflow is configured');
     throw fail(503, 'Wallet withdrawal provider workflow is not configured');
   }));
 
-  app.post('/api/wallet/checkout-authorize', requireAuth, run(async (_req, res) => {
+  app.post('/api/wallet/checkout-authorize', requireAuth, run(async (_req, _res) => {
     const setting = await settings();
     if (!isWalletActionEnabled('walletCheckoutEnabled', walletGateSettings(setting), env.MONEY_MOVEMENT_HARD_DISABLED)) throw fail(409, 'Wallet checkout is disabled');
     throw fail(503, 'Wallet checkout integration is pending order-lifecycle approval');

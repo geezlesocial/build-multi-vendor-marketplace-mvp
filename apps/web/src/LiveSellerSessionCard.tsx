@@ -89,6 +89,7 @@ export function SellerSessionCard({
       session.status,
     );
   const canDelete =
+    !session.replayDeletionPending &&
     !["STARTING", "LIVE", "PAUSED"].includes(session.status) &&
     !["STARTING", "RECORDING", "PROCESSING"].includes(
       session.recordingStatus ?? "NOT_CONFIGURED",
@@ -312,7 +313,12 @@ export function SellerSessionCard({
         session.recordingStatus &&
         session.recordingStatus !== "NOT_CONFIGURED" && (
           <div className="liveReplayStatus" role="status">
-            <strong>Replay: {session.recordingStatus.toLowerCase()}</strong>
+            <strong>
+              Replay:{" "}
+              {session.replayDeletionPending
+                ? "deletion pending"
+                : session.recordingStatus.toLowerCase()}
+            </strong>
             {session.recordingStatus === "READY" ? (
               <>
                 <p>
@@ -338,6 +344,20 @@ export function SellerSessionCard({
                     Permanently delete replay file
                   </button>
                 )}
+              </>
+            ) : session.replayDeletionPending ? (
+              <>
+                <p>
+                  The replay file is awaiting deletion. If the previous storage
+                  attempt failed, retry it here.
+                </p>
+                <button
+                  type="button"
+                  disabled={saving || broadcastBusy}
+                  onClick={() => void onReplayDelete(session)}
+                >
+                  Retry replay deletion
+                </button>
               </>
             ) : (
               <p>
