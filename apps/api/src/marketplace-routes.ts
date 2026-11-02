@@ -1,7 +1,6 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import express from 'express';
 import { Prisma, ProductStatus, SellerStatus, TaxonomyStatus } from '@prisma/client';
-import { z } from 'zod';
 import { prisma } from './security.js';
 import { normalizeMarketplaceSearch, publicSearchLabel } from './marketplace-domain.js';
 
