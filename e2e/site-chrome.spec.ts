@@ -267,6 +267,17 @@ test("admin can customize, preview, publish and serve responsive site chrome", a
     await expect(page.locator(".siteChromeFooter")).toContainText(
       "Copyright Chrome E2E",
     );
+    await expect(page.locator(".marketplaceHome #featured")).toBeVisible();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const root = document.scrollingElement;
+            return root ? root.scrollHeight - window.innerHeight : 0;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBeGreaterThan(0);
     const backToTop = page.locator(".siteChromeFooterBottom button");
     await expect(backToTop).toHaveText("Back to top ↑");
     await page.evaluate(() => {

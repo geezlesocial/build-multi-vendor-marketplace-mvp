@@ -1,43 +1,118 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from "react";
 
-type Asset = { id: string; originalName: string; safeName?: string; kind?: string; sizeBytes: number; scanStatus: string; scanErrorCode?: string | null; scanAttemptCount?: number; uploadStatus: string; storageProvider?: string; width?: number | null; height?: number | null };
-type MediaList = Asset[] | { assets: Asset[]; usedBytes: number; limitBytes: number };
+type Asset = {
+  id: string;
+  originalName: string;
+  safeName?: string;
+  kind?: string;
+  sizeBytes: number;
+  scanStatus: string;
+  scanErrorCode?: string | null;
+  scanAttemptCount?: number;
+  uploadStatus: string;
+  storageProvider?: string;
+  width?: number | null;
+  height?: number | null;
+};
+type MediaList =
+  Asset[] | { assets: Asset[]; usedBytes: number; limitBytes: number };
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
-  const response = await fetch(path, { credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'x-csrf-token': csrf } : {}), ...(options.headers ?? {}) }, ...options });
-  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error ?? 'Image request failed'); }
+  const csrf = document.cookie
+    .split("; ")
+    .find((value) => value.startsWith("marketplace_csrf="))
+    ?.split("=")[1];
+  const response = await fetch(path, {
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...(csrf ? { "x-csrf-token": csrf } : {}),
+      ...(options.headers ?? {}),
+    },
+    ...options,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error ?? "Image request failed");
+  }
   return response.status === 204 ? (undefined as T) : response.json();
 }
 
-function uploadToSignedPost(url: string, fields: Record<string, string>, file: File, progress: (value: number) => void) {
+const mediaListRequests = new Map<string, Promise<MediaList>>();
+
+function requestMediaList(path: string) {
+  const existing = mediaListRequests.get(path);
+  if (existing) return existing;
+  const request = api<MediaList>(path).finally(() => {
+    if (mediaListRequests.get(path) === request) mediaListRequests.delete(path);
+  });
+  mediaListRequests.set(path, request);
+  return request;
+}
+
+function uploadToSignedPost(
+  url: string,
+  fields: Record<string, string>,
+  file: File,
+  progress: (value: number) => void,
+) {
   return new Promise<void>((resolve, reject) => {
     const request = new XMLHttpRequest();
-    const localUpload = fields['x-local-upload'] === '1';
-    request.open(localUpload ? 'PUT' : 'POST', url);
+    const localUpload = fields["x-local-upload"] === "1";
+    request.open(localUpload ? "PUT" : "POST", url);
     request.withCredentials = false;
     if (localUpload) {
-      request.setRequestHeader('Content-Type', file.type);
-      const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
-      if (csrf) request.setRequestHeader('x-csrf-token', csrf);
+      request.setRequestHeader("Content-Type", file.type);
+      const csrf = document.cookie
+        .split("; ")
+        .find((value) => value.startsWith("marketplace_csrf="))
+        ?.split("=")[1];
+      if (csrf) request.setRequestHeader("x-csrf-token", csrf);
     }
-    request.upload.onprogress = event => { if (event.lengthComputable) progress(Math.round(event.loaded / event.total * 100)); };
-    request.onload = () => request.status >= 200 && request.status < 300 ? resolve() : reject(new Error('Managed storage rejected the upload. The existing published image remains active.'));
-    request.onerror = () => reject(new Error('Managed storage could not be reached. The existing published image remains active.'));
-    if (localUpload) { request.send(file); return; }
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable)
+        progress(Math.round((event.loaded / event.total) * 100));
+    };
+    request.onload = () =>
+      request.status >= 200 && request.status < 300
+        ? resolve()
+        : reject(
+            new Error(
+              "Managed storage rejected the upload. The existing published image remains active.",
+            ),
+          );
+    request.onerror = () =>
+      reject(
+        new Error(
+          "Managed storage could not be reached. The existing published image remains active.",
+        ),
+      );
+    if (localUpload) {
+      request.send(file);
+      return;
+    }
     const form = new FormData();
     Object.entries(fields).forEach(([key, value]) => form.append(key, value));
-    form.append('file', file);
+    form.append("file", file);
     request.send(form);
   });
 }
 
-async function cropRaster(file: File, ratio: number, focusX: number, focusY: number) {
+async function cropRaster(
+  file: File,
+  ratio: number,
+  focusX: number,
+  focusY: number,
+) {
   const bitmap = await createImageBitmap(file);
   try {
-    if (!bitmap.width || !bitmap.height) throw new Error('Image dimensions could not be read.');
+    if (!bitmap.width || !bitmap.height)
+      throw new Error("Image dimensions could not be read.");
     const sourceRatio = bitmap.width / bitmap.height;
-    let sx = 0; let sy = 0; let sw = bitmap.width; let sh = bitmap.height;
+    let sx = 0;
+    let sy = 0;
+    let sw = bitmap.width;
+    let sh = bitmap.height;
     if (sourceRatio > ratio) {
       sw = bitmap.height * ratio;
       sx = (bitmap.width - sw) * focusX;
@@ -47,19 +122,52 @@ async function cropRaster(file: File, ratio: number, focusX: number, focusY: num
     }
     const outputWidth = Math.min(1400, Math.max(256, Math.round(sw)));
     const outputHeight = Math.max(1, Math.round(outputWidth / ratio));
-    const canvas = document.createElement('canvas');
-    canvas.width = outputWidth; canvas.height = outputHeight;
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('Image crop is unavailable in this browser.');
+    const canvas = document.createElement("canvas");
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Image crop is unavailable in this browser.");
     context.drawImage(bitmap, sx, sy, sw, sh, 0, 0, outputWidth, outputHeight);
-    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('Image crop could not be encoded.')), 'image/webp', 0.86));
-    return new File([blob], `${file.name.replace(/\.[^.]+$/, '') || 'branding-image'}.webp`, { type: 'image/webp', lastModified: Date.now() });
-  } finally { bitmap.close(); }
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob(
+        (value) =>
+          value
+            ? resolve(value)
+            : reject(new Error("Image crop could not be encoded.")),
+        "image/webp",
+        0.86,
+      ),
+    );
+    return new File(
+      [blob],
+      `${file.name.replace(/\.[^.]+$/, "") || "branding-image"}.webp`,
+      { type: "image/webp", lastModified: Date.now() },
+    );
+  } finally {
+    bitmap.close();
+  }
 }
 
-export function BrandingImageControl({ label, value, publishedValue, onChange, ratio, listUrl, uploadUrl, previewUrl, quota = false }: {
-  label: string; value: string | null; publishedValue?: string | null; onChange: (id: string | null) => void; ratio: number;
-  listUrl: string; uploadUrl: string; previewUrl: (id: string) => string; quota?: boolean;
+export function BrandingImageControl({
+  label,
+  value,
+  publishedValue,
+  onChange,
+  ratio,
+  listUrl,
+  uploadUrl,
+  previewUrl,
+  quota = false,
+}: {
+  label: string;
+  value: string | null;
+  publishedValue?: string | null;
+  onChange: (id: string | null) => void;
+  ratio: number;
+  listUrl: string;
+  uploadUrl: string;
+  previewUrl: (id: string) => string;
+  quota?: boolean;
 }) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [usedBytes, setUsedBytes] = useState<number | null>(null);
@@ -70,81 +178,345 @@ export function BrandingImageControl({ label, value, publishedValue, onChange, r
   const [focusY, setFocusY] = useState(0.5);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
-  const loadAssets = async () => {
-    const result = await api<MediaList>(listUrl);
-    if (Array.isArray(result)) { setAssets(result); setUsedBytes(null); setLimitBytes(null); }
-    else { setAssets(result.assets); setUsedBytes(result.usedBytes); setLimitBytes(result.limitBytes); }
-  };
-  useEffect(() => { void loadAssets().catch(reason => setError(reason instanceof Error ? reason.message : 'Media library could not be loaded.')); }, [listUrl]);
-  useEffect(() => () => { if (candidateUrl) URL.revokeObjectURL(candidateUrl); }, [candidateUrl]);
+  const loadAssets = useCallback(async () => {
+    const result = await requestMediaList(listUrl);
+    if (Array.isArray(result)) {
+      setAssets(result);
+      setUsedBytes(null);
+      setLimitBytes(null);
+    } else {
+      setAssets(result.assets);
+      setUsedBytes(result.usedBytes);
+      setLimitBytes(result.limitBytes);
+    }
+  }, [listUrl]);
+  useEffect(() => {
+    void loadAssets().catch((reason) =>
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Media library could not be loaded.",
+      ),
+    );
+  }, [loadAssets]);
+  useEffect(
+    () => () => {
+      if (candidateUrl) URL.revokeObjectURL(candidateUrl);
+    },
+    [candidateUrl],
+  );
 
   const pick = (selected: File | undefined) => {
-    setError(''); setMessage(''); setFile(null);
+    setError("");
+    setMessage("");
+    setFile(null);
     if (candidateUrl) URL.revokeObjectURL(candidateUrl);
     setCandidateUrl(null);
     if (!selected) return;
-    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(selected.type)) { setError('Choose a PNG, JPEG, WebP, or GIF image. SVG and other formats are not accepted.'); return; }
+    if (
+      !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+        selected.type,
+      )
+    ) {
+      setError(
+        "Choose a PNG, JPEG, WebP, or GIF image. SVG and other formats are not accepted.",
+      );
+      return;
+    }
     const url = URL.createObjectURL(selected);
-    setCandidateUrl(url); setFile(selected); setFocusX(0.5); setFocusY(0.5);
+    setCandidateUrl(url);
+    setFile(selected);
+    setFocusX(0.5);
+    setFocusY(0.5);
   };
 
   const upload = async () => {
     if (!file) return;
-    setBusy(true); setError(''); setMessage(''); setProgress(0);
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setProgress(0);
     try {
       const cropped = await cropRaster(file, ratio, focusX, focusY);
-      const reservation = await api<{ id: string; upload: { url: string; fields: Record<string, string> } }>(uploadUrl, { method: 'POST', body: JSON.stringify({ fileName: cropped.name, contentType: cropped.type, sizeBytes: cropped.size }) });
-      await uploadToSignedPost(reservation.upload.url, reservation.upload.fields, cropped, value => setProgress(value));
-      const finalizeBase = uploadUrl.replace(/\/uploads$/, '');
-      const finalized = await api<{ scanStatus: string; uploadStatus: string; publicAfterUpload: boolean }>(`${finalizeBase}/${encodeURIComponent(reservation.id)}/finalize`, { method: 'POST', body: '{}' });
-      if (finalized.uploadStatus !== 'COMPLETE' || finalized.scanStatus === 'REJECTED' || finalized.publicAfterUpload) throw new Error('The server did not approve this image. The previous image remains selected.');
+      const reservation = await api<{
+        id: string;
+        upload: { url: string; fields: Record<string, string> };
+      }>(uploadUrl, {
+        method: "POST",
+        body: JSON.stringify({
+          fileName: cropped.name,
+          contentType: cropped.type,
+          sizeBytes: cropped.size,
+        }),
+      });
+      await uploadToSignedPost(
+        reservation.upload.url,
+        reservation.upload.fields,
+        cropped,
+        (value) => setProgress(value),
+      );
+      const finalizeBase = uploadUrl.replace(/\/uploads$/, "");
+      const finalized = await api<{
+        scanStatus: string;
+        uploadStatus: string;
+        publicAfterUpload: boolean;
+      }>(`${finalizeBase}/${encodeURIComponent(reservation.id)}/finalize`, {
+        method: "POST",
+        body: "{}",
+      });
+      if (
+        finalized.uploadStatus !== "COMPLETE" ||
+        finalized.scanStatus === "REJECTED" ||
+        finalized.publicAfterUpload
+      )
+        throw new Error(
+          "The server did not approve this image. The previous image remains selected.",
+        );
       onChange(reservation.id);
       await loadAssets();
-      setMessage(finalized.scanStatus === 'APPROVED' ? 'Image scanned and saved as a draft. Save and publish to make it public; the current public image remains active meanwhile.' : 'Image uploaded to private quarantine. It is not available publicly until scanning approves it; the current public image remains active meanwhile.');
-      setFile(null); setProgress(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Image replacement failed. The current published image remains active.');
+      setMessage(
+        finalized.scanStatus === "APPROVED"
+          ? "Image scanned and saved as a draft. Save and publish to make it public; the current public image remains active meanwhile."
+          : "Image uploaded to private quarantine. It is not available publicly until scanning approves it; the current public image remains active meanwhile.",
+      );
+      setFile(null);
       setProgress(null);
-    } finally { setBusy(false); }
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Image replacement failed. The current published image remains active.",
+      );
+      setProgress(null);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const retryScan = async (id: string) => {
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true);
+    setError("");
+    setMessage("");
     try {
-      const endpoint = listUrl.includes('/api/admin/platform/') ? `/api/admin/platform/branding-media/${encodeURIComponent(id)}/scan-retry` : `/api/seller/store-media/${encodeURIComponent(id)}/scan-retry`;
-      const result = await api<{ scanStatus: string; scanErrorCode?: string | null }>(endpoint, { method: 'POST', body: '{}' });
+      const endpoint = listUrl.includes("/api/admin/platform/")
+        ? `/api/admin/platform/branding-media/${encodeURIComponent(id)}/scan-retry`
+        : `/api/seller/store-media/${encodeURIComponent(id)}/scan-retry`;
+      const result = await api<{
+        scanStatus: string;
+        scanErrorCode?: string | null;
+      }>(endpoint, { method: "POST", body: "{}" });
       await loadAssets();
-      setMessage(result.scanStatus === 'APPROVED' ? 'The malware scan approved this asset. You can select it and publish it.' : result.scanErrorCode === 'MALWARE_DETECTED' ? 'The malware scanner rejected this asset. It remains private.' : 'The asset is still quarantined; the scanner is unavailable or has not completed.');
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'The media scan could not be retried.'); }
-    finally { setBusy(false); }
+      setMessage(
+        result.scanStatus === "APPROVED"
+          ? "The malware scan approved this asset. You can select it and publish it."
+          : result.scanErrorCode === "MALWARE_DETECTED"
+            ? "The malware scanner rejected this asset. It remains private."
+            : "The asset is still quarantined; the scanner is unavailable or has not completed.",
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The media scan could not be retried.",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const formatBytes = (bytes: number) => new Intl.NumberFormat().format(bytes);
   const activeId = publishedValue === undefined ? value : publishedValue;
-  return <fieldset className="brandingImageControl">
-    <legend>{label}</legend>
-    <p className="muted">Select a shared media asset or upload from this device. Device-only previews are private to this browser.</p>
-    {activeId ? <div className="brandingImagePreview"><span>Currently public</span><img src={previewUrl(activeId)} alt={`${label} currently published`} style={{ aspectRatio: `${ratio} / 1`, objectPosition: '50% 50%' }} /></div> : <p className="empty brandingImageEmpty">No image is currently published.</p>}
-    <label>{label} from media library<select aria-label={`${label} from media library`} value={value ?? ''} onChange={event => { const id = event.target.value || null; onChange(id); setMessage(id ? 'Draft image selected. Save and publish only after it is approved.' : 'Image removed from the draft. Save and publish to remove it publicly; the stored asset is retained.'); setError(''); }}>
-      <option value="">No image in draft</option>
-      {assets.filter(asset => asset.uploadStatus === 'COMPLETE' && asset.scanStatus !== 'REJECTED' && (asset.storageProvider === 'OBJECT' || asset.storageProvider === 'LOCAL') && (asset.kind === undefined || asset.kind === 'IMAGE')).map(asset => <option key={asset.id} value={asset.id}>{asset.originalName} · {asset.scanStatus.toLowerCase()}</option>)}
-    </select></label>
-    {value && value !== activeId && <div className="brandingImagePreview"><span>Draft preview · {assets.find(asset => asset.id === value)?.scanStatus.toLowerCase() ?? 'selected'}</span><img src={previewUrl(value)} alt={`${label} draft preview`} style={{ aspectRatio: `${ratio} / 1` }} /></div>}
-    {quota && usedBytes !== null && limitBytes !== null && <p className="muted">Store media usage: {formatBytes(usedBytes)} of {formatBytes(limitBytes)} bytes.</p>}
-    <label>Choose {label.toLowerCase()} image<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => pick(event.currentTarget.files?.[0])} /></label>
-    {file && candidateUrl && <div className="brandingImageCandidate">
-      <p>Crop preview</p><img src={candidateUrl} alt={`${label} crop preview`} style={{ aspectRatio: `${ratio} / 1`, objectPosition: `${focusX * 100}% ${focusY * 100}%` }} />
-      <label>Horizontal crop position<input type="range" min="0" max="1" step="0.01" value={focusX} onChange={event => setFocusX(Number(event.target.value))} /></label>
-      <label>Vertical crop position<input type="range" min="0" max="1" step="0.01" value={focusY} onChange={event => setFocusY(Number(event.target.value))} /></label>
-      <button type="button" className="primary" disabled={busy} onClick={() => void upload()}>{busy ? 'Uploading…' : `Upload ${label.toLowerCase()} replacement`}</button>
-      {progress !== null && <progress max="100" value={progress} aria-label="Image upload progress" />}
-    </div>}
-    <button type="button" disabled={!value || busy} onClick={() => { onChange(null); setMessage('Removed from draft only. Save and publish to remove the public image; stored media is retained for history and other references.'); setError(''); }}>Remove from draft</button>
-    {message && <p className="notice" role="status">{message}</p>}{error && <p className="notice" role="alert">{error}</p>}
-    {assets.filter(asset => asset.uploadStatus === 'COMPLETE' && asset.scanStatus === 'QUARANTINED').map(asset => <div className="brandingMediaScanStatus" key={asset.id}><p className="notice">{asset.originalName}: private, awaiting scan{asset.scanErrorCode ? ` (${asset.scanErrorCode.toLowerCase().replaceAll('_', ' ')})` : ''}. The current published image remains active.</p><button type="button" disabled={busy} onClick={() => void retryScan(asset.id)}>Retry malware scan</button></div>)}
-    {assets.some(asset => asset.id === value && asset.scanStatus !== 'APPROVED') && <p className="notice">This image is not approved yet. Publishing is blocked and the currently published image remains active.</p>}
-  </fieldset>;
+  return (
+    <fieldset className="brandingImageControl">
+      <legend>{label}</legend>
+      <p className="muted">
+        Select a shared media asset or upload from this device. Device-only
+        previews are private to this browser.
+      </p>
+      {activeId ? (
+        <div className="brandingImagePreview">
+          <span>Currently public</span>
+          <img
+            src={previewUrl(activeId)}
+            alt={`${label} currently published`}
+            style={{ aspectRatio: `${ratio} / 1`, objectPosition: "50% 50%" }}
+          />
+        </div>
+      ) : (
+        <p className="empty brandingImageEmpty">
+          No image is currently published.
+        </p>
+      )}
+      <label>
+        {label} from media library
+        <select
+          aria-label={`${label} from media library`}
+          value={value ?? ""}
+          onChange={(event) => {
+            const id = event.target.value || null;
+            onChange(id);
+            setMessage(
+              id
+                ? "Draft image selected. Save and publish only after it is approved."
+                : "Image removed from the draft. Save and publish to remove it publicly; the stored asset is retained.",
+            );
+            setError("");
+          }}
+        >
+          <option value="">No image in draft</option>
+          {assets
+            .filter(
+              (asset) =>
+                asset.uploadStatus === "COMPLETE" &&
+                asset.scanStatus !== "REJECTED" &&
+                (asset.storageProvider === "OBJECT" ||
+                  asset.storageProvider === "LOCAL") &&
+                (asset.kind === undefined || asset.kind === "IMAGE"),
+            )
+            .map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {asset.originalName} · {asset.scanStatus.toLowerCase()}
+              </option>
+            ))}
+        </select>
+      </label>
+      {value && value !== activeId && (
+        <div className="brandingImagePreview">
+          <span>
+            Draft preview ·{" "}
+            {assets
+              .find((asset) => asset.id === value)
+              ?.scanStatus.toLowerCase() ?? "selected"}
+          </span>
+          <img
+            src={previewUrl(value)}
+            alt={`${label} draft preview`}
+            style={{ aspectRatio: `${ratio} / 1` }}
+          />
+        </div>
+      )}
+      {quota && usedBytes !== null && limitBytes !== null && (
+        <p className="muted">
+          Store media usage: {formatBytes(usedBytes)} of{" "}
+          {formatBytes(limitBytes)} bytes.
+        </p>
+      )}
+      <label>
+        Choose {label.toLowerCase()} image
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={(event) => pick(event.currentTarget.files?.[0])}
+        />
+      </label>
+      {file && candidateUrl && (
+        <div className="brandingImageCandidate">
+          <p>Crop preview</p>
+          <img
+            src={candidateUrl}
+            alt={`${label} crop preview`}
+            style={{
+              aspectRatio: `${ratio} / 1`,
+              objectPosition: `${focusX * 100}% ${focusY * 100}%`,
+            }}
+          />
+          <label>
+            Horizontal crop position
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={focusX}
+              onChange={(event) => setFocusX(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Vertical crop position
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={focusY}
+              onChange={(event) => setFocusY(Number(event.target.value))}
+            />
+          </label>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void upload()}
+          >
+            {busy ? "Uploading…" : `Upload ${label.toLowerCase()} replacement`}
+          </button>
+          {progress !== null && (
+            <progress
+              max="100"
+              value={progress}
+              aria-label="Image upload progress"
+            />
+          )}
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={!value || busy}
+        onClick={() => {
+          onChange(null);
+          setMessage(
+            "Removed from draft only. Save and publish to remove the public image; stored media is retained for history and other references.",
+          );
+          setError("");
+        }}
+      >
+        Remove from draft
+      </button>
+      {message && (
+        <p className="notice" role="status">
+          {message}
+        </p>
+      )}
+      {error && (
+        <p className="notice" role="alert">
+          {error}
+        </p>
+      )}
+      {assets
+        .filter(
+          (asset) =>
+            asset.uploadStatus === "COMPLETE" &&
+            asset.scanStatus === "QUARANTINED",
+        )
+        .map((asset) => (
+          <div className="brandingMediaScanStatus" key={asset.id}>
+            <p className="notice">
+              {asset.originalName}: private, awaiting scan
+              {asset.scanErrorCode
+                ? ` (${asset.scanErrorCode.toLowerCase().replaceAll("_", " ")})`
+                : ""}
+              . The current published image remains active.
+            </p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void retryScan(asset.id)}
+            >
+              Retry malware scan
+            </button>
+          </div>
+        ))}
+      {assets.some(
+        (asset) => asset.id === value && asset.scanStatus !== "APPROVED",
+      ) && (
+        <p className="notice">
+          This image is not approved yet. Publishing is blocked and the
+          currently published image remains active.
+        </p>
+      )}
+    </fieldset>
+  );
 }
