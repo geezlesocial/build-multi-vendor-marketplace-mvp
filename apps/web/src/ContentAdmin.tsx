@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 
 type ContentItem = { id: string; title: string; slug: string; status: string; updatedAt: string; publishedAt?: string | null };
 type MediaAsset = { id: string; originalName: string; kind: 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'CAPTION'; sizeBytes: number; scanStatus: string; scanErrorCode: string | null; uploadStatus: string; storageProvider: string };
-type ApiBody = { error?: string; [key: string]: unknown };
 
 async function contentApi<T>(path: string, options: RequestInit = {}) {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];

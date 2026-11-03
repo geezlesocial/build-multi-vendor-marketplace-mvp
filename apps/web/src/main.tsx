@@ -3,35 +3,21 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import './DashboardPolish.css';
 import './currency-location.css';
+import './store-themes.css';
 import './checkout-discount.css';
-import { ContentAdmin } from './ContentAdmin.js';
-import { AffiliateAdmin } from './AffiliateAdmin.js';
-import { AffiliateDashboard } from './AffiliateDashboard.js';
-import { PlatformAdmin } from './PlatformAdmin.js';
-import { SiteChromeBuilder } from './SiteChromeBuilder.js';
-import { SellerPlatform } from './SellerPlatform.js';
-import { SellerStorePlan } from './SellerStorePlan.js';
-import { SellerStoreContent } from './SellerStoreContent.js';
-import { SellerStoreGrowth } from './SellerStoreGrowth.js';
-import { SellerCommissionStatement, SellerStoreCurrency } from './SellerStoreCurrency.js';
-import { AdminCurrencyCommission } from './AdminCurrencyCommission.js';
-import { Storefront } from './Storefront.js';
-import { StoreEmailAction } from './StoreEmailAction.js';
-import { EmailVerificationAction } from './EmailVerificationAction.js';
-import { Dashboard } from './Dashboard.js';
 import { MarketplaceHome } from './MarketplaceHome.js';
-import { MarketplaceCategory } from './MarketplaceCategory.js';
-import { Favorites } from './Favorites.js';
-import { ProductPage } from './ProductPage.js';
-import { JimaKnowledgeArticle } from './JimaKnowledgeArticle.js';
-import { Settings } from './Settings.js';
-import { AdminWallet } from './AdminWallet.js';
-import { MarketplaceAds } from './MarketplaceAds.js';
-import { ClubCoins, Wallet } from './Wallet.js';
 import { AppShell } from './AppShell.js';
 import { SessionProvider, useSession, type SessionUser } from './session.js';
 import { formatMinor } from './money.js';
-import { LiveEmbedPage, LivePublicPage } from './LivePublicPage.js';
+import {
+  AdminCurrencyCommission, AdminWallet, AffiliateAdmin, AffiliateDashboard,
+  ClubCoins, ContentAdmin, Dashboard, EmailVerificationAction, Favorites,
+  JimaKnowledgeArticle, LiveEmbedPage, LivePublicPage, MarketplaceAds,
+  MarketplaceCategory, PlatformAdmin, ProductPage, SellerCommissionStatement,
+  SellerPlatform, SellerStoreContent, SellerStoreCurrency, SellerStoreGrowth,
+  SellerStorePlan, Settings, SiteChromeBuilder, StoreEmailAction, Storefront,
+  StoreThemeStudio, Wallet,
+} from './lazy-routes.js';
 
 type User = SessionUser;
 type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; sellerId?: string | null; seller?: { store?: { name: string } }; category?: { name: string }; productType?: { id: string; name: string; requiresShipping: boolean } };
@@ -54,14 +40,22 @@ function App() {
   const { user, setUser } = useSession();
   const [settings, setSettings] = useState<Settings>({ multiVendorEnabled: true, paymentMethods: [], liveShopping: { enabled: false, deploymentGate: false, reason: 'Live shopping is not configured.' } });
   const [products, setProducts] = useState<Product[]>([]);
-  const [query, setQuery] = useState('');
   const [cart, setCart] = useState<CartState>({ items: [] });
   const [view, setView] = useState<'home' | 'checkout' | 'login' | 'dashboard' | 'pos' | 'live' | 'affiliate'>(() => window.location.pathname === '/checkout' ? 'checkout' : window.location.pathname === '/pos' ? 'pos' : new URLSearchParams(window.location.search).has('auth') ? 'login' : 'home');
   const [message, setMessage] = useState('');
 
   const loadCart = async () => { const next = normalizeCart(await api<{ items: CartApiItem[] }>('/api/cart')); setCart(next); window.dispatchEvent(new Event('marketplace:cart-changed')); };
-  const load = async () => { const [publicSettings, catalog] = await Promise.all([api<Settings>('/api/settings/public'), api<{ items: Product[] }>(`/api/products?q=${encodeURIComponent(query)}`)]); setSettings(publicSettings); setProducts(catalog.items); };
-  useEffect(() => { load().catch(e => setMessage(e.message)); }, [query]);
+  useEffect(() => {
+    let active = true;
+    Promise.all([api<Settings>('/api/settings/public'), api<{ items: Product[] }>('/api/products?q=')])
+      .then(([publicSettings, catalog]) => {
+        if (!active) return;
+        setSettings(publicSettings);
+        setProducts(catalog.items);
+      })
+      .catch(error => { if (active) setMessage((error as Error).message); });
+    return () => { active = false; };
+  }, []);
   useEffect(() => { if (user) void loadCart().catch(e => setMessage(e.message)); else setCart({ items: [] }); }, [user?.id]);
   const cartTotal = useMemo(() => cart.items.reduce((sum, item) => sum + itemPrice(item) * item.quantity, 0), [cart]);
   const add = async (productId: string, quantity = 1) => { if (!user) { setView('login'); setMessage('Sign in to add items to your cart.'); return; } try { await api('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId, quantity }) }); setMessage('Added to cart'); await loadCart(); } catch (e) { setMessage((e as Error).message); } };
@@ -78,7 +72,6 @@ function App() {
   </>;
 }
 
-function Home({ products, query, setQuery, add, settings }: { products: Product[]; query: string; setQuery: (v: string) => void; add: (id: string) => void; settings: Settings }) { return <section className="page"><div className="hero"><p className="eyebrow">A calmer way to shop local</p><h1>Find good things from independent sellers.</h1><p>Browse approved products, compare stores, and check out securely with the payment methods the marketplace currently supports.</p><div className="heroPills"><span>Server-validated stock</span><span>Clear order status</span><span>COD available when enabled</span></div></div><div className="toolbar"><label className="search"><span>Search</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search products" /></label><span className="muted">{settings.multiVendorEnabled ? 'Multi-vendor mode is on' : 'Platform products only'}</span></div><div className="grid">{products.map(p => <article className="card" key={p.id}><div className="productMark">{p.name.slice(0, 1)}</div><div className="cardBody"><p className="eyebrow">{p.category?.name ?? 'Featured'} · {p.seller?.store?.name ?? 'Platform store'}</p><h2>{p.name}</h2><p>{p.description}</p><div className="cardBottom"><strong>{money(p.salePriceMinor ?? p.priceMinor, p.currency)}</strong><button onClick={() => add(p.id)} disabled={p.availableStock < 1}>Add to cart</button></div>{p.salePriceMinor != null && <small><del>{money(p.priceMinor, p.currency)}</del> · Sale price</small>}<small>{p.availableStock} in stock</small></div></article>)}</div>{products.length === 0 && <div className="empty">No approved products match that search.</div>}</section>; }
 
 type SocialProvider = { id: string; label: string; logoUrl: string | null };
 type AuthPresentation = { signInHeading: string; signInText: string; signUpHeading: string; signUpText: string; logoUrl: string | null; layout: 'CENTERED' | 'SPLIT' | 'EDITORIAL'; motion: 'NONE' | 'FADE' | 'SLIDE'; accentColor: string };
@@ -468,18 +461,20 @@ function PageRouter() {
   const categoryPath = path.match(/^\/category\/([^/]+)\/?$/);
   const productPath = path.match(/^\/products\/([^/]+)\/?$/);
   const jimaHelpPath = path.match(/^\/help\/jima\/([^/]+)\/?$/);
-  return storeContentPath ? <SellerStoreContent /> : storeGrowthPath ? <SellerStoreGrowth /> : path === '/email/confirm' ? <StoreEmailAction kind="confirm" /> : path === '/email/unsubscribe' ? <StoreEmailAction kind="unsubscribe" /> : path === '/seller/currency' ? <SellerStoreCurrency /> : path === '/seller/commissions' ? <SellerCommissionStatement /> : path === '/seller/site-chrome' ? <SiteChromeBuilder scope="store" /> : path === '/admin/currencies' ? <AdminCurrencyCommission section="currencies" /> : path === '/admin/commissions' ? <AdminCurrencyCommission section="commissions" /> : path === '/dashboard' ? <Dashboard /> : path === '/ads' ? <MarketplaceAds /> : path === '/admin/ads' ? <MarketplaceAds admin /> : path === '/favorites' ? <Favorites /> : path === '/settings' ? <Settings /> : path === '/wallet' ? <Wallet /> : path === '/club-coins' ? <ClubCoins /> : path === '/admin/wallet' ? <AdminWallet /> : path.startsWith('/admin/content') ? <ContentAdmin /> : path.startsWith('/admin/platform') ? <PlatformAdmin /> : path.startsWith('/seller/plan') ? <SellerStorePlan /> : path.startsWith('/seller/platform') ? <SellerPlatform /> : path.startsWith('/affiliate') ? <AffiliateDashboard /> : jimaHelpPath ? <JimaKnowledgeArticle id={decodeURIComponent(jimaHelpPath[1])} /> : categoryPath ? <MarketplaceCategory slug={decodeURIComponent(categoryPath[1])} /> : storePath ? <Storefront slug={decodeURIComponent(storePath[1])} /> : productPath ? <ProductPage id={decodeURIComponent(productPath[1])} /> : path === '/' ? <DomainRootRoute /> : <App />;
+  return storeContentPath ? <SellerStoreContent /> : storeGrowthPath ? <SellerStoreGrowth /> : path === '/email/confirm' ? <StoreEmailAction kind="confirm" /> : path === '/email/unsubscribe' ? <StoreEmailAction kind="unsubscribe" /> : path === '/seller/currency' ? <SellerStoreCurrency /> : path === '/seller/commissions' ? <SellerCommissionStatement /> : path === '/seller/themes' ? <StoreThemeStudio /> : path === '/seller/site-chrome' ? <SiteChromeBuilder scope="store" /> : path === '/admin/themes' ? <PlatformAdmin /> : path === '/admin/currencies' ? <AdminCurrencyCommission section="currencies" /> : path === '/admin/commissions' ? <AdminCurrencyCommission section="commissions" /> : path === '/dashboard' ? <Dashboard /> : path === '/ads' ? <MarketplaceAds /> : path === '/admin/ads' ? <MarketplaceAds admin /> : path === '/favorites' ? <Favorites /> : path === '/settings' ? <Settings /> : path === '/wallet' ? <Wallet /> : path === '/club-coins' ? <ClubCoins /> : path === '/admin/wallet' ? <AdminWallet /> : path.startsWith('/admin/content') ? <ContentAdmin /> : path.startsWith('/admin/platform') ? <PlatformAdmin /> : path.startsWith('/seller/plan') ? <SellerStorePlan /> : path.startsWith('/seller/platform') ? <SellerPlatform /> : path.startsWith('/affiliate') ? <AffiliateDashboard /> : jimaHelpPath ? <JimaKnowledgeArticle id={decodeURIComponent(jimaHelpPath[1])} /> : categoryPath ? <MarketplaceCategory slug={decodeURIComponent(categoryPath[1])} /> : storePath ? <Storefront slug={decodeURIComponent(storePath[1])} /> : productPath ? <ProductPage id={decodeURIComponent(productPath[1])} /> : path === '/' ? <DomainRootRoute /> : <App />;
 }
 function RoutedPage() {
   const liveRoute = window.location.pathname.match(/^\/live\/([^/]+)\/?$/);
   if (liveRoute) return <LivePublicPage sessionId={safePathSegment(liveRoute[1]!)} />;
   return window.location.pathname === '/email/verify' ? <EmailVerificationAction /> : <PageRouter />;
 }
+function RouteLoading() { return <main className="shellLoading" role="status"><p className="eyebrow">Marketplace</p><h1>Opening your page…</h1></main>; }
+function RoutedPageBoundary() { return <React.Suspense fallback={<RouteLoading />}><RoutedPage /></React.Suspense>; }
 function safePathSegment(value: string) { try { return decodeURIComponent(value); } catch { return ''; } }
 const liveEmbedRoute = window.location.pathname.match(/^\/live\/([^/]+)\/embed\/?$/);
 const liveCheckoutEmbedRoute = window.location.pathname === '/checkout'
   && new URLSearchParams(window.location.search).get('source') === 'live-shopping'
   && new URLSearchParams(window.location.search).get('embed') === '1';
 createRoot(document.getElementById('root')!).render(<React.StrictMode>{liveEmbedRoute
-  ? <LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} />
-  : <SessionProvider>{liveCheckoutEmbedRoute ? <RoutedPage /> : <AppShell><RoutedPage /></AppShell>}</SessionProvider>}</React.StrictMode>);
+  ? <React.Suspense fallback={<RouteLoading />}><LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} /></React.Suspense>
+  : <SessionProvider>{liveCheckoutEmbedRoute ? <RoutedPageBoundary /> : <AppShell><RoutedPageBoundary /></AppShell>}</SessionProvider>}</React.StrictMode>);

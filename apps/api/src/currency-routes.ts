@@ -32,6 +32,11 @@ async function currencyManager(user: ReturnType<typeof actor>) {
 
 export async function latestDisplayRate(baseCurrency: string, quoteCurrency: string, storeId?: string, now = new Date()) {
   if (baseCurrency === quoteCurrency) return { rate: '1', provider: 'IDENTITY', sourceDate: now.toISOString().slice(0, 10), fetchedAt: now.toISOString(), freshness: 'fresh' as const };
+  // Provider observation dates are calendar dates and can temporarily lead UTC
+  // (for example, when a provider publishes using a later local timezone). Never
+  // let a future observation or fetch mask an older usable rate.
+  const latestUsableSourceDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const usableSnapshotTime = { sourceDate: { lte: latestUsableSourceDate }, fetchedAt: { lte: now } };
   const manual = await prisma.manualExchangeRateVersion.findFirst({ where: {
     baseCurrency, quoteCurrency, effectiveFrom: { lte: now }, OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }],
     ...(storeId ? { storeId } : { storeId: null })
@@ -41,7 +46,7 @@ export async function latestDisplayRate(baseCurrency: string, quoteCurrency: str
     const globalManual = await prisma.manualExchangeRateVersion.findFirst({ where: { storeId: null, baseCurrency, quoteCurrency, effectiveFrom: { lte: now }, OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }] }, orderBy: [{ version: 'desc' }, { effectiveFrom: 'desc' }] });
     if (globalManual) return { rate: globalManual.rate.toString(), provider: 'MANUAL', sourceDate: globalManual.effectiveFrom.toISOString().slice(0, 10), fetchedAt: globalManual.createdAt.toISOString(), freshness: 'manual' as const };
   }
-  const automatic = await prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency, quoteCurrency }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] });
+  const automatic = await prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency, quoteCurrency, ...usableSnapshotTime }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] });
   const maxAge = env.FX_REFERENCE_MAX_AGE_HOURS * 60 * 60 * 1000;
   const automaticFresh = automatic && isRateFresh(automatic.fetchedAt, now, maxAge, automatic.sourceDate);
   if (automaticFresh) return { rate: automatic.rate.toString(), provider: automatic.provider, sourceDate: automatic.sourceDate.toISOString().slice(0, 10), fetchedAt: automatic.fetchedAt.toISOString(), freshness: 'fresh' as const };
@@ -50,8 +55,8 @@ export async function latestDisplayRate(baseCurrency: string, quoteCurrency: str
   // cross-rates from those legs so non-USD listings can still show an estimate.
   if (baseCurrency !== 'USD' || quoteCurrency !== 'USD') {
     const [baseLeg, quoteLeg] = await Promise.all([
-      baseCurrency === 'USD' ? null : prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency: 'USD', quoteCurrency: baseCurrency }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] }),
-      quoteCurrency === 'USD' ? null : prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency: 'USD', quoteCurrency }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] })
+      baseCurrency === 'USD' ? null : prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency: 'USD', quoteCurrency: baseCurrency, ...usableSnapshotTime }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] }),
+      quoteCurrency === 'USD' ? null : prisma.exchangeRateSnapshot.findFirst({ where: { baseCurrency: 'USD', quoteCurrency, ...usableSnapshotTime }, orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }] })
     ]);
     if ((baseCurrency === 'USD' || baseLeg) && (quoteCurrency === 'USD' || quoteLeg)) {
       const legs = [baseLeg, quoteLeg].filter((leg): leg is NonNullable<typeof leg> => leg !== null);
@@ -107,7 +112,12 @@ export async function availableGlobalDisplayCurrencies() {
       select: { quoteCurrency: true }
     }),
     prisma.exchangeRateSnapshot.findMany({
-      where: { baseCurrency: env.CURRENCY, quoteCurrency: { in: quoteCurrencies } },
+      where: {
+        baseCurrency: env.CURRENCY,
+        quoteCurrency: { in: quoteCurrencies },
+        sourceDate: { lte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) },
+        fetchedAt: { lte: now }
+      },
       orderBy: [{ sourceDate: 'desc' }, { fetchedAt: 'desc' }],
       select: { quoteCurrency: true, fetchedAt: true, sourceDate: true }
     })

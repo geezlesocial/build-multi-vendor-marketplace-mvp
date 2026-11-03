@@ -22,7 +22,14 @@ RUN npm run build --workspace=apps/web
 FROM ghcr.io/nginx/nginx-unprivileged:1.31.8-alpine3.24@sha256:03df07e5931f8374d440bd62243a5ce9b24719715ef6fc4c9c626a5f1dbef417
 ENV API_UPSTREAM=http://api:4000 DNS_RESOLVER=127.0.0.11
 USER root
-RUN apk add --no-cache ca-certificates gettext-envsubst
+# Alpine v3.24 currently ships vulnerable libexpat 2.9.0-r0. Until its stable
+# repository carries the upstream fix, use the signed, exact Alpine Edge build.
+# For the x86_64 CI image, the signed package depends only on musl and keeps
+# the libexpat.so.1 SONAME required by existing consumers.
+RUN apk add --no-cache \
+      --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main \
+      libexpat=2.10.0-r0 \
+    && apk add --no-cache ca-certificates gettext-envsubst
 USER 101
 COPY --from=build --chown=101:101 /workspace/apps/web/dist /usr/share/nginx/html
 COPY infra/containers/nginx/nginx.conf.template /etc/marketplace/nginx.conf.template
