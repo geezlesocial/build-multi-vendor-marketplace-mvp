@@ -11,7 +11,6 @@
     "apps/api/src/store-theme-routes.ts": 562,
     "apps/api/src/wallet-funding.ts": 839,
     "apps/api/src/wallet-routes.ts": 677,
-    "apps/web/src/Dashboard.tsx": 662,
     "apps/web/src/LiveShoppableProductDialog.tsx": 510,
     "apps/web/src/Storefront.tsx": 907,
     "apps/web/src/StoreThemesAdmin.tsx": 1057,
