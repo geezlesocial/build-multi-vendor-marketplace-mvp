@@ -25,9 +25,9 @@ import {
   StoreThemePreset,
 } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
+import { resolve } from "node:path";
 import { createTestPrismaClient } from "../scripts/prisma-test-client.mjs";
 import { validateE2EDatabaseURL } from "../scripts/e2e-database-url.mjs";
 
@@ -827,17 +827,15 @@ test("paid storefront themes are tenant-scoped, revisioned, and fall back safely
 test("theme preview images are admin-managed, isolated, persistent, and refresh in seller studio", async ({
   browser,
   page,
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000);
   const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
-  const customAssetId = randomUUID();
+  const realClamAv = process.env.E2E_REAL_CLAMAV === "true";
   const iconRoot = process.env.E2E_CONTENT_STORAGE_DIR;
   if (!iconRoot)
     throw new Error(
       "E2E_CONTENT_STORAGE_DIR is required for theme preview fixtures.",
     );
-  const storageKey = `theme-preview-e2e/${customAssetId}/approved-preview.png`;
-  const storagePath = resolve(iconRoot, storageKey);
   const imageBytes = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAYAAAAMJL+VAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAJUlEQVQ4jWPwKI/6T0vMMGqBx2gQeYymIo/RjFY+WlSUD/LSFAAuzCQu+qkxfwAAAAB5ErkJggg==",
     "base64",
@@ -850,7 +848,7 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
     where: { email: "admin.local@example.test" },
     select: { id: true },
   });
-  let quarantinedAssetId: string | null = null;
+  let uploadedAssetId: string | null = null;
   let invalidAssetId: string | null = null;
   let sellerContext: BrowserContext | null = null;
   let settingsChanged = false;
@@ -954,6 +952,31 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
       expect(assetResponse.headers()["content-type"]).toContain("image/webp");
     }
 
+    sellerContext = await browser.newContext();
+    const sellerPage = await sellerContext.newPage();
+    await login(sellerPage, "seller.local@example.test");
+    await sellerPage.goto("/seller/themes");
+    const editorialSellerCard = sellerPage.locator(".themeGalleryCard").filter({
+      has: sellerPage.getByRole("heading", {
+        name: "Editorial",
+        exact: true,
+      }),
+    });
+    const editorialSellerImage =
+      editorialSellerCard.locator(".themeArtwork img");
+    await expect(editorialSellerImage).toHaveAttribute(
+      "src",
+      "/theme-previews/editorial.webp",
+    );
+    await sellerPage
+      .getByLabel("Hero headline")
+      .fill(`Unsaved seller edit ${suffix}`);
+    const sellerThemeBefore = await sellerPage.request.get(
+      "/api/seller/store-theme",
+    );
+    expect(sellerThemeBefore.ok()).toBeTruthy();
+    const sellerLogoBefore = (await sellerThemeBefore.json()).draft.logoMediaId;
+
     await page.goto("/admin/platform");
     await page
       .getByRole("button", { name: "Themes & templates", exact: true })
@@ -979,146 +1002,167 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
       "src",
       /^blob:/,
     );
+    const adminSnapshot = await (
+      await page.request.get("/api/admin/store-themes")
+    ).json();
+    const reservationResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/preview-media/uploads"),
+    );
+    const finalizeResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        /\/branding-media\/[^/]+\/finalize/.test(response.url()),
+    );
+    if (realClamAv) settingsChanged = true;
     await editorialCard
       .getByRole("button", { name: "Upload & publish Editorial preview" })
       .click();
-    await expect(
-      page.locator('p.notice[role="status"][aria-live="polite"]'),
-    ).toContainText("safely quarantined", { timeout: 30_000 });
-    await expect(
-      editorialCard.getByRole("button", { name: "Retry scan" }),
-    ).toBeVisible();
-    const pendingList = await (
+    const reservationResponse = await reservationResponsePromise;
+    expect(reservationResponse.status()).toBe(201);
+    const reservation = await reservationResponse.json();
+    uploadedAssetId = reservation.id;
+    expect(reservation).toMatchObject({
+      scanStatus: "QUARANTINED",
+      publicAfterUpload: false,
+    });
+    const finalizeResponse = await finalizeResponsePromise;
+    expect(finalizeResponse.ok(), await finalizeResponse.text()).toBeTruthy();
+    const finalized = await finalizeResponse.json();
+    expect(finalized.uploadStatus).toBe("COMPLETE");
+
+    const adminList = await (
       await page.request.get("/api/admin/store-themes")
     ).json();
-    const pending = pendingList.previewMedia.find(
-      (asset: { originalName: string }) =>
-        asset.originalName === `EDITORIAL--e2e-editorial-${suffix}.png`,
+    const uploaded = adminList.previewMedia.find(
+      (asset: { id: string }) => asset.id === uploadedAssetId,
     );
-    expect(pending).toBeTruthy();
-    quarantinedAssetId = pending.id;
-    expect(
-      (
-        await page.request.get(
-          `/content-media/${encodeURIComponent(pending.id)}`,
-        )
-      ).status(),
-    ).toBe(404);
-    await page.reload();
-    const reloadedEditorialCard = page.locator(".themeAdminCard").filter({
-      has: page.getByRole("heading", { name: "Editorial", exact: true }),
-    });
-    await expect(
-      reloadedEditorialCard.getByRole("button", { name: "Retry scan" }),
-    ).toBeVisible();
-    await reloadedEditorialCard
-      .getByRole("button", { name: "Retry scan" })
-      .click();
-    await expect(
-      page.locator('p.notice[role="status"][aria-live="polite"]'),
-    ).toContainText("remains private in quarantine");
-
-    mkdirSync(dirname(storagePath), { recursive: true });
-    writeFileSync(storagePath, imageBytes, { flag: "wx" });
-    await prisma.mediaAsset.create({
-      data: {
-        id: customAssetId,
-        storageKey,
-        originalName: `CLASSIC--approved-${suffix}.png`,
-        safeName: `approved-${suffix}.png`,
-        kind: MediaKind.IMAGE,
-        detectedMime: "image/png",
-        sizeBytes: imageBytes.length,
-        width: 24,
-        height: 16,
-        checksum: createHash("sha256").update(imageBytes).digest("hex"),
-        uploaderId: admin.id,
-        purpose: MediaPurpose.THEME_PREVIEW,
-        storageProvider: MediaStorageProvider.LOCAL,
-        uploadStatus: MediaUploadStatus.COMPLETE,
-        scanStatus: MediaScanStatus.APPROVED,
-        scanCompletedAt: new Date(),
-        scannerProvider: "synthetic-e2e",
+    expect(uploaded).toBeTruthy();
+    const assetRecord = await prisma.mediaAsset.findUnique({
+      where: { id: uploadedAssetId! },
+      select: {
+        uploadStatus: true,
+        scanStatus: true,
+        scanAttemptCount: true,
+        scanCompletedAt: true,
+        scannerProvider: true,
       },
     });
+    expect(assetRecord?.uploadStatus).toBe(MediaUploadStatus.COMPLETE);
 
-    sellerContext = await browser.newContext();
-    const sellerPage = await sellerContext.newPage();
-    await login(sellerPage, "seller.local@example.test");
-    await sellerPage.goto("/seller/themes");
-    const classicCard = sellerPage.locator(".themeGalleryCard").filter({
-      has: sellerPage.getByRole("heading", { name: "Classic", exact: true }),
+    if (!realClamAv) {
+      expect(finalized.scanStatus).toBe("QUARANTINED");
+      expect(assetRecord?.scanStatus).toBe(MediaScanStatus.QUARANTINED);
+      await expect(
+        page.locator('p.notice[role="status"][aria-live="polite"]'),
+      ).toContainText("safely quarantined", { timeout: 30_000 });
+      await expect(
+        editorialCard.getByRole("button", { name: "Retry scan" }),
+      ).toBeVisible();
+      expect(
+        (
+          await page.request.get(
+            `/content-media/${encodeURIComponent(uploadedAssetId!)}`,
+          )
+        ).status(),
+      ).toBe(404);
+      await page.reload();
+      const reloadedEditorialCard = page.locator(".themeAdminCard").filter({
+        has: page.getByRole("heading", { name: "Editorial", exact: true }),
+      });
+      await expect(
+        reloadedEditorialCard.getByRole("button", { name: "Retry scan" }),
+      ).toBeVisible();
+      await reloadedEditorialCard
+        .getByRole("button", { name: "Retry scan" })
+        .click();
+      await expect(
+        page.locator('p.notice[role="status"][aria-live="polite"]'),
+      ).toContainText("remains private in quarantine");
+      await expect(editorialSellerImage).toHaveAttribute(
+        "src",
+        "/theme-previews/editorial.webp",
+      );
+      await expect(sellerPage.getByLabel("Hero headline")).toHaveValue(
+        `Unsaved seller edit ${suffix}`,
+      );
+      const unchangedSellerTheme = await sellerPage.request.get(
+        "/api/seller/store-theme",
+      );
+      expect((await unchangedSellerTheme.json()).draft.logoMediaId).toBe(
+        sellerLogoBefore,
+      );
+      return;
+    }
+
+    expect(finalized.scanStatus).toBe("APPROVED");
+    expect(assetRecord).toMatchObject({
+      uploadStatus: MediaUploadStatus.COMPLETE,
+      scanStatus: MediaScanStatus.APPROVED,
+      scannerProvider: "clamav",
     });
-    const classicImage = classicCard.locator(".themeArtwork img");
-    await expect(classicImage).toHaveAttribute(
-      "src",
-      "/theme-previews/classic.webp",
-    );
-    await sellerPage
-      .getByLabel("Hero headline")
-      .fill(`Unsaved seller edit ${suffix}`);
-    const sellerThemeBefore = await sellerPage.request.get(
-      "/api/seller/store-theme",
-    );
-    expect(sellerThemeBefore.ok()).toBeTruthy();
-    const sellerLogoBefore = (await sellerThemeBefore.json()).draft.logoMediaId;
-
-    await page.reload();
-    await page
-      .getByRole("button", { name: "Themes & templates", exact: true })
-      .click();
-    const classicAdminCard = page.locator(".themeAdminCard").filter({
-      has: page.getByRole("heading", { name: "Classic", exact: true }),
+    expect(assetRecord?.scanAttemptCount).toBeGreaterThan(0);
+    expect(assetRecord?.scanCompletedAt).toBeInstanceOf(Date);
+    const scanAudit = await prisma.auditLog.findFirst({
+      where: {
+        actorId: admin.id,
+        action: "MEDIA_SCAN_APPROVED",
+        entityId: uploadedAssetId!,
+      },
+      select: { metadata: true },
+    });
+    expect(scanAudit?.metadata).toMatchObject({
+      scanner: "clamav",
+      result: "CLEAN",
     });
     await expect(
-      classicAdminCard.getByRole("button", {
-        name: "Publish approved preview",
-      }),
-    ).toBeVisible();
-    const adminSnapshot = await (
+      page.locator('p.notice[role="status"][aria-live="polite"]'),
+    ).toContainText(/preview updated/i, { timeout: 30_000 });
+    await expect(editorialCard.locator(".themeArtwork img")).toHaveAttribute(
+      "src",
+      `/content-media/${uploadedAssetId}`,
+    );
+    const catalogAfterPublish = await (
+      await page.request.get("/api/store-themes/catalog")
+    ).json();
+    const publishedPreview = catalogAfterPublish.themes.find(
+      (theme: { id: string }) => theme.id === "EDITORIAL",
+    );
+    expect(publishedPreview.previewImageUrl).toBe(
+      `/content-media/${uploadedAssetId}`,
+    );
+    const publicImage = await page.request.get(
+      publishedPreview.previewImageUrl,
+    );
+    expect(publicImage.ok()).toBeTruthy();
+    expect(publicImage.headers()["content-type"]).toContain("image/webp");
+    await testInfo.attach("admin-preview-published", {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
+
+    const publishedAdminSnapshot = await (
       await page.request.get("/api/admin/store-themes")
     ).json();
     const headers = await csrf(page.context());
     const wrongTheme = await page.request.put(
-      "/api/admin/store-themes/EDITORIAL/preview-image",
+      "/api/admin/store-themes/CLASSIC/preview-image",
       {
         data: {
-          assetId: customAssetId,
-          expectedUpdatedAt: adminSnapshot.configUpdatedAt,
+          assetId: uploadedAssetId,
+          expectedUpdatedAt: publishedAdminSnapshot.configUpdatedAt,
           reason: "Reject cross-theme preview assignment",
         },
         headers,
       },
     );
     expect(wrongTheme.status()).toBe(400);
-    settingsChanged = true;
-    await classicAdminCard
-      .getByRole("button", { name: "Publish approved preview" })
-      .click();
-    await expect(classicAdminCard.locator(".themeArtwork img")).toHaveAttribute(
-      "src",
-      `/content-media/${customAssetId}`,
-    );
-    const catalogAfterPublish = await (
-      await page.request.get("/api/store-themes/catalog")
-    ).json();
-    const publishedPreview = catalogAfterPublish.themes.find(
-      (theme: { id: string }) => theme.id === "CLASSIC",
-    );
-    expect(publishedPreview.previewImageUrl).toBe(
-      `/content-media/${customAssetId}`,
-    );
-    const publicImage = await page.request.get(
-      publishedPreview.previewImageUrl,
-    );
-    expect(publicImage.ok()).toBeTruthy();
-    expect(publicImage.headers()["content-type"]).toContain("image/png");
-
     const staleUpdate = await page.request.put(
-      "/api/admin/store-themes/CLASSIC/preview-image",
+      "/api/admin/store-themes/EDITORIAL/preview-image",
       {
         data: {
-          assetId: customAssetId,
+          assetId: uploadedAssetId,
           expectedUpdatedAt: adminSnapshot.configUpdatedAt,
           reason: "Reject stale theme preview update",
         },
@@ -1126,7 +1170,7 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
       },
     );
     expect(staleUpdate.status()).toBe(409);
-    const auditEntry = await prisma.auditLog.findFirst({
+    const publishAudit = await prisma.auditLog.findFirst({
       where: {
         actorId: admin.id,
         action: "STORE_THEME_CATALOG_UPDATED",
@@ -1135,16 +1179,16 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
       orderBy: { createdAt: "desc" },
       select: { metadata: true },
     });
-    expect(auditEntry?.metadata).toMatchObject({
-      preset: "CLASSIC",
+    expect(publishAudit?.metadata).toMatchObject({
+      preset: "EDITORIAL",
       previousAssetId: null,
-      assetId: customAssetId,
+      assetId: uploadedAssetId,
       change: "THEME_PREVIEW_IMAGE",
     });
 
-    await expect(classicImage).toHaveAttribute(
+    await expect(editorialSellerImage).toHaveAttribute(
       "src",
-      `/content-media/${customAssetId}`,
+      `/content-media/${uploadedAssetId}`,
       { timeout: 25_000 },
     );
     await expect(sellerPage.getByLabel("Hero headline")).toHaveValue(
@@ -1156,27 +1200,78 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
     expect((await sellerThemeAfter.json()).draft.logoMediaId).toBe(
       sellerLogoBefore,
     );
+    await testInfo.attach("seller-preview-refreshed-draft-preserved", {
+      body: await sellerPage.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
 
     await page.reload();
     await page
       .getByRole("button", { name: "Themes & templates", exact: true })
       .click();
-    await expect(classicAdminCard.locator(".themeArtwork img")).toHaveAttribute(
-      "src",
-      `/content-media/${customAssetId}`,
-    );
+    const restoredEditorialCard = page.locator(".themeAdminCard").filter({
+      has: page.getByRole("heading", { name: "Editorial", exact: true }),
+    });
+    await expect(
+      restoredEditorialCard.locator(".themeArtwork img"),
+    ).toHaveAttribute("src", `/content-media/${uploadedAssetId}`);
     page.once("dialog", (dialog) => dialog.accept());
-    await classicAdminCard
+    await restoredEditorialCard
       .getByRole("button", { name: "Restore default image" })
       .click();
     await expect(
       page.locator('p.notice[role="status"][aria-live="polite"]'),
     ).toContainText("preview updated");
-    await expect(classicImage).toHaveAttribute(
+    await expect(
+      restoredEditorialCard.locator(".themeArtwork img"),
+    ).toHaveAttribute("src", "/theme-previews/editorial.webp");
+    await expect(editorialSellerImage).toHaveAttribute(
       "src",
-      "/theme-previews/classic.webp",
+      "/theme-previews/editorial.webp",
       { timeout: 25_000 },
     );
+    const catalogAfterRestore = await (
+      await page.request.get("/api/store-themes/catalog")
+    ).json();
+    expect(
+      catalogAfterRestore.themes.find(
+        (theme: { id: string }) => theme.id === "EDITORIAL",
+      ).previewImageUrl,
+    ).toBe("/theme-previews/editorial.webp");
+    const restoreAuditEntries = await prisma.auditLog.findMany({
+      where: {
+        actorId: admin.id,
+        action: "STORE_THEME_CATALOG_UPDATED",
+        entityId: "default",
+      },
+      orderBy: { createdAt: "desc" },
+      take: 2,
+      select: { metadata: true },
+    });
+    expect(restoreAuditEntries[0]?.metadata).toMatchObject({
+      preset: "EDITORIAL",
+      previousAssetId: uploadedAssetId,
+      assetId: null,
+      change: "THEME_PREVIEW_IMAGE",
+    });
+    expect(restoreAuditEntries[1]?.metadata).toMatchObject({
+      preset: "EDITORIAL",
+      assetId: uploadedAssetId,
+      change: "THEME_PREVIEW_IMAGE",
+    });
+    await expect(sellerPage.getByLabel("Hero headline")).toHaveValue(
+      `Unsaved seller edit ${suffix}`,
+    );
+    const sellerThemeAfterRestore = await sellerPage.request.get(
+      "/api/seller/store-theme",
+    );
+    expect((await sellerThemeAfterRestore.json()).draft.logoMediaId).toBe(
+      sellerLogoBefore,
+    );
+    await testInfo.attach("admin-preview-default-restored", {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
   } finally {
     await sellerContext?.close();
     if (settingsChanged && originalSettings) {
@@ -1198,32 +1293,20 @@ test("theme preview images are admin-managed, isolated, persistent, and refresh 
       where: {
         id: {
           in: [
-            customAssetId,
+            ...(uploadedAssetId ? [uploadedAssetId] : []),
             ...(invalidAssetId ? [invalidAssetId] : []),
-            ...(quarantinedAssetId ? [quarantinedAssetId] : []),
           ],
         },
       },
     });
-    rmSync(resolve(iconRoot, `theme-preview-e2e/${customAssetId}`), {
-      recursive: true,
-      force: true,
-    });
-    if (quarantinedAssetId)
-      rmSync(
-        resolve(
-          iconRoot,
-          "platform/theme-previews",
-          `${quarantinedAssetId}.webp`,
-        ),
-        {
-          force: true,
-        },
-      );
-    if (invalidAssetId)
-      rmSync(
-        resolve(iconRoot, "platform/theme-previews", `${invalidAssetId}.webp`),
-        { force: true },
-      );
+    for (const assetId of [uploadedAssetId, invalidAssetId]) {
+      if (!assetId) continue;
+      rmSync(resolve(iconRoot, "platform/theme-previews", `${assetId}.webp`), {
+        force: true,
+      });
+      rmSync(resolve(iconRoot, "platform/theme-previews", "pending", assetId), {
+        force: true,
+      });
+    }
   }
 });

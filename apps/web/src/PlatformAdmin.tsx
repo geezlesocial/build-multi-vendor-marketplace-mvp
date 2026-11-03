@@ -99,7 +99,9 @@ export function PlatformAdmin() {
   const [payouts, setPayouts] = useState<{ id: string; amountMinor: number; currency: string; status: string; seller: { store?: { name: string } } }[]>([]);
   const [orders, setOrders] = useState<AdminOrder[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
-  const [message, setMessage] = useState('');
+  const [message, setMessageState] = useState('');
+  const messageRevision = useRef(0);
+  const setMessage = (nextMessage: string) => { messageRevision.current += 1; setMessageState(nextMessage); };
   const [brandingSaving, setBrandingSaving] = useState(false);
   const [provisioningSellerId, setProvisioningSellerId] = useState('');
 
@@ -145,11 +147,13 @@ export function PlatformAdmin() {
     return failed.filter((key): key is AdminResource => key !== null);
   };
   const loadInitial = async () => {
+    const revision = messageRevision.current;
     try {
       const failed = await load();
+      if (messageRevision.current !== revision) return;
       setMessage(failed.length ? `${failed.length} data source(s) could not be loaded. Other modules remain available; retry the affected section.` : '');
     }
-    catch (error) { setMessage((error as Error).message); }
+    catch (error) { if (messageRevision.current === revision) setMessage((error as Error).message); }
   };
   useEffect(() => { if (initialLoadStarted.current) return; initialLoadStarted.current = true; void loadInitial(); }, []);
   useEffect(() => { if (availability) setLanguageDraft(availability.languages); }, [availability]);
