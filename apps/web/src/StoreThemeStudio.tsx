@@ -1,80 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BrandingImageControl } from "./BrandingImageControl.js";
-import { formatMinor } from "./money.js";
-
-type ThemePreset =
-  | "CLASSIC"
-  | "EDITORIAL"
-  | "BOUTIQUE"
-  | "TECH_ELECTRONICS"
-  | "GROCERIES"
-  | "ECOMMERCE_MARKETPLACE";
-type SectionType =
-  | "featuredProducts"
-  | "categories"
-  | "promotion"
-  | "productCollection"
-  | "brandHighlights";
-type Theme = {
-  themePreset: ThemePreset;
-  mobileTemplate: string;
-  description: string;
-  heroTitle: string;
-  heroSubtitle: string;
-  heroButtonLabel: string;
-  heroButtonHref: string;
-  primaryColor: string;
-  accentColor: string;
-  font: string;
-  gridDensity: "comfortable" | "standard" | "dense";
-  cardStyle: "standard" | "editorial" | "soft" | "technical";
-  sections: {
-    type: SectionType;
-    title: string;
-    productIds: string[];
-    categorySlug: string | null;
-    visible: boolean;
-  }[];
-  contactLinks: { label: string; url: string }[];
-  logoMediaId: string | null;
-  faviconMediaId: string | null;
-  bannerMediaId: string | null;
-};
-type CatalogTheme = {
-  id: ThemePreset;
-  name: string;
-  tier: "FREE" | "PAID";
-  description: string;
-  features: readonly string[];
-  previewImageUrl: string;
-  defaultTokens: {
-    surfaceColor: string;
-    cardColor: string;
-    textColor: string;
-    mutedColor: string;
-    accentColor: string;
-  };
-};
-type Revision = {
-  id: string;
-  version: number;
-  themeJson: Theme;
-  changeNote: string | null;
-  createdAt: string;
-  editor: { name: string | null; email: string };
-};
-type ThemeProductOption = {
-  id: string;
-  name: string;
-  category: { name: string; slug: string } | null;
-};
-type ThemePreviewProduct = ThemeProductOption & {
-  priceMinor: number;
-  salePriceMinor: number | null;
-  currency: string;
-  availableStock: number;
-  images: { url: string; alt: string }[];
-};
+import { StoreThemeSectionsEditor } from "./StoreThemeSectionsEditor.js";
+import {
+  StoreThemeArtwork,
+  StoreThemePreview,
+  themeContrastRatio,
+} from "./store-theme-presentation.js";
+import type {
+  CatalogTheme,
+  Revision,
+  Theme,
+  ThemePreviewProduct,
+  ThemeProductOption,
+  ThemePreset,
+} from "./store-theme-types.js";
 const emptyTheme: Theme = {
   themePreset: "CLASSIC",
   mobileTemplate: "RESPONSIVE_STANDARD",
@@ -94,29 +33,6 @@ const emptyTheme: Theme = {
   faviconMediaId: null,
   bannerMediaId: null,
 };
-const sectionOptions: { type: SectionType; title: string }[] = [
-  { type: "featuredProducts", title: "Featured products" },
-  { type: "categories", title: "Category highlights" },
-  { type: "productCollection", title: "Curated collection" },
-  { type: "promotion", title: "Promotional content" },
-  { type: "brandHighlights", title: "Brand and feature highlights" },
-];
-
-function colorContrast(first: string, second: string) {
-  const luminance = (hex: string) => {
-    const channels = [1, 3, 5]
-      .map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
-      .map((value) =>
-        value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
-      );
-    return (
-      0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!
-    );
-  };
-  const values = [luminance(first), luminance(second)].sort((a, b) => b - a);
-  return (values[0]! + 0.05) / (values[1]! + 0.05);
-}
-
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie
     .split("; ")
@@ -148,170 +64,6 @@ function normalized(value: Partial<Theme>): Theme {
       visible: section.visible ?? true,
     })),
   };
-}
-
-function ThemeArtwork({
-  theme,
-  name,
-  src,
-}: {
-  theme: ThemePreset;
-  name: string;
-  src: string;
-}) {
-  return (
-    <figure className="themeArtwork" data-theme={theme}>
-      <img
-        src={src}
-        alt={`${name} storefront theme preview`}
-        loading="lazy"
-        decoding="async"
-      />
-      <figcaption>{name}</figcaption>
-    </figure>
-  );
-}
-
-function ThemePreview({
-  preset,
-  theme,
-  catalog,
-  storeName,
-  device,
-  products,
-}: {
-  preset: ThemePreset;
-  theme: Theme;
-  catalog: CatalogTheme[];
-  storeName: string;
-  device: string;
-  products: ThemePreviewProduct[];
-}) {
-  const meta = catalog.find((item) => item.id === preset);
-  const tokens = meta?.defaultTokens;
-  return (
-    <div
-      className={`themePreviewFrame themePreviewFrame--${device}`}
-      data-theme={preset}
-      style={
-        {
-          "--preview-surface": tokens?.surfaceColor,
-          "--preview-card": tokens?.cardColor,
-          "--preview-ink": tokens?.textColor,
-          "--preview-muted": tokens?.mutedColor,
-          "--preview-accent": theme.accentColor,
-          "--preview-primary": theme.primaryColor,
-        } as React.CSSProperties
-      }
-    >
-      <div className="themePreviewTop">
-        <strong>{storeName || "Your Store"}</strong>
-        <span>Search products</span>
-        <small>Cart</small>
-      </div>
-      {meta && (
-        <img
-          className="themePreviewReferenceImage"
-          src={meta.previewImageUrl}
-          alt={`${meta.name} theme reference preview`}
-          loading="lazy"
-          decoding="async"
-        />
-      )}
-      <div className="themePreviewHero">
-        {theme.bannerMediaId && (
-          <span className="themePreviewImageMark">Store banner selected</span>
-        )}
-        <small>PRIVATE PREVIEW · NOT PUBLISHED</small>
-        <h3>
-          {theme.heroTitle ||
-            (preset === "EDITORIAL"
-              ? "A story worth discovering"
-              : preset === "GROCERIES"
-                ? "Browse fresh departments"
-                : preset === "TECH_ELECTRONICS"
-                  ? "Find your next upgrade"
-                  : storeName || "Welcome to your Store")}
-        </h3>
-        <p>{theme.heroSubtitle || theme.description || meta?.description}</p>
-        {theme.heroButtonLabel && (
-          <button type="button" disabled>
-            {theme.heroButtonLabel}
-          </button>
-        )}
-      </div>
-      {products.length > 0 && (
-        <div className="themePreviewCategories">
-          {[
-            ...new Map(
-              products.flatMap((product) =>
-                product.category
-                  ? [[product.category.slug, product.category.name] as const]
-                  : [],
-              ),
-            ).values(),
-          ]
-            .slice(0, 4)
-            .map((category) => (
-              <span key={category}>{category}</span>
-            ))}
-        </div>
-      )}
-      {theme.sections
-        .filter((section) => section.visible)
-        .map((section, index) => (
-          <section
-            className="themePreviewSection"
-            key={`${section.type}-${index}`}
-          >
-            <strong>{section.title || section.type}</strong>
-            <span>
-              {section.type === "categories"
-                ? `${[...new Set(products.map((product) => product.category?.slug).filter(Boolean))].length} approved categories`
-                : section.type === "promotion"
-                  ? "Current sale listings"
-                  : section.type === "brandHighlights"
-                    ? "Brand and feature data from approved listings"
-                    : `${section.productIds.length || products.length} approved product tiles`}
-            </span>
-          </section>
-        ))}
-      {products.length > 0 ? (
-        <div className="themePreviewProducts">
-          {products.slice(0, 3).map((product) => {
-            const sale =
-              product.salePriceMinor != null &&
-              product.salePriceMinor < product.priceMinor;
-            return (
-              <article key={product.id}>
-                {product.images[0] && (
-                  <img
-                    src={product.images[0].url}
-                    alt={product.images[0].alt || product.name}
-                    loading="lazy"
-                    decoding="async"
-                  />
-                )}
-                <strong>{product.name}</strong>
-                <small>
-                  {formatMinor(
-                    sale ? product.salePriceMinor! : product.priceMinor,
-                    product.currency,
-                  )}{" "}
-                  · {product.availableStock} in stock
-                </small>
-              </article>
-            );
-          })}
-        </div>
-      ) : (
-        <p className="themePreviewEmpty">
-          Approved product imagery and prices will appear here when your Store
-          has approved listings.
-        </p>
-      )}
-    </div>
-  );
 }
 
 export function StoreThemeStudio() {
@@ -495,51 +247,6 @@ export function StoreThemeStudio() {
     }
   };
 
-  const setSection = (type: SectionType, visible: boolean) =>
-    setTheme((current) => {
-      const existing = current.sections.find(
-        (section) => section.type === type,
-      );
-      const next = existing
-        ? current.sections.map((section) =>
-            section.type === type ? { ...section, visible } : section,
-          )
-        : [
-            ...current.sections,
-            {
-              type,
-              title:
-                sectionOptions.find((item) => item.type === type)?.title ??
-                type,
-              productIds: [],
-              categorySlug: null,
-              visible,
-            },
-          ];
-      return { ...current, sections: next };
-    });
-  const updateSection = (
-    type: SectionType,
-    values: Partial<Theme["sections"][number]>,
-  ) =>
-    setTheme((current) => ({
-      ...current,
-      sections: current.sections.map((section) =>
-        section.type === type ? { ...section, ...values } : section,
-      ),
-    }));
-  const moveSection = (index: number, delta: number) =>
-    setTheme((current) => {
-      const sections = [...current.sections];
-      const target = index + delta;
-      if (target < 0 || target >= sections.length) return current;
-      [sections[index], sections[target]] = [
-        sections[target]!,
-        sections[index]!,
-      ];
-      return { ...current, sections };
-    });
-
   if (loading)
     return (
       <section className="page">
@@ -557,16 +264,20 @@ export function StoreThemeStudio() {
     ? [
         ...((
           theme.themePreset === "TECH_ELECTRONICS"
-            ? colorContrast("#ffffff", theme.primaryColor) < 4.5
-            : colorContrast(theme.primaryColor, activeTokens.cardColor) < 4.5 ||
-              colorContrast(theme.primaryColor, activeTokens.surfaceColor) <
+            ? themeContrastRatio("#ffffff", theme.primaryColor) < 4.5
+            : themeContrastRatio(theme.primaryColor, activeTokens.cardColor) <
                 4.5 ||
-              colorContrast("#ffffff", theme.primaryColor) < 4.5
+              themeContrastRatio(
+                theme.primaryColor,
+                activeTokens.surfaceColor,
+              ) < 4.5 ||
+              themeContrastRatio("#ffffff", theme.primaryColor) < 4.5
         )
           ? ["Primary brand color"]
           : []),
-        ...(colorContrast(theme.accentColor, activeTokens.cardColor) < 4.5 ||
-        colorContrast(theme.accentColor, activeTokens.surfaceColor) < 4.5
+        ...(themeContrastRatio(theme.accentColor, activeTokens.cardColor) <
+          4.5 ||
+        themeContrastRatio(theme.accentColor, activeTokens.surfaceColor) < 4.5
           ? ["Accent color"]
           : []),
       ]
@@ -624,8 +335,8 @@ export function StoreThemeStudio() {
                 className={`themeGalleryCard ${previewPreset === item.id ? "is-previewing" : ""}`}
                 key={item.id}
               >
-                <ThemeArtwork
-                  theme={item.id}
+                <StoreThemeArtwork
+                  preset={item.id}
                   name={item.name}
                   src={item.previewImageUrl}
                 />
@@ -864,137 +575,11 @@ export function StoreThemeStudio() {
             }
             quota
           />
-          <fieldset className="themeSectionsEditor">
-            <legend>Sections · visibility, content and ordering</legend>
-            {sectionOptions.map((option) => {
-              const index = theme.sections.findIndex(
-                (section) => section.type === option.type,
-              );
-              const section = index >= 0 ? theme.sections[index] : null;
-              const categories = [
-                ...new Map(
-                  availableProducts.flatMap((product) =>
-                    product.category
-                      ? [
-                          [
-                            product.category.slug,
-                            product.category.name,
-                          ] as const,
-                        ]
-                      : [],
-                  ),
-                ).entries(),
-              ];
-              return (
-                <div className="themeSectionEditor" key={option.type}>
-                  <div className="themeSectionRow">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={section?.visible ?? false}
-                        onChange={(event) =>
-                          setSection(option.type, event.target.checked)
-                        }
-                      />
-                      {option.title}
-                    </label>
-                    {section && (
-                      <div>
-                        <button
-                          type="button"
-                          aria-label={`Move ${option.title} up`}
-                          disabled={index === 0}
-                          onClick={() => moveSection(index, -1)}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`Move ${option.title} down`}
-                          disabled={index === theme.sections.length - 1}
-                          onClick={() => moveSection(index, 1)}
-                        >
-                          ↓
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  {section?.visible && (
-                    <div className="themeSectionOptions">
-                      <label>
-                        Section heading
-                        <input
-                          maxLength={120}
-                          value={section.title}
-                          onChange={(event) =>
-                            updateSection(option.type, {
-                              title: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      {(option.type === "featuredProducts" ||
-                        option.type === "productCollection") && (
-                        <label>
-                          Approved products (optional; choose up to 50)
-                          <select
-                            multiple
-                            size={Math.min(
-                              6,
-                              Math.max(3, availableProducts.length),
-                            )}
-                            value={section.productIds}
-                            onChange={(event) =>
-                              updateSection(option.type, {
-                                productIds: Array.from(
-                                  event.currentTarget.selectedOptions,
-                                )
-                                  .slice(0, 50)
-                                  .map((selected) => selected.value),
-                              })
-                            }
-                          >
-                            {availableProducts.map((product) => (
-                              <option key={product.id} value={product.id}>
-                                {product.name}
-                                {product.category
-                                  ? ` · ${product.category.name}`
-                                  : ""}
-                              </option>
-                            ))}
-                          </select>
-                          <small className="muted">
-                            No selection uses current approved listings. Removed
-                            or unapproved listings are never displayed.
-                          </small>
-                        </label>
-                      )}
-                      {option.type === "productCollection" && (
-                        <label>
-                          Limit collection to category
-                          <select
-                            value={section.categorySlug ?? ""}
-                            onChange={(event) =>
-                              updateSection(option.type, {
-                                categorySlug: event.target.value || null,
-                              })
-                            }
-                          >
-                            <option value="">All categories</option>
-                            {categories.map(([categorySlug, name]) => (
-                              <option key={categorySlug} value={categorySlug}>
-                                {name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </fieldset>
+          <StoreThemeSectionsEditor
+            theme={theme}
+            setTheme={setTheme}
+            availableProducts={availableProducts}
+          />
           <label>
             Mobile layout
             <select
@@ -1061,7 +646,7 @@ export function StoreThemeStudio() {
               ))}
             </div>
           </div>
-          <ThemePreview
+          <StoreThemePreview
             preset={previewPreset}
             theme={theme}
             catalog={catalog}
