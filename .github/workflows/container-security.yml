@@ -18,10 +18,10 @@ jobs:
       contents: read
     env:
       DATABASE_URL: postgresql://127.0.0.1:5432/not-used?schema=public
-      CONTENT_SCAN_REQUIRED: 'true'
-      LIVE_SHOPPING_AVAILABLE: 'false'
-      WALLET_FUNDING_PROVIDER_READY: 'false'
-      MONEY_MOVEMENT_HARD_DISABLED: 'true'
+      CONTENT_SCAN_REQUIRED: "true"
+      LIVE_SHOPPING_AVAILABLE: "false"
+      WALLET_FUNDING_PROVIDER_READY: "false"
+      MONEY_MOVEMENT_HARD_DISABLED: "true"
     steps:
       - name: Check out exact source commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -70,6 +70,7 @@ jobs:
       - name: Lint, typecheck, unit test, and build
         run: |
           npm run lint
+          npm run source:size:check
           npm run typecheck
           npm run test -w apps/api -- --maxWorkers=2 --testTimeout=15000
           npm run build
@@ -101,7 +102,7 @@ jobs:
           skip-dirs: .git,node_modules,apps/api/dist,apps/web/dist
           format: json
           output: ${{ runner.temp }}/source-secrets.json
-          exit-code: '0'
+          exit-code: "0"
           hide-progress: true
 
       - name: Scan API runtime image (fixed and unfixed findings)
@@ -112,7 +113,7 @@ jobs:
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           format: json
           output: ${{ runner.temp }}/api-trivy.json
-          exit-code: '0'
+          exit-code: "0"
           hide-progress: true
           skip-setup-trivy: true
 
@@ -124,7 +125,7 @@ jobs:
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           format: json
           output: ${{ runner.temp }}/migrator-trivy.json
-          exit-code: '0'
+          exit-code: "0"
           hide-progress: true
           skip-setup-trivy: true
 
@@ -136,7 +137,7 @@ jobs:
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           format: json
           output: ${{ runner.temp }}/web-trivy.json
-          exit-code: '0'
+          exit-code: "0"
           hide-progress: true
           skip-setup-trivy: true
 
@@ -183,17 +184,17 @@ jobs:
       contents: read
     env:
       DATABASE_URL: postgresql://127.0.0.1:5432/not-used?schema=public
-      CONTENT_SCAN_REQUIRED: 'true'
-      STORE_EMAIL_DELIVERY_AVAILABLE: 'false'
-      LIVE_SHOPPING_AVAILABLE: 'false'
-      WALLET_FUNDING_PROVIDER_READY: 'false'
-      MONEY_MOVEMENT_HARD_DISABLED: 'true'
-      STAGING_TEST_DB_PORT: '55439'
-      STAGING_TEST_API_PORT: '4001'
-      STAGING_TEST_WEB_PORT: '5174'
-      STAGING_TEST_MAILPIT_API_PORT: '18025'
-      STAGING_TEST_MAILPIT_PORT: '11025'
-      STAGING_TEST_CLAMAV_PORT: '13310'
+      CONTENT_SCAN_REQUIRED: "true"
+      STORE_EMAIL_DELIVERY_AVAILABLE: "false"
+      LIVE_SHOPPING_AVAILABLE: "false"
+      WALLET_FUNDING_PROVIDER_READY: "false"
+      MONEY_MOVEMENT_HARD_DISABLED: "true"
+      STAGING_TEST_DB_PORT: "55439"
+      STAGING_TEST_API_PORT: "4001"
+      STAGING_TEST_WEB_PORT: "5174"
+      STAGING_TEST_MAILPIT_API_PORT: "18025"
+      STAGING_TEST_MAILPIT_PORT: "11025"
+      STAGING_TEST_CLAMAV_PORT: "13310"
     steps:
       - name: Check out exact source commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
