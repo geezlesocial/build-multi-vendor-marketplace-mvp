@@ -33,19 +33,15 @@ The assessment's visible file-size fingerprint matches the pre-cart-extraction c
 
 The post-merge application workflow [41580747708](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41580747708) succeeded on the current protected-main source snapshot `da180c6abc1490098b3f7def6825fd67a42043cb`. It ran lint, formatting and source-size guards, environment-example validation, typecheck, API tests and coverage, build, and the CMS Playwright suite.
 
-| Metric                                                               | Measured result |
-| -------------------------------------------------------------------- | --------------: |
-| API tests                                                            | 449 passed across 85 files |
-| Statement coverage                                                   | 19.58% |
-| Branch coverage                                                      | 19.40% |
-| Function coverage                                                    | 24.02% |
-| Line coverage                                                        | 22.05% |
-| Enforced coverage floors (statements / branches / functions / lines) | 15% / 15% / 19% / 17% |
-| Playwright browser tests                                             | 104 passed, 1 skipped |
-| API lint                                                             | 5 warnings, 0 errors |
-| Web lint                                                             | 91 warnings, 0 errors |
-| Production JavaScript/TypeScript source files                        | 228 |
-| Current files over 500 / 1,000 physical lines                        | 13 / 2 |
+Measurements from that exact run:
+
+- API tests: 449 passed across 85 files.
+- Statement coverage: 19.58%; branch coverage: 19.40%; function coverage: 24.02%; line coverage: 22.05%.
+- Enforced coverage floors (statements / branches / functions / lines): 15% / 15% / 19% / 17%.
+- Playwright browser tests: 104 passed, 1 skipped.
+- Lint: 5 API warnings and 91 web warnings; zero errors.
+- Production JavaScript/TypeScript source inventory: 228 files.
+- Current production files above 500 / 1,000 physical lines: 13 / 2.
 
 The source-size guard passed on this run. A current-tree count, using the guard's production-source scope under `apps/api/src` and `apps/web/src` and excluding test/spec files, found 13 existing modules above 500 physical lines and 2 above 1,000. The two above 1,000 are `apps/web/src/StoreThemesAdmin.tsx` (1,057) and `apps/web/src/StoreThemeStudio.tsx` (1,120). PR #69 caps the existing oversized modules at their `ff1445c` baselines and prevents further growth beyond those reviewed limits.
 
@@ -55,27 +51,25 @@ Container/security evidence remains exact-head evidence: PR #72's Expat remediat
 
 ## Integrated changes and CI evidence
 
-These changes are on protected `main`; branch-level metrics are not added together. Each post-merge application run listed below was verified successful. PR #47's change is represented in later protected-main runs.
+These changes are on protected `main`; branch-level measurements are not added together. The post-merge application runs listed below were verified successful. PR #47's change is represented in later protected-main runs.
 
-| PR | Integrated change | Merge commit | Post-merge application CI |
-| -- | ----------------- | ------------ | ------------------------- |
-| [#59](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/59) | Dependency remediation | `310818e` | [41453249187](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41453249187) passed |
-| [#47](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/47) | API and web lint improvements | `416fb93` | Included in later protected-main runs |
-| [#49](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/49) | Environment-example validation | `88eb857` | [41462426162](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41462426162) passed |
-| [#51](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/51) | Measured API coverage floors | `db96d6f` | [41466536734](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41466536734) passed |
-| [#60](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/60) | Financial regression and PostgreSQL concurrency tests | `ad0a455` | [41470901167](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41470901167) passed |
-| [#57](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/57) | Product-route extraction | `63df74c` | [41475383775](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41475383775) passed |
-| [#66](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/66) | Theme-preview operations documentation | `d2d8176` | [41479982542](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41479982542) passed |
-| [#68](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/68) | Evidence-based DataFactor readiness report | `ff1445c` | [41486224057](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41486224057) passed |
-| [#69](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/69) | Production source-size growth guard | `fc56917` | [41550001781](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41550001781) passed |
-| [#54](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/54) | Live Shopping workflow extraction | `8e52431` | [41552524801](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41552524801) passed |
-| [#56](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/56) | Buyer/seller dashboard workspace extraction | `6d6c11d` | [41556075917](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41556075917) passed |
-| [#58](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/58) | Cart-route extraction and 7 HTTP characterization tests | `8ce2716` | [41558991602](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41558991602) passed |
-| [#70](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/70) | Evidence-based report refresh | `a7decff` | [41561998439](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41561998439) passed |
-| [#72](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/72) | Web-runtime Expat remediation | `822949d` | [41572998227](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41572998227) passed |
-| [#71](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/71) | Lazy-loaded marketplace route pages | `99ae37e` | [41575884496](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41575884496) passed |
-| [#52](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/52) | Product-media route coverage | `4059c7d` | [41578296907](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41578296907) passed |
-| [#53](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/53) | Rejected-checkout cart preservation and E2E formatting policy | `da180c6` | [41580747708](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41580747708) passed |
+- PR [#59](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/59): dependency remediation; merge `310818e`; post-merge CI [41453249187](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41453249187) passed.
+- PR [#47](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/47): API and web lint improvements; merge `416fb93`; included in later protected-main runs.
+- PR [#49](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/49): environment-example validation; merge `88eb857`; post-merge CI [41462426162](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41462426162) passed.
+- PR [#51](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/51): measured API coverage floors; merge `db96d6f`; post-merge CI [41466536734](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41466536734) passed.
+- PR [#60](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/60): financial regression and PostgreSQL concurrency tests; merge `ad0a455`; post-merge CI [41470901167](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41470901167) passed.
+- PR [#57](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/57): product-route extraction; merge `63df74c`; post-merge CI [41475383775](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41475383775) passed.
+- PR [#66](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/66): theme-preview operations documentation; merge `d2d8176`; post-merge CI [41479982542](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41479982542) passed.
+- PR [#68](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/68): evidence-based DataFactor readiness report; merge `ff1445c`; post-merge CI [41486224057](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41486224057) passed.
+- PR [#69](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/69): production source-size growth guard; merge `fc56917`; post-merge CI [41550001781](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41550001781) passed.
+- PR [#54](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/54): Live Shopping workflow extraction; merge `8e52431`; post-merge CI [41552524801](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41552524801) passed.
+- PR [#56](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/56): buyer/seller dashboard workspace extraction; merge `6d6c11d`; post-merge CI [41556075917](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41556075917) passed.
+- PR [#58](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/58): cart-route extraction and 7 HTTP characterization tests; merge `8ce2716`; post-merge CI [41558991602](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41558991602) passed.
+- PR [#70](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/70): evidence-based report refresh; merge `a7decff`; post-merge CI [41561998439](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41561998439) passed.
+- PR [#72](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/72): web-runtime Expat remediation; merge `822949d`; post-merge CI [41572998227](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41572998227) passed.
+- PR [#71](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/71): lazy-loaded marketplace route pages; merge `99ae37e`; post-merge CI [41575884496](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41575884496) passed.
+- PR [#52](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/52): product-media route coverage; merge `4059c7d`; post-merge CI [41578296907](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41578296907) passed.
+- PR [#53](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/pull/53): rejected-checkout cart preservation and E2E formatting policy; merge `da180c6`; post-merge CI [41580747708](https://github.com/geezlesocial/build-multi-vendor-marketplace-mvp/actions/runs/41580747708) passed.
 
 The required independent reviews and protected-branch checks were verified for the PR integrations that required them. PR #60's disposable-PostgreSQL concurrency test passed in exact-head CI; PR #58's cart-route HTTP tests passed in exact-head CI; PR #53's exact-head application, container integration, and image security/SBOM checks passed before its protected merge. No live payment provider was used.
 
