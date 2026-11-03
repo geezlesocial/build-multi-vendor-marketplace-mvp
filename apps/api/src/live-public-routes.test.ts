@@ -289,9 +289,10 @@ describe("public live-session HTTP routes", () => {
       token: "viewer-token",
       role: "viewer",
     });
-    expect(response.headers.get("set-cookie")).toMatch(
-      /marketplace_live_viewer=.*; Path=\/api\/live-sessions; HttpOnly/,
-    );
+    const guestCookie = response.headers.get("set-cookie") ?? "";
+    expect(guestCookie).toContain("marketplace_live_viewer=");
+    expect(guestCookie).toContain("Path=/api/live-sessions");
+    expect(guestCookie).toContain("HttpOnly");
     expect(mocks.calls.issueViewerToken).toHaveBeenCalledWith(
       "provider-session-1",
       expect.stringMatching(/^guest:[a-f0-9]{64}$/),
