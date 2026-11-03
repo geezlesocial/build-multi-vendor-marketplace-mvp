@@ -1,0 +1,20 @@
+{
+  "baselineCommit": "ff1445cb1fbf25e72f0c3825b273e7db8090582b",
+  "defaultMaxLines": 500,
+  "files": {
+    "apps/api/src/index.ts": 1005,
+    "apps/api/src/marketplace-ad-routes.ts": 653,
+    "apps/api/src/payment-webhook-reconciliation.ts": 523,
+    "apps/api/src/platform-routes.ts": 580,
+    "apps/api/src/store-growth-routes.ts": 840,
+    "apps/api/src/store-theme-domain.ts": 556,
+    "apps/api/src/store-theme-routes.ts": 562,
+    "apps/api/src/wallet-funding.ts": 839,
+    "apps/api/src/wallet-routes.ts": 677,
+    "apps/web/src/Dashboard.tsx": 662,
+    "apps/web/src/LiveShoppableProductDialog.tsx": 510,
+    "apps/web/src/Storefront.tsx": 907,
+    "apps/web/src/StoreThemesAdmin.tsx": 1057,
+    "apps/web/src/StoreThemeStudio.tsx": 1120
+  }
+}
