@@ -5,36 +5,19 @@ import './DashboardPolish.css';
 import './currency-location.css';
 import './store-themes.css';
 import './checkout-discount.css';
-import { ContentAdmin } from './ContentAdmin.js';
-import { AffiliateAdmin } from './AffiliateAdmin.js';
-import { AffiliateDashboard } from './AffiliateDashboard.js';
-import { SiteChromeBuilder } from './SiteChromeBuilder.js';
-import { SellerStorePlan } from './SellerStorePlan.js';
-import { SellerStoreContent } from './SellerStoreContent.js';
-import { SellerStoreGrowth } from './SellerStoreGrowth.js';
-import { SellerCommissionStatement, SellerStoreCurrency } from './SellerStoreCurrency.js';
-import { AdminCurrencyCommission } from './AdminCurrencyCommission.js';
-import { StoreEmailAction } from './StoreEmailAction.js';
-import { EmailVerificationAction } from './EmailVerificationAction.js';
-import { Dashboard } from './Dashboard.js';
 import { MarketplaceHome } from './MarketplaceHome.js';
-import { MarketplaceCategory } from './MarketplaceCategory.js';
-import { Favorites } from './Favorites.js';
-import { ProductPage } from './ProductPage.js';
-import { JimaKnowledgeArticle } from './JimaKnowledgeArticle.js';
-import { Settings } from './Settings.js';
-import { AdminWallet } from './AdminWallet.js';
-import { MarketplaceAds } from './MarketplaceAds.js';
-import { ClubCoins, Wallet } from './Wallet.js';
 import { AppShell } from './AppShell.js';
 import { SessionProvider, useSession, type SessionUser } from './session.js';
 import { formatMinor } from './money.js';
-import { LiveEmbedPage, LivePublicPage } from './LivePublicPage.js';
-
-const PlatformAdmin = React.lazy(() => import('./PlatformAdmin.js').then(module => ({ default: module.PlatformAdmin })));
-const SellerPlatform = React.lazy(() => import('./SellerPlatform.js').then(module => ({ default: module.SellerPlatform })));
-const Storefront = React.lazy(() => import('./Storefront.js').then(module => ({ default: module.Storefront })));
-const StoreThemeStudio = React.lazy(() => import('./StoreThemeStudio.js').then(module => ({ default: module.StoreThemeStudio })));
+import {
+  AdminCurrencyCommission, AdminWallet, AffiliateAdmin, AffiliateDashboard,
+  ClubCoins, ContentAdmin, Dashboard, EmailVerificationAction, Favorites,
+  JimaKnowledgeArticle, LiveEmbedPage, LivePublicPage, MarketplaceAds,
+  MarketplaceCategory, PlatformAdmin, ProductPage, SellerCommissionStatement,
+  SellerPlatform, SellerStoreContent, SellerStoreCurrency, SellerStoreGrowth,
+  SellerStorePlan, Settings, SiteChromeBuilder, StoreEmailAction, Storefront,
+  StoreThemeStudio, Wallet,
+} from './lazy-routes.js';
 
 type User = SessionUser;
 type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; sellerId?: string | null; seller?: { store?: { name: string } }; category?: { name: string }; productType?: { id: string; name: string; requiresShipping: boolean } };
@@ -493,5 +476,5 @@ const liveCheckoutEmbedRoute = window.location.pathname === '/checkout'
   && new URLSearchParams(window.location.search).get('source') === 'live-shopping'
   && new URLSearchParams(window.location.search).get('embed') === '1';
 createRoot(document.getElementById('root')!).render(<React.StrictMode>{liveEmbedRoute
-  ? <LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} />
+  ? <React.Suspense fallback={<RouteLoading />}><LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} /></React.Suspense>
   : <SessionProvider>{liveCheckoutEmbedRoute ? <RoutedPageBoundary /> : <AppShell><RoutedPageBoundary /></AppShell>}</SessionProvider>}</React.StrictMode>);
