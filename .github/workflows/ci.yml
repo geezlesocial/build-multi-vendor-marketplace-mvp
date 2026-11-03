@@ -60,6 +60,8 @@ jobs:
       - run: npm run db:seed
       - run: npm run lint
       - run: node --test scripts/format-base.test.mjs
+      - run: node --test scripts/source-size-policy.test.mjs
+      - run: npm run source:size:check
       - run: npm run format:check
       - run: node --test scripts/check-env-example.test.mjs
       - run: npm run env:example:check
