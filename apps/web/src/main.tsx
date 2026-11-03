@@ -5,31 +5,35 @@ import './DashboardPolish.css';
 import './currency-location.css';
 import './store-themes.css';
 import './checkout-discount.css';
-import { ContentAdmin } from './ContentAdmin.js';
-import { AffiliateAdmin } from './AffiliateAdmin.js';
-import { AffiliateDashboard } from './AffiliateDashboard.js';
-import { SiteChromeBuilder } from './SiteChromeBuilder.js';
-import { SellerStorePlan } from './SellerStorePlan.js';
-import { SellerStoreContent } from './SellerStoreContent.js';
-import { SellerStoreGrowth } from './SellerStoreGrowth.js';
-import { SellerCommissionStatement, SellerStoreCurrency } from './SellerStoreCurrency.js';
-import { AdminCurrencyCommission } from './AdminCurrencyCommission.js';
-import { StoreEmailAction } from './StoreEmailAction.js';
-import { EmailVerificationAction } from './EmailVerificationAction.js';
-import { Dashboard } from './Dashboard.js';
 import { MarketplaceHome } from './MarketplaceHome.js';
-import { MarketplaceCategory } from './MarketplaceCategory.js';
-import { Favorites } from './Favorites.js';
-import { ProductPage } from './ProductPage.js';
-import { JimaKnowledgeArticle } from './JimaKnowledgeArticle.js';
-import { Settings } from './Settings.js';
-import { AdminWallet } from './AdminWallet.js';
-import { MarketplaceAds } from './MarketplaceAds.js';
-import { ClubCoins, Wallet } from './Wallet.js';
 import { AppShell } from './AppShell.js';
 import { SessionProvider, useSession, type SessionUser } from './session.js';
 import { formatMinor } from './money.js';
-import { LiveEmbedPage, LivePublicPage } from './LivePublicPage.js';
+
+const ContentAdmin = React.lazy(() => import('./ContentAdmin.js').then(module => ({ default: module.ContentAdmin })));
+const AffiliateAdmin = React.lazy(() => import('./AffiliateAdmin.js').then(module => ({ default: module.AffiliateAdmin })));
+const AffiliateDashboard = React.lazy(() => import('./AffiliateDashboard.js').then(module => ({ default: module.AffiliateDashboard })));
+const SiteChromeBuilder = React.lazy(() => import('./SiteChromeBuilder.js').then(module => ({ default: module.SiteChromeBuilder })));
+const SellerStorePlan = React.lazy(() => import('./SellerStorePlan.js').then(module => ({ default: module.SellerStorePlan })));
+const SellerStoreContent = React.lazy(() => import('./SellerStoreContent.js').then(module => ({ default: module.SellerStoreContent })));
+const SellerStoreGrowth = React.lazy(() => import('./SellerStoreGrowth.js').then(module => ({ default: module.SellerStoreGrowth })));
+const SellerStoreCurrency = React.lazy(() => import('./SellerStoreCurrency.js').then(module => ({ default: module.SellerStoreCurrency })));
+const SellerCommissionStatement = React.lazy(() => import('./SellerStoreCurrency.js').then(module => ({ default: module.SellerCommissionStatement })));
+const AdminCurrencyCommission = React.lazy(() => import('./AdminCurrencyCommission.js').then(module => ({ default: module.AdminCurrencyCommission })));
+const StoreEmailAction = React.lazy(() => import('./StoreEmailAction.js').then(module => ({ default: module.StoreEmailAction })));
+const EmailVerificationAction = React.lazy(() => import('./EmailVerificationAction.js').then(module => ({ default: module.EmailVerificationAction })));
+const Dashboard = React.lazy(() => import('./Dashboard.js').then(module => ({ default: module.Dashboard })));
+const MarketplaceCategory = React.lazy(() => import('./MarketplaceCategory.js').then(module => ({ default: module.MarketplaceCategory })));
+const Favorites = React.lazy(() => import('./Favorites.js').then(module => ({ default: module.Favorites })));
+const ProductPage = React.lazy(() => import('./ProductPage.js').then(module => ({ default: module.ProductPage })));
+const JimaKnowledgeArticle = React.lazy(() => import('./JimaKnowledgeArticle.js').then(module => ({ default: module.JimaKnowledgeArticle })));
+const Settings = React.lazy(() => import('./Settings.js').then(module => ({ default: module.Settings })));
+const AdminWallet = React.lazy(() => import('./AdminWallet.js').then(module => ({ default: module.AdminWallet })));
+const MarketplaceAds = React.lazy(() => import('./MarketplaceAds.js').then(module => ({ default: module.MarketplaceAds })));
+const Wallet = React.lazy(() => import('./Wallet.js').then(module => ({ default: module.Wallet })));
+const ClubCoins = React.lazy(() => import('./Wallet.js').then(module => ({ default: module.ClubCoins })));
+const LivePublicPage = React.lazy(() => import('./LivePublicPage.js').then(module => ({ default: module.LivePublicPage })));
+const LiveEmbedPage = React.lazy(() => import('./LivePublicPage.js').then(module => ({ default: module.LiveEmbedPage })));
 
 const PlatformAdmin = React.lazy(() => import('./PlatformAdmin.js').then(module => ({ default: module.PlatformAdmin })));
 const SellerPlatform = React.lazy(() => import('./SellerPlatform.js').then(module => ({ default: module.SellerPlatform })));
@@ -493,5 +497,5 @@ const liveCheckoutEmbedRoute = window.location.pathname === '/checkout'
   && new URLSearchParams(window.location.search).get('source') === 'live-shopping'
   && new URLSearchParams(window.location.search).get('embed') === '1';
 createRoot(document.getElementById('root')!).render(<React.StrictMode>{liveEmbedRoute
-  ? <LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} />
+  ? <React.Suspense fallback={<RouteLoading />}><LiveEmbedPage sessionId={safePathSegment(liveEmbedRoute[1]!)} /></React.Suspense>
   : <SessionProvider>{liveCheckoutEmbedRoute ? <RoutedPageBoundary /> : <AppShell><RoutedPageBoundary /></AppShell>}</SessionProvider>}</React.StrictMode>);
