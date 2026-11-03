@@ -667,7 +667,9 @@ test("paid storefront themes are tenant-scoped, revisioned, and fall back safely
       .getByRole("button", { name: "Preview this theme" })
       .click();
     await expect(
-      adminAccount.page.locator("#theme-admin-preview h3"),
+      adminAccount.page.locator(
+        "#theme-admin-preview .themeStudioPreviewHead h3",
+      ),
     ).toHaveText("Groceries");
     const previewViewport = adminAccount.page.getByRole("group", {
       name: "Administrator preview viewport",
