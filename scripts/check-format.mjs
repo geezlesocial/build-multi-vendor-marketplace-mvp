@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import process from "node:process";
 import { selectFormatBase } from "./format-base.mjs";
+import { shouldFormatCandidate } from "./format-policy.mjs";
 
 const require = createRequire(import.meta.url);
 const run = (command, args) =>
@@ -66,12 +67,7 @@ const formatCandidates =
     );
 const files = [
   ...new Set(
-    formatCandidates
-      .filter(
-        ({ status, path }) =>
-          status.startsWith("A") || !/^apps\/(?:api|web)\/src\//.test(path),
-      )
-      .map(({ path }) => path),
+    formatCandidates.filter(shouldFormatCandidate).map(({ path }) => path),
   ),
 ];
 

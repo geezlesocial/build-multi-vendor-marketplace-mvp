@@ -185,7 +185,7 @@ test('product cards share, save, buy now, and let members handle messages and no
     });
     await inquiryNotification.click();
     const notificationReadResponse = await notificationReadResponsePromise;
-    expect(notificationReadResponse.status(), await notificationReadResponse.text()).toBe(204);
+    expect(notificationReadResponse.status()).toBe(204);
     await expect(sellerPage).toHaveURL(/\/dashboard\?mode=seller&tab=messages$/);
     const notificationId = decodeURIComponent(new URL(notificationReadResponse.url()).pathname.split('/')[3]!);
     const inquiryNotificationRecord = await prisma.notification.findUnique({ where: { id: notificationId }, select: { userId: true, readAt: true } });
