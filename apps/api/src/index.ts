@@ -1,5 +1,5 @@
 import express from 'express';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { diagnostics } from './diagnostics.js';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -11,7 +11,7 @@ import { env } from './config.js';
 import { prisma, hashPassword, verifyPassword, createSession, currentUser, requireAuth, requireRole, audit, safeUser, resolvePlatformPositionName } from './security.js';
 import { registerSchema, loginSchema, checkoutSchema, posSchema, settingSchema } from './validation.js';
 import { capturePaypalOrder, createPaymongoCheckout, createPaypalOrder, createPaystackTransaction, createStripeCheckout, stripe, verifyPaypalWebhook } from './payments.js';
-import { liveShoppingState } from './live-domain.js';
+import { liveShoppingState, publicLiveSession } from './live-domain.js';
 import { liveProvider } from './live-provider.js';
 import { registerLiveProviderConfigurationRoutes, syncLiveProviderFromDatabase } from './live-provider-config.js';
 import { reconcileLiveRecordings } from './live-replays.js';
