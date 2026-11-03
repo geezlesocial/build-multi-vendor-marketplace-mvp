@@ -69,6 +69,45 @@ test.afterAll(async () => {
   await prisma.$disconnect();
 });
 
+test("seller theme studio keeps the WCAG AA color advisory responsive to edits", async ({
+  browser,
+}) => {
+  const account = await openAccount(browser, "seller.local@example.test");
+  try {
+    await account.page.goto("/seller/themes");
+    await expect(
+      account.page.getByRole("heading", {
+        name: "Themes & Templates Studio",
+      }),
+    ).toBeVisible();
+
+    await account.page
+      .getByRole("checkbox", { name: "Featured products" })
+      .check();
+    const sectionHeading = account.page.getByLabel("Section heading");
+    await expect(sectionHeading).toBeVisible();
+    await sectionHeading.fill("Featured on the front page");
+    await expect(sectionHeading).toHaveValue("Featured on the front page");
+
+    await account.page.getByLabel("Primary brand color").evaluate((element) => {
+      const input = element as HTMLInputElement;
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      if (!setValue) throw new Error("Color input value setter is unavailable");
+      setValue.call(input, "#ffffff");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await expect(
+      account.page.locator(".storeThemeContrastWarning"),
+    ).toContainText("WCAG AA");
+  } finally {
+    await account.context.close();
+  }
+});
+
 test("paid storefront themes are tenant-scoped, revisioned, and fall back safely across subscription changes", async ({
   browser,
 }, testInfo) => {

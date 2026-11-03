@@ -1,12 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
+import {
+  StoreThemeArtwork,
+  themeContrastRatio,
+} from "./store-theme-presentation.js";
+import type { ThemePreset } from "./store-theme-types.js";
 
-type Preset =
-  | "CLASSIC"
-  | "EDITORIAL"
-  | "BOUTIQUE"
-  | "TECH_ELECTRONICS"
-  | "GROCERIES"
-  | "ECOMMERCE_MARKETPLACE";
+type Preset = ThemePreset;
 type Tokens = {
   surfaceColor: string;
   cardColor: string;
@@ -80,21 +79,6 @@ type PreviewStore = {
 const maxThemePreviewBytes = 5_000_000;
 const maxThemePreviewPixels = 40_000_000;
 
-function contrastRatio(first: string, second: string) {
-  const luminance = (hex: string) => {
-    const channels = [1, 3, 5]
-      .map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
-      .map((value) =>
-        value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
-      );
-    return (
-      0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!
-    );
-  };
-  const values = [luminance(first), luminance(second)].sort((a, b) => b - a);
-  return (values[0]! + 0.05) / (values[1]! + 0.05);
-}
-
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie
     .split("; ")
@@ -114,28 +98,6 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error(body.error ?? "Request failed");
   }
   return response.status === 204 ? (undefined as T) : response.json();
-}
-
-function ThemeArtwork({
-  preset,
-  name,
-  src,
-}: {
-  preset: Preset;
-  name: string;
-  src: string;
-}) {
-  return (
-    <figure className="themeArtwork" data-theme={preset}>
-      <img
-        src={src}
-        alt={`${name} storefront theme preview`}
-        loading="lazy"
-        decoding="async"
-      />
-      <figcaption>{name}</figcaption>
-    </figure>
-  );
 }
 
 function uploadThemePreviewFile(
@@ -615,11 +577,11 @@ export function StoreThemesAdmin() {
           if (!item) return null;
           const tokens = config.tokens[preset];
           const lowAccentContrast =
-            contrastRatio(tokens.accentColor, tokens.cardColor) < 4.5 ||
-            contrastRatio(tokens.accentColor, tokens.surfaceColor) < 4.5;
+            themeContrastRatio(tokens.accentColor, tokens.cardColor) < 4.5 ||
+            themeContrastRatio(tokens.accentColor, tokens.surfaceColor) < 4.5;
           return (
             <article className="themeAdminCard" key={preset}>
-              <ThemeArtwork
+              <StoreThemeArtwork
                 preset={preset}
                 name={item.name}
                 src={candidateUrls[preset] ?? item.previewImageUrl}
