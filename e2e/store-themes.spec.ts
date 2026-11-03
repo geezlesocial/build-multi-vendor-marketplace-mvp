@@ -657,6 +657,25 @@ test("paid storefront themes are tenant-scoped, revisioned, and fall back safely
         name: "Themes & Templates Management",
       }),
     ).toBeVisible();
+    const groceriesCard = adminAccount.page.locator(".themeAdminCard").filter({
+      has: adminAccount.page.getByRole("heading", {
+        name: "Groceries",
+        exact: true,
+      }),
+    });
+    await groceriesCard
+      .getByRole("button", { name: "Preview this theme" })
+      .click();
+    await expect(
+      adminAccount.page.locator("#theme-admin-preview h3"),
+    ).toHaveText("Groceries");
+    const previewViewport = adminAccount.page.getByRole("group", {
+      name: "Administrator preview viewport",
+    });
+    await previewViewport.getByRole("button", { name: "mobile" }).click();
+    await expect(
+      adminAccount.page.locator(".themePreviewFrame--mobile"),
+    ).toBeVisible();
     const classicToggle = adminAccount.page.getByRole("checkbox", {
       name: "Make Classic available to eligible Stores",
     });
