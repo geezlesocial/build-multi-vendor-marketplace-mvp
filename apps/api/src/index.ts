@@ -1,20 +1,20 @@
 import express from 'express';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { diagnostics } from './diagnostics.js';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import { z } from 'zod';
-import { AffiliateAdjustmentType, LiveSessionStatus, Prisma, PaymentMethod, PaymentStatus, ProductStatus, Role, SellerStatus, OrderStatus } from '@prisma/client';
+import { AffiliateAdjustmentType, Prisma, PaymentMethod, PaymentStatus, ProductStatus, Role, SellerStatus, OrderStatus } from '@prisma/client';
 import type { Stripe as StripeType } from 'stripe';
 import { env } from './config.js';
 import { prisma, hashPassword, verifyPassword, createSession, currentUser, requireAuth, requireRole, audit, safeUser, resolvePlatformPositionName } from './security.js';
-import { registerSchema, loginSchema, checkoutSchema, posSchema, settingSchema, liveReportSchema } from './validation.js';
+import { registerSchema, loginSchema, checkoutSchema, posSchema, settingSchema } from './validation.js';
 import { capturePaypalOrder, createPaymongoCheckout, createPaypalOrder, createPaystackTransaction, createStripeCheckout, stripe, verifyPaypalWebhook } from './payments.js';
-import { liveShoppingState, publicLiveSession, requireLiveShopping } from './live-domain.js';
+import { liveShoppingState } from './live-domain.js';
 import { liveProvider } from './live-provider.js';
 import { registerLiveProviderConfigurationRoutes, syncLiveProviderFromDatabase } from './live-provider-config.js';
-import { liveReplayStorageReady, reconcileLiveRecordings, streamReplayObject } from './live-replays.js';
+import { reconcileLiveRecordings } from './live-replays.js';
 import { registerContentRoutes } from './content-routes.js';
 import { registerCartRoutes } from './cart-routes.js';
 import { publishDueContent } from './content-scheduler.js';
@@ -84,6 +84,7 @@ import { purgeExpiredMessageAttachmentDrafts, registerMessageRoutes } from './me
 import { wholesaleQuantityError } from './wholesale-domain.js';
 import { registerSocialAuthRoutes } from './social-auth-routes.js';
 import { registerOnboardingRoutes } from './onboarding-routes.js';
+import { registerLivePublicRoutes } from './live-public-routes.js';
 import { handleSponsoredPaypalEvent, handleSponsoredStripeEvent } from './store-buster-sponsored.js';
 import { providerCurrencyForMethod, createProviderChargeQuote, paymongoEventToVerifiedPaymentEvent, paystackEventToVerifiedPaymentEvent, verifyPaymongoSignature, verifyPaystackSignature, type ProviderChargeQuote } from './payment-gateway-domain.js';
 
@@ -227,55 +228,8 @@ app.get('/api/settings/public', asyncRoute(async (_req, res) => {
   res.json({ multiVendorEnabled: marketplace?.multiVendorEnabled ?? true, paymentMethods: methods, branding: branding?.publishedJson ?? null, languages: enabledMarketplaceLanguages(marketplace?.enabledLanguages), baseCurrency: env.CURRENCY, checkoutCurrency: env.CURRENCY, availableDisplayCurrencies, fxRatesConfigured: availableDisplayCurrencies.length > 1, subscriptionBillingEnabled: false, liveShopping: { enabled: live.effectiveEnabled, deploymentGate: live.deploymentGate, reason: live.reason } });
 }));
 
-app.get('/api/live-shopping/status', asyncRoute(async (_req, res) => {
-  const state = await liveShoppingState();
-  res.json({ ...state, recordingAvailable: state.readiness.configured && liveReplayStorageReady(), recordingStorageConfigured: liveReplayStorageReady() });
-}));
-app.get('/api/live-sessions', asyncRoute(async (_req, res) => {
-  const liveState = await liveShoppingState();
-  const visibleSessions: Prisma.LiveSessionWhereInput[] = [{ status: 'ENDED', recordingStatus: 'READY', replayPublishedAt: { not: null } }];
-  if (liveState.effectiveEnabled) visibleSessions.push({ status: { in: [LiveSessionStatus.SCHEDULED, LiveSessionStatus.STARTING, LiveSessionStatus.LIVE, LiveSessionStatus.PAUSED] }, OR: [{ status: { not: LiveSessionStatus.SCHEDULED } }, { scheduledAt: { gte: new Date() } }] });
-  const liveSessionWhere: Prisma.LiveSessionWhereInput = { deletedAt: null, seller: { is: { status: SellerStatus.APPROVED } }, OR: visibleSessions };
-  const sessions = await prisma.liveSession.findMany({ where: liveSessionWhere, include: { seller: { include: { store: { select: { name: true, slug: true } } } }, products: { where: { product: { is: { status: ProductStatus.APPROVED } } }, orderBy: { sortOrder: 'asc' }, include: { product: { include: { inventory: true } } } } }, orderBy: [{ scheduledAt: 'asc' }, { endedAt: 'desc' }], take: 50 });
-  res.json(sessions.map(session => publicLiveSession({ ...session, products: session.products.map(link => ({ ...link, product: { ...link.product, availableStock: link.product.inventory?.quantity ?? 0 } })) })));
-}));
-app.get('/api/live-sessions/:id', asyncRoute(async (req, res) => {
-  const liveState = await liveShoppingState();
-  const publicSessionOptions: Prisma.LiveSessionWhereInput[] = [{ status: LiveSessionStatus.ENDED, recordingStatus: 'READY', replayPublishedAt: { not: null } }];
-  if (liveState.effectiveEnabled) publicSessionOptions.push({ status: { in: [LiveSessionStatus.SCHEDULED, LiveSessionStatus.STARTING, LiveSessionStatus.LIVE, LiveSessionStatus.PAUSED] }, OR: [{ status: { not: LiveSessionStatus.SCHEDULED } }, { scheduledAt: { gte: new Date() } }] });
-  const sessionWhere: Prisma.LiveSessionWhereInput = { id: routeParam(req.params.id), deletedAt: null, seller: { is: { status: SellerStatus.APPROVED } }, OR: publicSessionOptions };
-  const session = await prisma.liveSession.findFirst({ where: sessionWhere, include: { seller: { include: { store: { select: { name: true, slug: true } } } }, products: { where: { product: { is: { status: ProductStatus.APPROVED } } }, orderBy: { sortOrder: 'asc' }, include: { product: { include: { inventory: true } } } } } });
-  if (!session) return res.status(404).json({ error: 'Live session not found' });
-  res.set('Cache-Control', 'no-store');
-  res.json(publicLiveSession({ ...session, products: session.products.map(link => ({ ...link, product: { ...link.product, availableStock: link.product.inventory?.quantity ?? 0 } })) }));
-}));
-app.get('/api/live-sessions/:id/replay', asyncRoute(async (req, res) => {
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), deletedAt: null, status: 'ENDED', recordingStatus: 'READY', replayPublishedAt: { not: null }, seller: { is: { status: SellerStatus.APPROVED } } }, select: { recordingStorageKey: true } });
-  if (!session?.recordingStorageKey) return res.status(404).json({ error: 'Published replay not found.' });
-  await streamReplayObject(req, res, session.recordingStorageKey);
-}));
-app.get('/api/live-sessions/:id/token', asyncRoute(async (req, res) => {
-  await requireLiveShopping();
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), deletedAt: null, status: { in: ['STARTING', 'LIVE', 'PAUSED'] }, seller: { is: { status: SellerStatus.APPROVED } }, providerSessionRef: { not: null } }, select: { providerSessionRef: true } });
-  if (!session?.providerSessionRef) return res.status(409).json({ error: 'This show is not ready for viewer playback.' });
-  const user = await currentUser(req);
-  let guestKey = req.cookies?.marketplace_live_viewer as string | undefined;
-  if (!user && !/^[a-f0-9]{64}$/i.test(guestKey ?? '')) {
-    guestKey = randomBytes(32).toString('hex');
-    res.cookie('marketplace_live_viewer', guestKey, { httpOnly: true, secure: env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 365 * 24 * 60 * 60 * 1000, path: '/api/live-sessions' });
-  }
-  const identity = user ? `viewer:${user.id}` : `guest:${createHash('sha256').update(guestKey!).digest('hex')}`;
-  res.json({ ...(await liveProvider.issueViewerToken(session.providerSessionRef, identity, user?.name ?? 'Viewer')), role: 'viewer' });
-}));
-app.post('/api/live-sessions/:id/reports', requireAuth, asyncRoute(async (req, res) => {
-  await requireLiveShopping();
-  const user = res.locals.user as { id: string };
-  const input = parse(liveReportSchema, req.body);
-  const session = await prisma.liveSession.findFirst({ where: { id: routeParam(req.params.id), deletedAt: null, status: { in: ['STARTING', 'LIVE', 'PAUSED'] } }, select: { id: true } });
-  if (!session) return res.status(404).json({ error: 'Live session not found' });
-  const report = await prisma.liveSessionReport.create({ data: { sessionId: session.id, reporterId: user.id, reason: input.reason } });
-  res.status(201).json({ id: report.id, status: report.status });
-}));
+registerLivePublicRoutes(app);
+
 registerSellerLiveSessionRoutes(app);
 registerProductRoutes(app);
 
