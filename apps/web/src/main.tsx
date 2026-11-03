@@ -9,36 +9,15 @@ import { MarketplaceHome } from './MarketplaceHome.js';
 import { AppShell } from './AppShell.js';
 import { SessionProvider, useSession, type SessionUser } from './session.js';
 import { formatMinor } from './money.js';
-
-const ContentAdmin = React.lazy(() => import('./ContentAdmin.js').then(module => ({ default: module.ContentAdmin })));
-const AffiliateAdmin = React.lazy(() => import('./AffiliateAdmin.js').then(module => ({ default: module.AffiliateAdmin })));
-const AffiliateDashboard = React.lazy(() => import('./AffiliateDashboard.js').then(module => ({ default: module.AffiliateDashboard })));
-const SiteChromeBuilder = React.lazy(() => import('./SiteChromeBuilder.js').then(module => ({ default: module.SiteChromeBuilder })));
-const SellerStorePlan = React.lazy(() => import('./SellerStorePlan.js').then(module => ({ default: module.SellerStorePlan })));
-const SellerStoreContent = React.lazy(() => import('./SellerStoreContent.js').then(module => ({ default: module.SellerStoreContent })));
-const SellerStoreGrowth = React.lazy(() => import('./SellerStoreGrowth.js').then(module => ({ default: module.SellerStoreGrowth })));
-const SellerStoreCurrency = React.lazy(() => import('./SellerStoreCurrency.js').then(module => ({ default: module.SellerStoreCurrency })));
-const SellerCommissionStatement = React.lazy(() => import('./SellerStoreCurrency.js').then(module => ({ default: module.SellerCommissionStatement })));
-const AdminCurrencyCommission = React.lazy(() => import('./AdminCurrencyCommission.js').then(module => ({ default: module.AdminCurrencyCommission })));
-const StoreEmailAction = React.lazy(() => import('./StoreEmailAction.js').then(module => ({ default: module.StoreEmailAction })));
-const EmailVerificationAction = React.lazy(() => import('./EmailVerificationAction.js').then(module => ({ default: module.EmailVerificationAction })));
-const Dashboard = React.lazy(() => import('./Dashboard.js').then(module => ({ default: module.Dashboard })));
-const MarketplaceCategory = React.lazy(() => import('./MarketplaceCategory.js').then(module => ({ default: module.MarketplaceCategory })));
-const Favorites = React.lazy(() => import('./Favorites.js').then(module => ({ default: module.Favorites })));
-const ProductPage = React.lazy(() => import('./ProductPage.js').then(module => ({ default: module.ProductPage })));
-const JimaKnowledgeArticle = React.lazy(() => import('./JimaKnowledgeArticle.js').then(module => ({ default: module.JimaKnowledgeArticle })));
-const Settings = React.lazy(() => import('./Settings.js').then(module => ({ default: module.Settings })));
-const AdminWallet = React.lazy(() => import('./AdminWallet.js').then(module => ({ default: module.AdminWallet })));
-const MarketplaceAds = React.lazy(() => import('./MarketplaceAds.js').then(module => ({ default: module.MarketplaceAds })));
-const Wallet = React.lazy(() => import('./Wallet.js').then(module => ({ default: module.Wallet })));
-const ClubCoins = React.lazy(() => import('./Wallet.js').then(module => ({ default: module.ClubCoins })));
-const LivePublicPage = React.lazy(() => import('./LivePublicPage.js').then(module => ({ default: module.LivePublicPage })));
-const LiveEmbedPage = React.lazy(() => import('./LivePublicPage.js').then(module => ({ default: module.LiveEmbedPage })));
-
-const PlatformAdmin = React.lazy(() => import('./PlatformAdmin.js').then(module => ({ default: module.PlatformAdmin })));
-const SellerPlatform = React.lazy(() => import('./SellerPlatform.js').then(module => ({ default: module.SellerPlatform })));
-const Storefront = React.lazy(() => import('./Storefront.js').then(module => ({ default: module.Storefront })));
-const StoreThemeStudio = React.lazy(() => import('./StoreThemeStudio.js').then(module => ({ default: module.StoreThemeStudio })));
+import {
+  AdminCurrencyCommission, AdminWallet, AffiliateAdmin, AffiliateDashboard,
+  ClubCoins, ContentAdmin, Dashboard, EmailVerificationAction, Favorites,
+  JimaKnowledgeArticle, LiveEmbedPage, LivePublicPage, MarketplaceAds,
+  MarketplaceCategory, PlatformAdmin, ProductPage, SellerCommissionStatement,
+  SellerPlatform, SellerStoreContent, SellerStoreCurrency, SellerStoreGrowth,
+  SellerStorePlan, Settings, SiteChromeBuilder, StoreEmailAction, Storefront,
+  StoreThemeStudio, Wallet,
+} from './lazy-routes.js';
 
 type User = SessionUser;
 type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; sellerId?: string | null; seller?: { store?: { name: string } }; category?: { name: string }; productType?: { id: string; name: string; requiresShipping: boolean } };
