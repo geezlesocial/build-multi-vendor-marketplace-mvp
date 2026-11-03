@@ -180,6 +180,15 @@ test("browser flow saves a quarantined branding draft, blocks publication, and r
   const delayedBrandingReadStarted = new Promise<void>((resolve) => {
     notifyDelayedBrandingReadStarted = resolve;
   });
+  let releaseInitialShippingRead: (() => void) | null = null;
+  let notifyInitialShippingReadStarted: (() => void) | null = null;
+  const delayedInitialShippingRead = new Promise<void>((resolve) => {
+    releaseInitialShippingRead = resolve;
+  });
+  const initialShippingReadStarted = new Promise<void>((resolve) => {
+    notifyInitialShippingReadStarted = resolve;
+  });
+  let delayInitialShippingRead = true;
 
   await page.route("**/api/admin/platform/branding", async (route) => {
     if (route.request().method() === "GET") {
@@ -201,6 +210,14 @@ test("browser flow saves a quarantined branding draft, blocks publication, and r
       });
     }
     return route.fallback();
+  });
+  await page.route("**/api/admin/shipping", async (route) => {
+    if (route.request().method() === "GET" && delayInitialShippingRead) {
+      delayInitialShippingRead = false;
+      notifyInitialShippingReadStarted?.();
+      await delayedInitialShippingRead;
+    }
+    await route.continue();
   });
   await page.route("**/api/admin/platform/branding-media", (route) =>
     route.fulfill({
@@ -292,9 +309,15 @@ test("browser flow saves a quarantined branding draft, blocks publication, and r
     return route.fulfill({ json: { publishedJson: published } });
   });
 
+  const initialShippingResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/admin/shipping") &&
+      response.request().method() === "GET",
+  );
   await page.goto("/admin/platform");
   await page.getByRole("button", { name: "Branding", exact: true }).click();
   await expect.poll(() => brandingReadCount).toBe(1);
+  await initialShippingReadStarted;
   const logoGroup = page.getByRole("group", { name: "Primary logo" });
   await logoGroup.getByLabel("Choose primary logo image").setInputFiles({
     name: "replacement.png",
@@ -339,6 +362,15 @@ test("browser flow saves a quarantined branding draft, blocks publication, and r
   await expect(page.getByLabel("Tagline")).toHaveValue(
     "Edited while server refresh is in flight",
   );
+  await expect(
+    page.getByText(
+      "Platform branding draft saved. Newer edits remain unsaved in the editor.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  releaseInitialShippingRead?.();
+  releaseInitialShippingRead = null;
+  await initialShippingResponsePromise;
   await expect(
     page.getByText(
       "Platform branding draft saved. Newer edits remain unsaved in the editor.",
