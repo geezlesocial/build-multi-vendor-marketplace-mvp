@@ -3,6 +3,7 @@ import express from 'express';
 import { CatalogSuggestionKind, CatalogSuggestionStatus, Prisma, PrismaClient, Role, TaxonomyStatus } from '@prisma/client';
 import { z } from 'zod';
 import { audit, prisma, requireAuth, requireRole } from './security.js';
+import { catalogDefaultSuppressionKey } from './catalog-default-suppression.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
@@ -50,7 +51,7 @@ const suggestionSchema = z.discriminatedUnion('kind', [
 ]);
 
 function normalizedName(value: string) { return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en'); }
-function slugBase(value: string) { return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 140) || 'catalog-item'; }
+function slugBase(value: string) { return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[’‘'`]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 140) || 'catalog-item'; }
 function actor(res: Response) { return res.locals.user as { id: string; role: Role }; }
 
 export function registerCatalogRoutes(app: Express) {
@@ -107,10 +108,17 @@ export function registerCatalogRoutes(app: Express) {
 
   app.delete('/api/admin/catalog/product-types/:id', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const admin = actor(res);
-    const existing = await prisma.catalogProductType.findUnique({ where: { id: param(req.params.id) }, include: { _count: { select: { products: true, features: true } } } });
+    const id = param(req.params.id);
+    const existing = await prisma.$transaction(async tx => {
+      const type = await tx.catalogProductType.findUnique({ where: { id }, include: { _count: { select: { products: true, features: true } } } });
+      if (!type) return null;
+      if (type._count.products || type._count.features) throw fail(409, 'Reassign or archive products and features before deleting this product type.');
+      const defaultKey = catalogDefaultSuppressionKey('productType', type.id);
+      if (defaultKey) await tx.catalogDefaultSuppression.upsert({ where: { defaultKey }, update: {}, create: { defaultKey, entityKind: 'productType' } });
+      await tx.catalogProductType.delete({ where: { id: type.id } });
+      return type;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     if (!existing) throw fail(404, 'Product type not found.');
-    if (existing._count.products || existing._count.features) throw fail(409, 'Reassign or archive products and features before deleting this product type.');
-    await prisma.catalogProductType.delete({ where: { id: existing.id } });
     await audit(admin.id, 'CATALOG_PRODUCT_TYPE_DELETED', 'CatalogProductType', existing.id, { name: existing.name });
     res.status(204).send();
   }));
@@ -163,10 +171,17 @@ export function registerCatalogRoutes(app: Express) {
 
   app.delete('/api/admin/catalog/features/:id', requireAuth, requireRole(Role.ADMIN), run(async (req, res) => {
     const admin = actor(res);
-    const existing = await prisma.catalogFeature.findUnique({ where: { id: param(req.params.id) }, include: { _count: { select: { products: true } } } });
+    const id = param(req.params.id);
+    const existing = await prisma.$transaction(async tx => {
+      const feature = await tx.catalogFeature.findUnique({ where: { id }, include: { _count: { select: { products: true } } } });
+      if (!feature) return null;
+      if (feature._count.products) throw fail(409, 'Remove or replace this feature on its products before deleting it.');
+      const defaultKey = catalogDefaultSuppressionKey('feature', feature.id);
+      if (defaultKey) await tx.catalogDefaultSuppression.upsert({ where: { defaultKey }, update: {}, create: { defaultKey, entityKind: 'feature' } });
+      await tx.catalogFeature.delete({ where: { id: feature.id } });
+      return feature;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     if (!existing) throw fail(404, 'Catalog feature not found.');
-    if (existing._count.products) throw fail(409, 'Remove or replace this feature on its products before deleting it.');
-    await prisma.catalogFeature.delete({ where: { id: existing.id } });
     await audit(admin.id, 'CATALOG_FEATURE_DELETED', 'CatalogFeature', existing.id, { name: existing.name });
     res.status(204).send();
   }));

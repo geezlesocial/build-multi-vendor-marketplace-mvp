@@ -43,9 +43,13 @@ export function MarketplaceCategory({ slug }: { slug: string }) {
       .then(async response => {
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.error ?? 'This category could not be loaded.');
+        if (typeof body.redirectTo === 'string' && body.redirectTo.startsWith('/category/') && !body.redirectTo.startsWith('//')) {
+          window.location.replace(body.redirectTo);
+          return null;
+        }
         return body as CategoryPageData;
       })
-      .then(result => { setData(result); document.title = `${result.category.name} | Market Lane`; })
+      .then(result => { if (result) { setData(result); document.title = `${result.category.name} | Market Lane`; } })
       .catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'This category could not be loaded.'); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();

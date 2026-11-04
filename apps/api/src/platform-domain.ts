@@ -57,7 +57,9 @@ export const taxonomySchema = z.object({
   name: z.string().trim().min(1).max(120),
   slug: z.string().trim().min(1).max(160).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   description: z.string().trim().max(500).optional(),
-  imageUrl: z.string().url().max(2000).optional(),
+  // Catalog images must come from the existing scanned platform-media flow.
+  // Existing records with older external URLs remain readable until edited.
+  imageUrl: z.string().max(160).regex(/^\/content-media\/[A-Za-z0-9_-]{1,100}$/).nullable().optional(),
   status: z.enum(['ACTIVE', 'INACTIVE', 'ARCHIVED']).default('ACTIVE'),
   displayOrder: z.number().int().min(0).max(100000).default(0),
   parentId: z.string().min(1).max(80).nullable().optional()
