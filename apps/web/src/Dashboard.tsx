@@ -1,16 +1,17 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSession } from "./session.js";
 import { BuyerDashboard } from "./DashboardBuyerWorkspace.js";
 import { SellerDashboard } from "./DashboardSellerWorkspace.js";
 import {
-  type Access,
+  type DashboardWorkspace as Workspace,
+  useDashboardData,
+} from "./useDashboardData.js";
+import {
   type BuyerData,
-  type SellerData,
   type User,
   request,
 } from "./DashboardShared.js";
 
-type Workspace = "buyer" | "seller";
 type WorkspaceTabs = { buyer: string; seller: string };
 const CART_SYNC_STORAGE_KEY = "marketplace:cart-sync";
 const allowedTabs: Record<Workspace, string[]> = {
@@ -64,9 +65,8 @@ export function Dashboard() {
   const initialLocation = readDashboardLocation();
   const isPlatformAdmin = sessionUser?.role === "ADMIN";
   const [user, setUser] = useState<User | null>(sessionUser);
-  const [access, setAccess] = useState<Access | null>(null);
-  const [buyer, setBuyer] = useState<BuyerData | null>(null);
-  const [seller, setSeller] = useState<SellerData | null>(null);
+  const { access, buyer, setBuyer, seller, loading, errors, load } =
+    useDashboardData(sessionUser?.role === "ADMIN");
   const [mode, setMode] = useState<Workspace>(() =>
     sessionUser?.role === "ADMIN" ? "seller" : initialLocation.mode,
   );
@@ -75,55 +75,12 @@ export function Dashboard() {
     seller:
       initialLocation.mode === "seller" ? initialLocation.tab : "overview",
   });
-  const [loading, setLoading] = useState<Record<Workspace, boolean>>({
-    buyer: true,
-    seller: sessionUser?.role === "ADMIN",
-  });
-  const [errors, setErrors] = useState<Record<Workspace, string>>({
-    buyer: "",
-    seller: "",
-  });
   const [cartSyncError, setCartSyncError] = useState("");
   const [message, setMessage] = useState("");
-  const requestSequence = useRef<Record<Workspace, number>>({
-    buyer: 0,
-    seller: 0,
-  });
-  const accessSequence = useRef(0);
 
   useEffect(() => {
     setUser(sessionUser);
   }, [sessionUser]);
-
-  const load = useCallback(async (target: Workspace) => {
-    const sequence = ++requestSequence.current[target];
-    const accessRequest = ++accessSequence.current;
-    setLoading((current) => ({ ...current, [target]: true }));
-    setErrors((current) => ({ ...current, [target]: "" }));
-    try {
-      const currentAccess = await request<Access>("/api/dashboard/access");
-      if (accessRequest === accessSequence.current) setAccess(currentAccess);
-      if (sequence !== requestSequence.current[target]) return;
-      if (target === "buyer" && !currentAccess.buyer) return;
-      if (target === "seller" && !currentAccess.seller) {
-        setSeller(null);
-        return;
-      }
-      if (target === "seller")
-        setSeller(await request<SellerData>("/api/dashboard/seller"));
-      else setBuyer(await request<BuyerData>("/api/dashboard/buyer"));
-    } catch (error) {
-      if (sequence === requestSequence.current[target])
-        setErrors((current) => ({
-          ...current,
-          [target]:
-            (error as Error).message || "Dashboard data could not be loaded.",
-        }));
-    } finally {
-      if (sequence === requestSequence.current[target])
-        setLoading((current) => ({ ...current, [target]: false }));
-    }
-  }, []);
 
   useEffect(() => {
     if (!sessionUser || sessionUser.role === "ADMIN") return undefined;
@@ -486,6 +443,10 @@ export function Dashboard() {
                 setTab={(tab) => selectTab("seller", tab)}
                 reload={() => load("seller")}
                 currentUserId={user?.id ?? sessionUser.id}
+                canUseSeofy={
+                  user?.role === "SELLER" &&
+                  seller?.entitlements?.seofyEnabled === true
+                }
               />
             </section>
           )}
