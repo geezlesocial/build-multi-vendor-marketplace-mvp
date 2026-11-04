@@ -384,9 +384,7 @@ test("admin-managed onboarding drafts stay private until publish and retain requ
 
     await adminPage.setViewportSize({ width: 390, height: 844 });
     await adminPage.goto("/admin/platform");
-    await adminPage
-      .getByRole("button", { name: "Onboarding readiness", exact: true })
-      .click();
+    await adminPage.getByLabel("Jump to module").selectOption("onboarding");
     await expect(
       adminPage.getByRole("heading", { name: "Onboarding experience" }),
     ).toBeVisible();
@@ -562,9 +560,7 @@ test("real ClamAV onboarding upload stays private until publish and refreshes an
 
     await adminPage.setViewportSize({ width: 1280, height: 900 });
     await adminPage.goto("/admin/platform");
-    await adminPage
-      .getByRole("button", { name: "Onboarding readiness", exact: true })
-      .click();
+    await adminPage.getByLabel("Jump to module").selectOption("onboarding");
     const pngDataUrl = await adminPage.evaluate(() => {
       const canvas = document.createElement("canvas");
       canvas.width = 24;
