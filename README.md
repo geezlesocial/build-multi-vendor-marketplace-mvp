@@ -12,19 +12,33 @@ Live shopping uses a fail-closed LiveKit adapter. It remains unavailable until t
 
 ## Local Windows PowerShell setup
 
+Use the repository's Node.js 22.23.4 runtime (the version pinned by CI and the API image).
+
 ```powershell
 Set-Location 'C:\Build Multi-Vendor Marketplace MVP'
-Copy-Item .env.example .env
-# Edit .env and replace PASSWORD_PEPPER with a long random value.
-npm install
-docker compose up -d postgres
-npm run db:generate
-npm run db:deploy
-npm run db:seed
+npm ci
+npm run dev:setup
+npm run dev:db:setup
 npm run dev
 ```
 
-Open `http://localhost:5173`. The API is at `http://localhost:4000`.
+`npm run dev:setup` creates `.env` only when it does not already exist. It generates fresh, cryptographically random local secrets without printing them; it never overwrites an existing `.env` and has no force option. On Windows the file inherits the current account's filesystem permissions.
+
+`npm run dev:db:setup` starts only the local Compose PostgreSQL service, generates the Prisma client, applies migrations, and seeds local demo accounts. Before doing so it verifies that the target is exactly the loopback `marketplace` development database on port 5432 and that payment, wallet, live-provider, storage, scanning, sponsored-placement, and email-delivery gates remain disabled. It refuses remote, staging, production, and E2E database targets or unsafe shell overrides. The local Compose database uses a persistent Docker volume; migrations and demo seed data are for local development only.
+
+Open `http://localhost:5173`. The API is at `http://localhost:4000`. API and Prisma commands load the repository `.env` automatically (and fall back to a workspace-local `.env` if the root file is absent), while preserving variables already explicitly set in the process environment.
+
+### Local setup on macOS/Linux
+
+```sh
+cd /path/to/build-multi-vendor-marketplace-mvp
+npm ci
+npm run dev:setup
+npm run dev:db:setup
+npm run dev
+```
+
+The same no-overwrite and loopback-only database safeguards apply. If `.env` already exists, inspect and retain it; the bootstrap command will not replace it.
 
 Local-only demo accounts seeded by `npm run db:seed`:
 
@@ -55,6 +69,8 @@ npm run e2e
 ```
 
 The suite starts the API and Vite web server itself, and covers admin publishing/metadata, editor permissions, CSRF-aware mutations, and quarantined media delivery. CI provisions a disposable PostgreSQL 17 service, applies migrations, seeds local test accounts, installs the Chromium headless shell, and runs the same suite. It does not deploy or use payment/live-shopping providers.
+
+Browser/API integration tests must use their unique disposable database (`E2E_DATABASE_URL` or the test-specific database variable documented by the script), never the persistent local `marketplace` database. The local development bootstrap does not create, migrate, seed, or delete E2E databases.
 
 Provider sandbox tests require the corresponding environment variables in `.env`. Live-provider sandbox tests remain blocked pending provider approval and credentials. Never commit `.env` or real credentials.
 
