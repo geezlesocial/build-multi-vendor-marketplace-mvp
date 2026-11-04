@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, Role, SellerStatus, StorePlanAssignmentStatus, StorePlanStatus, StorePlanVersionStatus } from '@prisma/client';
 import { z } from 'zod';
 import { prisma, requireAuth, requireRole } from './security.js';
-import { asStorePlanEntitlements, dropshippingPlanBlock, effectiveStorePlan, sellerOwnedConnectionsPlanBlock, storeEntitlements, storePlanEntitlementsSchema } from './store-plan-domain.js';
+import { asStorePlanEntitlements, dropshippingPlanBlock, effectiveStorePlan, sellerOwnedConnectionsPlanBlock, seofyPlanBlock, storeEntitlements, storePlanEntitlementsSchema } from './store-plan-domain.js';
 import { formatMinorAmount, isFreePlan, planPricingInputSchema, resolvePlanPricing } from './store-plan-pricing.js';
 import { env } from './config.js';
 import { stripeStoreBillingProvider, storePlanBillingSandboxEnabled, stripeStoreBillingTermsSupported } from './stripe-store-billing.js';
@@ -49,6 +49,8 @@ function versionData(name: string, entitlements: z.infer<typeof storePlanEntitle
   if (isFreePlan(resolvedPricing) && entitlements.allowedThemes.some(theme => (PAID_THEME_PRESETS as readonly string[]).includes(theme))) {
     throw fail(400, 'Free Store plans may include only Classic, Editorial and Boutique themes.');
   }
+  const seofyBlock = seofyPlanBlock(resolvedPricing, entitlements);
+  if (seofyBlock) throw fail(400, seofyBlock);
   const providerPolicyBlock = sellerOwnedConnectionsPlanBlock(resolvedPricing, entitlements);
   if (providerPolicyBlock) throw fail(400, providerPolicyBlock);
   const dropshippingBlock = dropshippingPlanBlock(resolvedPricing, entitlements);

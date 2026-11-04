@@ -20,6 +20,7 @@ export const storePlanEntitlementsSchema = z.object({
   mediaStorageLimitBytes: z.number().int().min(1).max(2_000_000_000).default(100_000_000),
   scheduledPublishingEnabled: z.boolean().default(false),
   advancedContentSeoEnabled: z.boolean().default(false),
+  seofyEnabled: z.boolean().default(false),
   storeBusterEnabled: z.boolean().default(false),
   storeBusterCampaignLimit: z.number().int().min(0).max(100_000).default(0),
   storeBusterMonthlyBudgetMinor: z.number().int().min(0).max(2_000_000_000).default(0),
@@ -68,6 +69,15 @@ export function dropshippingPlanBlock(
     : null;
 }
 
+export function seofyPlanBlock(
+  pricing: Pick<PlanPricingRecord, 'monthlyPriceMinor' | 'annualPriceMinor' | 'introPriceMinor' | 'freeTrialDays'>,
+  entitlements: Pick<StorePlanEntitlements, 'seofyEnabled'>
+) {
+  return entitlements.seofyEnabled && isFreePlan(pricing)
+    ? 'SEO-FY is available only on paid Store plans.'
+    : null;
+}
+
 export const legacyCompatibleEntitlements: StorePlanEntitlements = {
   productLimit: 2_000_000_000,
   storeLimit: 1,
@@ -85,6 +95,7 @@ export const legacyCompatibleEntitlements: StorePlanEntitlements = {
   mediaStorageLimitBytes: 2_000_000_000,
   scheduledPublishingEnabled: true,
   advancedContentSeoEnabled: true,
+  seofyEnabled: false,
   storeBusterEnabled: false,
   storeBusterCampaignLimit: 0,
   storeBusterMonthlyBudgetMinor: 0,
@@ -113,6 +124,7 @@ export const platformAdminEntitlements: StorePlanEntitlements = {
   mediaStorageLimitBytes: 2_000_000_000,
   scheduledPublishingEnabled: true,
   advancedContentSeoEnabled: true,
+  seofyEnabled: false,
   storeBusterEnabled: true,
   storeBusterCampaignLimit: 100_000,
   storeBusterMonthlyBudgetMinor: 2_000_000_000,
@@ -160,6 +172,7 @@ export function asStorePlanEntitlements(version: {
   mediaStorageLimitBytes: number;
   scheduledPublishingEnabled: boolean;
   advancedContentSeoEnabled: boolean;
+  seofyEnabled: boolean;
   storeBusterEnabled: boolean;
   storeBusterCampaignLimit: number;
   storeBusterMonthlyBudgetMinor: number;
@@ -186,6 +199,7 @@ export function asStorePlanEntitlements(version: {
     mediaStorageLimitBytes: version.mediaStorageLimitBytes,
     scheduledPublishingEnabled: version.scheduledPublishingEnabled,
     advancedContentSeoEnabled: version.advancedContentSeoEnabled,
+    seofyEnabled: version.seofyEnabled,
     storeBusterEnabled: version.storeBusterEnabled,
     storeBusterCampaignLimit: version.storeBusterCampaignLimit,
     storeBusterMonthlyBudgetMinor: version.storeBusterMonthlyBudgetMinor,

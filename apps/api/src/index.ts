@@ -53,6 +53,8 @@ import { registerOrderShippingRoutes } from './order-shipping-routes.js';
 import { registerOrderResolutionRoutes } from './order-resolution-routes.js';
 import { registerSupportRoutes } from './support-routes.js';
 import { purgeExpiredJimaConversations, registerJimaRoutes } from './jima-routes.js';
+import { registerSeofyRoutes } from './seofy-routes.js';
+import { purgeExpiredSeofyAudits } from './seofy-service.js';
 import { registerMemberAdminRoutes } from './member-admin-routes.js';
 import { registerPlatformCollaboratorRoutes } from './platform-collaborator-routes.js';
 import { registerCarrierRoutes } from './carrier-routes.js';
@@ -155,6 +157,7 @@ registerOrderShippingRoutes(app);
 registerOrderResolutionRoutes(app);
 registerSupportRoutes(app);
 registerJimaRoutes(app);
+registerSeofyRoutes(app);
 registerMemberAdminRoutes(app);
 registerPlatformCollaboratorRoutes(app);
 registerCarrierRoutes(app);
@@ -175,6 +178,7 @@ if (process.env.NODE_ENV !== 'test') setInterval(() => processStoreEmailDelivery
 if (process.env.NODE_ENV !== 'test') setInterval(() => processTransactionalEmailOutboxBatch().catch(error => diagnostics.logOperationalError('TRANSACTIONAL_EMAIL_DELIVERY_WORKER_FAILED', error)), 5_000);
 if (process.env.NODE_ENV !== 'test') setInterval(() => releaseExpiredMarketplaceAdBudgets().catch(error => diagnostics.logOperationalError('MARKETPLACE_AD_BUDGET_RECONCILIATION_FAILED', error)), 60_000);
 if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredJimaConversations().catch(error => diagnostics.logOperationalError('JIMA_RETENTION_CLEANUP_FAILED', error)), 60 * 60 * 1000);
+if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredSeofyAudits().catch(error => diagnostics.logOperationalError('SEOFY_RETENTION_CLEANUP_FAILED', error)), 60 * 60 * 1000);
 if (process.env.NODE_ENV !== 'test') setInterval(() => purgeExpiredMessageAttachmentDrafts().catch(error => diagnostics.logOperationalError('MESSAGE_DRAFT_CLEANUP_FAILED', error)), 60 * 60 * 1000);
 if (process.env.NODE_ENV !== 'test') {
   setTimeout(() => { void syncLiveProviderFromDatabase().then(reconcileLiveRecordings).catch(error => diagnostics.logOperationalError('LIVE_PROVIDER_SYNC_FAILED', error)); }, 5_000);

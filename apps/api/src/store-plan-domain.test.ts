@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { StorePaymentConnector, StoreThemePreset } from '@prisma/client';
-import { dropshippingPlanBlock, legacyCompatibleEntitlements, platformAdminEntitlements, isAtLimit, sellerOwnedConnectionsPlanBlock, sellerPayoutConnectorAllowed, storeEntitlements, storePlanEntitlementsSchema, type StorePlanDb } from './store-plan-domain.js';
+import { dropshippingPlanBlock, legacyCompatibleEntitlements, platformAdminEntitlements, isAtLimit, sellerOwnedConnectionsPlanBlock, sellerPayoutConnectorAllowed, seofyPlanBlock, storeEntitlements, storePlanEntitlementsSchema, type StorePlanDb } from './store-plan-domain.js';
 
 describe('Store plan entitlements', () => {
   it('validates independent product, Store, vendor, and staff-seat limits', () => {
@@ -20,6 +20,7 @@ describe('Store plan entitlements', () => {
     expect(entitlements.staffSeatLimit).toBe(3);
     expect(entitlements.sellerManagedPaymentsEnabled).toBe(true);
     expect(entitlements.dropshippingEnabled).toBe(false);
+    expect(entitlements.seofyEnabled).toBe(false);
   });
 
   it('rejects invalid, empty, and duplicated capability lists and unusable owner limits', () => {
@@ -49,6 +50,7 @@ describe('Store plan entitlements', () => {
     expect(legacyCompatibleEntitlements.storeBusterEnabled).toBe(false);
     expect(legacyCompatibleEntitlements.emailMarketingEnabled).toBe(false);
     expect(legacyCompatibleEntitlements.affiliateToolsEnabled).toBe(false);
+    expect(legacyCompatibleEntitlements.seofyEnabled).toBe(false);
   });
 
   it('grants the official platform Store every premium entitlement without plan billing', () => {
@@ -63,6 +65,7 @@ describe('Store plan entitlements', () => {
     expect(platformAdminEntitlements.storeBusterEnabled).toBe(true);
     expect(platformAdminEntitlements.emailMarketingEnabled).toBe(true);
     expect(platformAdminEntitlements.affiliateToolsEnabled).toBe(true);
+    expect(platformAdminEntitlements.seofyEnabled).toBe(false);
   });
 
   it('applies the admin override only when the Store is explicitly marked official', async () => {
@@ -115,6 +118,14 @@ describe('Store plan entitlements', () => {
     expect(dropshippingPlanBlock(freePrice, { dropshippingEnabled: true })).toMatch(/only on paid Store plans/);
     expect(dropshippingPlanBlock(freePrice, { dropshippingEnabled: false })).toBeNull();
     expect(dropshippingPlanBlock(paidPrice, { dropshippingEnabled: true })).toBeNull();
+  });
+
+  it('restricts SEO-FY plan configuration to paid versions while leaving it off by default', () => {
+    const freePrice = { monthlyPriceMinor: 0, annualPriceMinor: 0, introPriceMinor: null, freeTrialDays: 0 };
+    const paidPrice = { ...freePrice, monthlyPriceMinor: 1200 };
+    expect(seofyPlanBlock(freePrice, { seofyEnabled: true })).toMatch(/only on paid Store plans/);
+    expect(seofyPlanBlock(paidPrice, { seofyEnabled: true })).toBeNull();
+    expect(seofyPlanBlock(paidPrice, { seofyEnabled: false })).toBeNull();
   });
 
   it('enforces seller-owned payout connector entitlements while preserving manual payout options', () => {

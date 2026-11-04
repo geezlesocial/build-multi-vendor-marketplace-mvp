@@ -4,8 +4,9 @@ import { useSession } from './session.js';
 import './ProductReviews.css';
 import { JimaRecommendations } from './JimaRecommendations.js';
 import { ProductCardActions } from './ProductCardActions.js';
+import { applySeoMeta } from './seo-meta.js';
 
-type Product = { id: string; name: string; slug: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; color?: string | null; category?: { name: string } | null; brand?: { name: string; slug: string } | null; features?: { id: string; name: string }[]; images?: { url: string; alt: string }[]; mediaAttachments?: { id: string; kind: string; url: string; label?: string | null; originalName?: string; detectedMime?: string }[]; seller?: { store?: { name: string; slug: string } } };
+type Product = { id: string; name: string; slug: string; description: string; seoTitle?: string | null; seoDescription?: string | null; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; color?: string | null; category?: { name: string } | null; brand?: { name: string; slug: string } | null; features?: { id: string; name: string }[]; images?: { url: string; alt: string }[]; mediaAttachments?: { id: string; kind: string; url: string; label?: string | null; originalName?: string; detectedMime?: string }[]; seller?: { store?: { name: string; slug: string } } };
 type Review = { id: string; rating: number; title: string; body: string; reviewerName: string; verifiedPurchase: boolean; createdAt: string };
 type ReviewData = { averageRating: number | null; reviewCount: number; canReview: boolean; reason: string; existingReview: { id: string; status: string } | null; items: Review[] };
 const money = (minor: number, currency: string) => formatMinor(minor, currency);
@@ -43,6 +44,11 @@ export function ProductPage({ id }: { id: string }) {
     void loadReviews().catch(error => { if (active) setReviewError(error.message); });
     return () => { active = false; };
   }, [id, user?.id]);
+
+  useEffect(() => {
+    if (!product) return undefined;
+    return applySeoMeta(product.seoTitle || `${product.name} | Market Lane`, product.seoDescription || product.description, `${product.name} | Market Lane`);
+  }, [product]);
 
   const add = async () => {
     if (!user) { window.location.assign('/?auth=login'); return; }

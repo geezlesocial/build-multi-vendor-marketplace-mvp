@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { formatMinor } from "./money.js";
 import { JimaRecommendations } from "./JimaRecommendations.js";
+import { StoreSeoMetadata } from "./StoreSeoMetadata.js";
+import { StoreContentLinks } from "./StoreContentLinks.js";
 import { ProductCardActions } from "./ProductCardActions.js";
 import { MarketplaceAdPlacementSection } from "./MarketplaceAds.js";
 import { PublicCampaignPlacement } from "./PublicCampaigns.js";
@@ -165,7 +167,6 @@ export function Storefront({ slug }: { slug: string }) {
           window.location.reload();
           return;
         }
-        document.title = `${body.name} | Market Lane`;
         setStore({ ...body, content });
         const availableCurrencies = currencyData.currencies.filter(
           (currency) => currency.displayAvailable,
@@ -468,6 +469,7 @@ export function Storefront({ slug }: { slug: string }) {
         ["--store-theme-accent" as string]: tokens.accentColor,
       }}
     >
+      <StoreSeoMetadata slug={slug} store={store} />
       <div className="storefrontIdentity">
         <a
           className="storefrontIdentityBrand"
@@ -879,29 +881,7 @@ export function Storefront({ slug }: { slug: string }) {
           )}
         </section>
       )}
-      {(store.content?.posts.length ?? 0) + (store.content?.pages.length ?? 0) >
-        0 && (
-        <section className="storeContentLinks">
-          <h2>From this store</h2>
-          {store.content?.pages.map((page) => (
-            <p key={`page-${page.slug}`}>
-              <a href={`/store/${store.slug}/pages/${page.slug}`}>
-                {page.title}
-              </a>
-            </p>
-          ))}
-          {store.content?.posts.map((post) => (
-            <article className="card cardBody" key={`post-${post.slug}`}>
-              <h3>
-                <a href={`/store/${store.slug}/blog/${post.slug}`}>
-                  {post.title}
-                </a>
-              </h3>
-              {post.excerpt && <p>{post.excerpt}</p>}
-            </article>
-          ))}
-        </section>
-      )}
+      <StoreContentLinks slug={store.slug} content={store.content} />
     </section>
   );
 }

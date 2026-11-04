@@ -1,0 +1,187 @@
+.seofyPage {
+  display: grid;
+  gap: 1.25rem;
+}
+.seofyHero,
+.seofyWorkspace,
+.seofyGate,
+.seofyPrivacy {
+  border: 1px solid #dfe7e1;
+  border-radius: 1rem;
+  background: #fff;
+  padding: clamp(1rem, 2.8vw, 1.75rem);
+}
+.seofyHero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  background: linear-gradient(135deg, #f0f7f1, #fff 62%);
+}
+.seofyHero h1 {
+  margin: 0.1rem 0 0.55rem;
+  font-size: clamp(2rem, 5vw, 3.4rem);
+}
+.seofyHero p:not(.eyebrow) {
+  max-width: 62ch;
+  color: #526158;
+}
+.seofyBadge,
+.seofyStatus {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.4rem 0.75rem;
+  background: #eaf3ed;
+  color: #285c42;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.seofyGate,
+.seofyPrivacy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+.seofyGate h2,
+.seofyPrivacy h2,
+.seofySectionHeading h2 {
+  margin: 0.1rem 0 0.5rem;
+}
+.seofyGate p,
+.seofyPrivacy p:not(.eyebrow) {
+  margin: 0;
+  max-width: 75ch;
+  color: #526158;
+}
+.seofyWorkspace {
+  display: grid;
+  gap: 1rem;
+}
+.seofySectionHeading,
+.seofyRunRow {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.seofyRunRow label {
+  flex: 1;
+  display: grid;
+  gap: 0.4rem;
+}
+.seofyRunRow select {
+  max-width: 42rem;
+  min-height: 2.8rem;
+}
+.seofyFindings,
+.seofySuggestions,
+.seofyHistory {
+  display: grid;
+  gap: 0.65rem;
+}
+.seofyFinding,
+.seofySuggestion,
+.seofyHistory article {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  border: 1px solid #e5ebe6;
+  border-radius: 0.8rem;
+  padding: 1rem;
+}
+.seofyFinding h3 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+.seofyFinding p {
+  margin: 0;
+  color: #526158;
+}
+.seofySeverity {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.seofySeverity--warning {
+  background: #fff3d9;
+  color: #715012;
+}
+.seofySeverity--info {
+  background: #eaf3ed;
+  color: #285c42;
+}
+.seofyAiStatus {
+  border-left: 3px solid #397252;
+  padding: 0.3rem 0.75rem;
+}
+.seofySuggestion {
+  cursor: pointer;
+}
+.seofySuggestion > input,
+.seofyToggle input {
+  flex: 0 0 auto;
+  margin-top: 0.2rem;
+}
+.seofySuggestion > span {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.seofySuggestion small,
+.seofyHistory small {
+  color: #657169;
+  line-height: 1.45;
+}
+.seofyDraft {
+  overflow-wrap: anywhere;
+  padding: 0.7rem;
+  border-radius: 0.55rem;
+  background: #f5f8f5;
+  font-weight: 650;
+}
+.seofyStatus--stale {
+  background: #fff0ec;
+  color: #8b3323;
+}
+.seofyStatus--partially_applied {
+  background: #fff4dc;
+  color: #715012;
+}
+.seofyHistory article {
+  align-items: center;
+  justify-content: space-between;
+}
+.seofyHistory article > div {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.seofyToggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: 20rem;
+  font-weight: 650;
+}
+@media (max-width: 680px) {
+  .seofyHero,
+  .seofyGate,
+  .seofyPrivacy,
+  .seofySectionHeading,
+  .seofyRunRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .seofyBadge,
+  .seofyStatus {
+    align-self: flex-start;
+  }
+  .seofyHistory article {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

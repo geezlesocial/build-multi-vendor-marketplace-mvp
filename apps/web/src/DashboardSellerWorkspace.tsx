@@ -62,6 +62,10 @@ export function SellerDashboard({
           <small>Brand experience</small>
           <strong>Content studio</strong>
         </a>
+        <a href="/seller/seofy">
+          <small>Search visibility</small>
+          <strong>SEO-FY audit</strong>
+        </a>
         <a href="/dashboard?mode=seller&amp;tab=ads">
           <small>Marketing</small>
           <strong>Ads &amp; growth</strong>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { SeoFyAdminSummary } from './SeoFyAdminSummary.js';
 
 type RecommendationConfig = {
   enabled: boolean;
@@ -48,6 +49,7 @@ export function JimaAdmin() {
     </form>
     <section><h3>Configuration history</h3><p className="muted">Each saved settings change is retained in the administrator audit log. Restoring a version applies its validated snapshot and creates a new audit entry; it does not erase later history.</p><div className="table">{versions.map(version => <article className="row" key={version.id}><span><strong>{version.action === 'JIMA_CONFIGURATION_ROLLED_BACK' ? 'Restored configuration' : 'Settings updated'}</strong><small>{new Date(version.createdAt).toLocaleString()} · {version.actor?.name || version.actor?.email || 'Former administrator'}</small><small>{version.config.enabled ? 'AI on' : 'AI off'} · {version.config.model} · retention {version.config.retentionDays} days</small></span><button type="button" disabled={busy} onClick={() => void restore(version)}>Restore</button></article>)}{versions.length === 0 && <p className="muted">No versioned settings yet. Saving the current settings starts the history.</p>}</div></section>
     <section><h3>Approved help articles</h3><p className="muted">Only published articles matching the viewer's public, buyer, or seller scope are retrieved. Drafts and other audiences are excluded server-side.</p><form className="settings" onSubmit={addArticle}><label>Title<input value={title} onChange={event => setTitle(event.target.value)} minLength={3} maxLength={160} required /></label><label>Answer / guidance<textarea value={body} onChange={event => setBody(event.target.value)} maxLength={8000} rows={4} required /></label><label>Audience<select value={audience} onChange={event => setAudience(event.target.value as Article['audience'])}><option>PUBLIC</option><option>BUYER</option><option>SELLER</option></select></label><button className="primary" disabled={busy}>Save draft</button></form><div className="table">{articles.map(article => <article className="row" key={article.id}><span><strong>{article.title}</strong><small>{article.audience} · {article.published ? 'Published' : 'Draft'}</small></span><button type="button" disabled={busy} onClick={() => void publish(article)}>{article.published ? 'Unpublish' : 'Publish'}</button></article>)}</div></section>
+    <SeoFyAdminSummary />
     <section><h3>Support handoff</h3><p>Signed-in users can transfer a conversation to the existing support ticket queue. Tickets are created as OPEN, and staff responses remain in the marketplace Support &amp; messaging desk.</p></section>
   </section>;
 }
