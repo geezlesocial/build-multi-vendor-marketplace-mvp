@@ -86,6 +86,7 @@ import { purgeExpiredMessageAttachmentDrafts, registerMessageRoutes } from './me
 import { wholesaleQuantityError } from './wholesale-domain.js';
 import { registerSocialAuthRoutes } from './social-auth-routes.js';
 import { registerOnboardingRoutes } from './onboarding-routes.js';
+import { registerOnboardingExperienceRoutes } from './onboarding-experience-routes.js';
 import { registerLivePublicRoutes } from './live-public-routes.js';
 import { handleSponsoredPaypalEvent, handleSponsoredStripeEvent } from './store-buster-sponsored.js';
 import { providerCurrencyForMethod, createProviderChargeQuote, paymongoEventToVerifiedPaymentEvent, paystackEventToVerifiedPaymentEvent, verifyPaymongoSignature, verifyPaystackSignature, type ProviderChargeQuote } from './payment-gateway-domain.js';
@@ -171,6 +172,7 @@ registerLiveShopRoutes(app);
 registerMessageRoutes(app);
 registerSocialAuthRoutes(app);
 registerOnboardingRoutes(app);
+registerOnboardingExperienceRoutes(app);
 registerLiveProviderConfigurationRoutes(app);
 if (process.env.NODE_ENV !== 'test') setInterval(() => publishDueContent().catch(error => diagnostics.logOperationalError('CONTENT_SCHEDULER_FAILED', error)), 60_000);
 if (process.env.NODE_ENV !== 'test') setInterval(() => expireDueStoreSubscriptions(prisma).catch(error => diagnostics.logOperationalError('STORE_SUBSCRIPTION_EXPIRY_FAILED', error)), 60_000);

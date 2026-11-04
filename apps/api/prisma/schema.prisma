@@ -345,6 +345,7 @@ enum MediaPurpose {
   STORE_MEDIA
   MESSAGE
   MARKETPLACE_AD
+  ONBOARDING_EXPERIENCE
 }
 
 enum MessageReactionKind {
@@ -769,6 +770,8 @@ model User {
   createdCampaigns                    MarketingCampaign[]
   emailOutbox                         EmailOutbox[]
   platformBrandingRevisions           PlatformBrandingRevision[]
+  onboardingExperiencesUpdated        OnboardingExperience[]           @relation("OnboardingExperienceUpdater")
+  onboardingExperienceRevisions       OnboardingExperienceRevision[]
   storeThemeRevisions                 StoreThemeRevision[]
   siteChromeRevisions                 SiteChromeRevision[]                @relation("SiteChromeEditor")
   sellerAdminNotes                    SellerAdminNote[]
@@ -2102,6 +2105,37 @@ model PlatformBrandingRevision {
 
   @@unique([brandingId, version])
   @@index([brandingId, createdAt])
+}
+
+model OnboardingExperience {
+  id               String                          @id @default("default")
+  draftJson        Json
+  publishedJson    Json?
+  draftVersion     Int                             @default(0)
+  publishedVersion Int?
+  updatedById      String?
+  publishedAt      DateTime?
+  createdAt        DateTime                        @default(now())
+  updatedAt        DateTime                        @updatedAt
+  updatedBy        User?                           @relation("OnboardingExperienceUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  revisions        OnboardingExperienceRevision[]
+
+  @@index([publishedVersion, publishedAt])
+}
+
+model OnboardingExperienceRevision {
+  id                String               @id @default(cuid())
+  configurationId   String
+  version           Int
+  configurationJson Json
+  editorId          String
+  changeNote        String?
+  createdAt         DateTime             @default(now())
+  configuration     OnboardingExperience @relation(fields: [configurationId], references: [id], onDelete: Cascade)
+  editor            User                 @relation(fields: [editorId], references: [id], onDelete: Restrict)
+
+  @@unique([configurationId, version])
+  @@index([configurationId, createdAt])
 }
 
 model StoreThemeRevision {

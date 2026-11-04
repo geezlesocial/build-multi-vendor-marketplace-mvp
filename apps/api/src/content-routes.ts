@@ -79,6 +79,7 @@ async function publicMediaAsset(id: string) {
   const asset = await prisma.mediaAsset.findUnique({ where: { id } });
   if (!asset || asset.scanStatus !== MediaScanStatus.APPROVED) return null;
   if (asset.uploadStatus !== 'COMPLETE') return null;
+  if (asset.purpose === MediaPurpose.ONBOARDING_EXPERIENCE) return null;
   const publishedNow = { status: ContentStatus.PUBLISHED, OR: [{ publishedAt: null }, { publishedAt: { lte: now() } }] };
   const [posts, pages, storePosts, storePages, branding, stores, products, productAttachments, sponsoredCreative, authPage, marketingCampaignMedia, chromeConfigurations, themeCatalog] = await Promise.all([
     prisma.blogPost.findMany({ where: { ...publishedNow, storeId: null }, select: { bodyJson: true, featuredImageId: true, ogImageId: true } }),
@@ -110,6 +111,17 @@ async function publicMediaAsset(id: string) {
   ]);
   const referencedInPublishedContent = [...posts, ...storePosts].some(item => item.featuredImageId === id || item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || [...pages, ...storePages].some(item => item.ogImageId === id || JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding?.publishedJson ?? {}).includes(id) || stores.some(item => item.logoMediaId === id || item.bannerMediaId === id || JSON.stringify(item.themePublishedJson).includes(id)) || chromeConfigurations.some(configuration => JSON.stringify(configuration.publishedJson).includes(id)) || (asset.purpose === MediaPurpose.THEME_PREVIEW && asset.storeId === null && JSON.stringify(themeCatalog?.themeCatalogJson ?? {}).includes(id)) || products.length > 0 || productAttachments.length > 0 || Boolean(sponsoredCreative) || authPage?.logoMediaId === id || Boolean(marketingCampaignMedia);
   return referencedInPublishedContent ? asset : null;
+}
+
+async function publicOnboardingMediaAsset(id: string) {
+  const [asset, configuration] = await Promise.all([
+    prisma.mediaAsset.findFirst({ where: { id, storeId: null, purpose: MediaPurpose.ONBOARDING_EXPERIENCE, kind: MediaKind.IMAGE, uploadStatus: 'COMPLETE', scanStatus: MediaScanStatus.APPROVED } }),
+    prisma.onboardingExperience.findUnique({ where: { id: 'default' }, select: { publishedJson: true } })
+  ]);
+  const published = configuration?.publishedJson;
+  if (!asset || !published || typeof published !== 'object' || Array.isArray(published)) return null;
+  const welcome = (published as { welcome?: { logoMediaId?: unknown; heroMediaId?: unknown } }).welcome;
+  return welcome?.logoMediaId === id || welcome?.heroMediaId === id ? asset : null;
 }
 
 async function contentHtml(content: { id: string; title: string; bodyJson: unknown; excerpt?: string | null; seoTitle?: string | null; seoDescription?: string | null; canonicalUrl?: string | null; noIndex: boolean; noFollow: boolean; publishedAt?: Date | null; updatedAt: Date; slug: string; ogImageId?: string | null }, kind: 'blog' | 'pages', preview = false) {
@@ -158,7 +170,8 @@ export function registerContentRoutes(app: Express, openObject: typeof openConte
   }));
   app.get('/robots.txt', (_req, res) => res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /content-preview/\nSitemap: ${env.SITE_URL}/sitemap.xml\n`));
   app.get('/content-media/:id', run(async (req, res) => {
-    const asset = await publicMediaAsset(param(req.params.id));
+    const id = param(req.params.id);
+    const asset = await publicMediaAsset(id) ?? await publicOnboardingMediaAsset(id);
     if (!asset) return res.status(404).send('Media not found');
     const campaignMedia = await prisma.marketingCampaignMedia.findUnique({ where: { mediaAssetId: asset.id }, select: { mediaAssetId: true } });
     const baseHeaders = { 'Content-Type': asset.detectedMime, 'Content-Disposition': asset.kind === MediaKind.DOCUMENT || asset.kind === MediaKind.CAPTION ? `attachment; filename="${asset.safeName}"` : `inline; filename="${asset.safeName}"`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': campaignMedia ? 'public, max-age=60' : 'public, max-age=31536000, immutable' };
@@ -377,5 +390,31 @@ export function registerContentRoutes(app: Express, openObject: typeof openConte
     }
   }));
   app.post('/api/admin/content/media', express.raw({ type: '*/*', limit: '60mb' }), requireAuth, requireRole(...contentRoles), run(async (_req, res) => res.status(410).json({ error: 'Direct CMS media uploads are no longer supported. Use the short-lived private upload flow.' })));
+  app.delete('/api/admin/content/media/:id', requireAuth, requireRole(...adminOnly), run(async (req, res, next) => {
+    const id = param(req.params.id);
+    const asset = await prisma.mediaAsset.findFirst({ where: { id, storeId: null, purpose: MediaPurpose.ONBOARDING_EXPERIENCE }, select: { id: true } });
+    if (!asset) return next();
+    const editorId = actor(res).id;
+    await prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('onboarding-experience', 194821))`;
+      const currentAsset = await tx.mediaAsset.findFirst({ where: { id, storeId: null, purpose: MediaPurpose.ONBOARDING_EXPERIENCE }, select: { id: true } });
+      if (!currentAsset) throw fail(404, 'Onboarding media not found.');
+      const [configuration, revisions] = await Promise.all([
+        tx.onboardingExperience.findUnique({ where: { id: 'default' }, select: { draftJson: true, publishedJson: true } }),
+        tx.onboardingExperienceRevision.findMany({ where: { configurationId: 'default' }, select: { configurationJson: true } })
+      ]);
+      const referencesAsset = (value: unknown) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const welcome = (value as { welcome?: { logoMediaId?: unknown; heroMediaId?: unknown } }).welcome;
+        return welcome?.logoMediaId === id || welcome?.heroMediaId === id;
+      };
+      if (referencesAsset(configuration?.draftJson) || referencesAsset(configuration?.publishedJson) || revisions.some(revision => referencesAsset(revision.configurationJson))) {
+        throw fail(409, 'Onboarding media is still referenced by the draft, published experience, or revision history.');
+      }
+      await tx.mediaAsset.delete({ where: { id } });
+      await tx.auditLog.create({ data: { actorId: editorId, action: 'CONTENT_MEDIA_DELETED', entity: 'MediaAsset', entityId: id } });
+    });
+    return res.status(204).send();
+  }));
   app.delete('/api/admin/content/media/:id', requireAuth, requireRole(...adminOnly), run(async (req, res) => { const id = param(req.params.id); const asset = await prisma.mediaAsset.findFirst({ where: { id, storeId: null } }); if (!asset) return res.status(404).json({ error: 'Media not found' }); const [featured, og, posts, pages, productImages, productMedia, branding, stores, avatars, chrome] = await Promise.all([prisma.blogPost.count({ where: { storeId: null, featuredImageId: id } }), prisma.blogPost.count({ where: { storeId: null, ogImageId: id } }), prisma.blogPost.findMany({ where: { storeId: null }, select: { bodyJson: true } }), prisma.contentPage.findMany({ where: { storeId: null }, select: { bodyJson: true } }), prisma.productImage.count({ where: { mediaAssetId: id } }), prisma.productMedia.count({ where: { mediaAssetId: id } }), prisma.platformBranding.findUnique({ where: { id: 'default' }, select: { draftJson: true, publishedJson: true } }), prisma.store.findMany({ select: { logoMediaId: true, bannerMediaId: true, themeDraftJson: true, themePublishedJson: true } }), prisma.user.count({ where: { avatarMediaId: id } }), prisma.siteChromeConfiguration.findMany({ where: { storeId: null }, select: { draftJson: true, publishedJson: true } })]); if (featured || og || productImages || productMedia || avatars || stores.some(store => store.logoMediaId === id || store.bannerMediaId === id || JSON.stringify([store.themeDraftJson, store.themePublishedJson]).includes(id)) || [...posts, ...pages].some(item => JSON.stringify(item.bodyJson).includes(id)) || JSON.stringify(branding ?? {}).includes(id) || chrome.some(configuration => JSON.stringify([configuration.draftJson, configuration.publishedJson]).includes(id))) throw fail(409, 'Media is still referenced by content, branding, or a product'); await prisma.mediaAsset.delete({ where: { id } }); await audit(actor(res).id, 'CONTENT_MEDIA_DELETED', 'MediaAsset', id); res.status(204).send(); }));
 }

@@ -336,6 +336,48 @@ jobs:
           node scripts/staging-services-smoke.mjs
           node --import tsx scripts/media-scanning-api.test.mjs
 
+      - name: Verify admin onboarding upload, scan, publish, member refresh, and restore with real ClamAV
+        env:
+          E2E_BASE_URL: http://127.0.0.1:${{ env.STAGING_TEST_WEB_PORT }}
+          E2E_WEB_PORT: ${{ env.STAGING_TEST_WEB_PORT }}
+          E2E_API_PORT: ${{ env.STAGING_TEST_API_PORT }}
+          E2E_REAL_CLAMAV: "true"
+          E2E_CLAMAV_HOST: 127.0.0.1
+          E2E_CLAMAV_PORT: ${{ env.STAGING_TEST_CLAMAV_PORT }}
+          E2E_REUSE_EXISTING_SERVERS: "true"
+          ONBOARDING_EVIDENCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npx playwright test e2e/onboarding-experience.spec.ts --project=default --grep "real ClamAV onboarding upload"
+
+      - name: Capture onboarding ClamAV scanner logs
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker compose -f docker-compose.staging-test.yml --profile session-services logs --no-color clamav > clamav-onboarding.log 2>&1
+          scanner_logs_status=$?
+          if [ "$scanner_logs_status" -ne 0 ]; then
+            echo "Scanner log collection exited with status $scanner_logs_status." >> clamav-onboarding.log
+          fi
+          {
+            echo "### Real-ClamAV onboarding acceptance evidence"
+            echo "PR source commit: `${{ github.event.pull_request.head.sha || github.sha }}`"
+            echo "Workflow checkout commit: `$GITHUB_SHA`"
+            echo "Scanner log collection exit: $scanner_logs_status"
+            echo "The Playwright HTML report, traces, and attached audit evidence are retained with this run's artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain real-ClamAV onboarding acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: onboarding-clamav-acceptance-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+            clamav-onboarding.log
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Destroy the disposable Compose environment
         if: always()
         run: docker compose -f docker-compose.staging-test.yml --profile session-services down --volumes --remove-orphans
