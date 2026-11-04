@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './load-project-env.js';
 import { z } from 'zod';
 import { clubCoinsHardDisabledSchema, isDisposableWalletFundingDatabaseUrl } from './wallet-safety.js';
 import { liveProviderConfigurationsAvailableSchema } from './provider-configuration-gate.js';

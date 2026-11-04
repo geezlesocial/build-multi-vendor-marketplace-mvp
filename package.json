@@ -9,6 +9,9 @@
   ],
   "scripts": {
     "dev": "concurrently -k \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
+    "dev:setup": "node scripts/dev-bootstrap.mjs",
+    "dev:db:setup": "node scripts/dev-db-setup.mjs",
+    "test:dev-setup": "node --test scripts/dev-bootstrap.test.mjs scripts/dev-db-setup.test.mjs",
     "build": "npm run build -w apps/api && npm run build -w apps/web",
     "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
     "format:check": "node scripts/check-format.mjs",
