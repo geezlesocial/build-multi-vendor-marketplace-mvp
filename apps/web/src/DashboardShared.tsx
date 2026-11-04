@@ -32,6 +32,7 @@ export type BuyerData = {
 
 export type SellerData = {
   store: any;
+  entitlements: { seofyEnabled: boolean };
   summary: {
     orderCount: number;
     grossByCurrency: { currency: string; grossMinor: number }[];
@@ -71,13 +72,18 @@ export async function request<T>(
   return response.status === 204 ? (undefined as T) : response.json();
 }
 
+export type DashboardNavGroup = {
+  label: string;
+  items: { id: string; label: string }[];
+};
+
 export function Tabs({
-  items,
+  groups,
   active,
   setActive,
   id,
 }: {
-  items: string[];
+  groups: DashboardNavGroup[];
   active: string;
   setActive: (value: string) => void;
   id: string;
@@ -91,26 +97,86 @@ export function Tabs({
           value={active}
           onChange={(event) => setActive(event.target.value)}
         >
-          {items.map((item) => (
-            <option key={item} value={item}>
-              {item[0].toUpperCase() + item.slice(1)}
-            </option>
+          {groups.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </label>
-      <nav className="dashboardTabs" aria-label="Dashboard sections">
-        {items.map((item) => (
-          <button
-            type="button"
-            key={item}
-            className={active === item ? "primary" : ""}
-            aria-current={active === item ? "page" : undefined}
-            onClick={() => setActive(item)}
+      <nav className="dashboardTabs dashboardNav" aria-label="Dashboard sections">
+        {groups.map((group) => (
+          <div
+            className="dashboardNavGroup"
+            key={group.label}
+            role="group"
+            aria-label={group.label}
           >
-            {item[0].toUpperCase() + item.slice(1)}
-          </button>
+            <span className="dashboardNavGroupLabel" aria-hidden="true">
+              {group.label}
+            </span>
+            {group.items.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                className={active === item.id ? "primary" : ""}
+                aria-current={active === item.id ? "page" : undefined}
+                onClick={() => setActive(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         ))}
       </nav>
     </>
+  );
+}
+
+export type DashboardMetric = {
+  label: string;
+  value: string | number;
+  detail: string;
+  href?: string;
+  action?: string;
+};
+
+export function DashboardMetrics({
+  label,
+  items,
+}: {
+  label: string;
+  items: DashboardMetric[];
+}) {
+  return (
+    <section className="dashboardMetrics" aria-label={label}>
+      {items.map((item) => {
+        const content = (
+          <>
+            <span className="dashboardMetricLabel">{item.label}</span>
+            <strong className="dashboardMetricValue">{item.value}</strong>
+            <span className="dashboardMetricDetail">{item.detail}</span>
+            {item.href && (
+              <span className="dashboardMetricAction">
+                {item.action ?? "Open"} <span aria-hidden="true">→</span>
+              </span>
+            )}
+          </>
+        );
+        return item.href ? (
+          <a className="dashboardMetric" href={item.href} key={item.label}>
+            {content}
+          </a>
+        ) : (
+          <article className="dashboardMetric" key={item.label}>
+            {content}
+          </article>
+        );
+      })}
+    </section>
   );
 }

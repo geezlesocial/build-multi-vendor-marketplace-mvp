@@ -12,7 +12,13 @@ import { SellerStoreIntegrations } from "./SellerStoreIntegrations.js";
 import { SupportDesk } from "./SupportDesk.js";
 import { Messages } from "./DashboardMessages.js";
 import { SellerOrders } from "./SellerOrders.js";
-import { Tabs, type SellerData, money, request } from "./DashboardShared.js";
+import {
+  DashboardMetrics,
+  Tabs,
+  type SellerData,
+  money,
+  request,
+} from "./DashboardShared.js";
 
 export function SellerDashboard({
   data,
@@ -20,77 +26,116 @@ export function SellerDashboard({
   setTab,
   reload,
   currentUserId,
+  canUseSeofy,
 }: {
   data: SellerData | null;
   tab: string;
   setTab: (value: string) => void;
   reload: () => void;
   currentUserId: string;
+  canUseSeofy: boolean;
 }) {
   if (!data) return null;
-  const tabs = [
-    "overview",
-    "products",
-    "orders",
-    "shipping",
-    "dropshipping",
-    "ads",
-    "messages",
-    "store",
-    "currency",
-    "commission",
-    "integrations",
-    "payouts",
-    "pos",
-    "live",
-    "profile",
+  const groups = [
+    { label: "Overview", items: [{ id: "overview", label: "Overview" }] },
+    { label: "Catalog", items: [{ id: "products", label: "Products" }] },
+    {
+      label: "Orders & fulfillment",
+      items: [
+        { id: "orders", label: "Orders" },
+        { id: "shipping", label: "Shipping" },
+      ],
+    },
+    {
+      label: "Growth",
+      items: [
+        { id: "dropshipping", label: "Dropshipping" },
+        { id: "ads", label: "Ads" },
+      ],
+    },
+    { label: "Store", items: [{ id: "store", label: "Store" }] },
+    {
+      label: "Finance",
+      items: [
+        { id: "currency", label: "Currency" },
+        { id: "commission", label: "Commission" },
+        { id: "payouts", label: "Payouts" },
+      ],
+    },
+    {
+      label: "Tools",
+      items: [
+        { id: "messages", label: "Messages" },
+        { id: "integrations", label: "Integrations" },
+        { id: "pos", label: "POS" },
+        { id: "live", label: "Live" },
+        { id: "profile", label: "Profile" },
+      ],
+    },
   ];
   return (
-    <>
+    <div className="dashboardWorkspaceLayout">
       <Tabs
         id="seller-dashboard"
-        items={tabs}
+        groups={groups}
         active={tab}
         setActive={setTab}
       />
-      <nav className="sellerQuickLinks" aria-label="Store tools">
-        <a href="/seller/plan">
-          <small>Account</small>
-          <strong>Plan and usage</strong>
-        </a>
-        <a href="/seller/content">
-          <small>Brand experience</small>
-          <strong>Content studio</strong>
-        </a>
-        <a href="/seller/seofy">
-          <small>Search visibility</small>
-          <strong>SEO-FY audit</strong>
-        </a>
-        <a href="/dashboard?mode=seller&amp;tab=ads">
-          <small>Marketing</small>
-          <strong>Ads &amp; growth</strong>
-        </a>
-        <a href="/seller/currency">
-          <small>Finance</small>
-          <strong>Store currency</strong>
-        </a>
-      </nav>
+      <div className="dashboardWorkspaceContent">
+      {tab === "overview" && (
+        <nav className="sellerQuickLinks" aria-label="Seller shortcuts">
+          <a href="/seller/plan">
+            <small>Account</small>
+            <strong>Plan and usage</strong>
+          </a>
+          <a href="/seller/content">
+            <small>Brand experience</small>
+            <strong>Content studio</strong>
+          </a>
+          {canUseSeofy && (
+            <a href="/seller/seofy">
+              <small>Search visibility</small>
+              <strong>SEO-FY audit</strong>
+            </a>
+          )}
+        </nav>
+      )}
       {tab === "overview" && (
         <>
-          <div className="heroPills">
-            <span>{data.products.length} products</span>
-            <span>{data.summary.orderCount} orders</span>
-            {data.summary.grossByCurrency.length ? (
-              data.summary.grossByCurrency.map((total) => (
-                <span key={total.currency}>
-                  Gross sales ({total.currency}):{" "}
-                  {money(total.grossMinor, total.currency)}
-                </span>
-              ))
-            ) : (
-              <span>No sales yet</span>
-            )}
-          </div>
+          <DashboardMetrics
+            label="Seller account summary"
+            items={[
+              {
+                label: "Listings shown",
+                value: data.products.length,
+                detail: "Manage your catalog",
+                href: "/dashboard?mode=seller&tab=products",
+                action: "Manage products",
+              },
+              {
+                label: "Seller orders",
+                value: data.summary.orderCount,
+                detail: "Non-cancelled orders",
+                href: "/dashboard?mode=seller&tab=orders",
+                action: "Review orders",
+              },
+              ...(data.summary.grossByCurrency.length
+                ? data.summary.grossByCurrency.map((total) => ({
+                    label: `Gross sales (${total.currency})`,
+                    value: money(total.grossMinor, total.currency),
+                    detail: "Recorded seller order totals",
+                    href: "/dashboard?mode=seller&tab=orders",
+                    action: "Review orders",
+                  }))
+                : [
+                    {
+                      label: "Gross sales",
+                      value: "No sales yet",
+                      detail: "Totals appear after seller orders are recorded",
+                    },
+                  ]),
+            ]}
+          />
           <SellerOrders orders={data.orders.slice(0, 5)} reload={reload} />
         </>
       )}
@@ -186,6 +231,7 @@ export function SellerDashboard({
       )}
       {tab === "live" && <SellerLiveStudio products={data.products} />}
       {tab === "profile" && <LiveRepostTimeline />}
-    </>
+      </div>
+    </div>
   );
 }

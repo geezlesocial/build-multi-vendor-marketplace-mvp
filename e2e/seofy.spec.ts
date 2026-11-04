@@ -234,6 +234,19 @@ test("SEO-FY is paid-plan, tenant, approval, and privacy scoped end to end", asy
       foreignProduct.id,
     );
 
+    const ownerDashboardResponse = await ownerAccount.page.request.get(
+      "/api/dashboard/seller",
+    );
+    expect(ownerDashboardResponse.ok()).toBeTruthy();
+    expect(
+      (await ownerDashboardResponse.json()).entitlements.seofyEnabled,
+    ).toBe(true);
+
+    await ownerAccount.page.goto("/dashboard?mode=seller");
+    await expect(
+      ownerAccount.page.getByRole("link", { name: "SEO-FY audit" }),
+    ).toBeVisible();
+
     await ownerAccount.page.goto("/seller/seofy");
     await expect(
       ownerAccount.page.getByRole("heading", { name: "SEO-FY" }),
@@ -437,6 +450,17 @@ test("SEO-FY is paid-plan, tenant, approval, and privacy scoped end to end", asy
     const freeState = await freeAccount.page.request.get("/api/seller/seofy");
     expect(freeState.ok()).toBeTruthy();
     expect((await freeState.json()).entitlement.enabled).toBe(false);
+    const freeDashboardResponse = await freeAccount.page.request.get(
+      "/api/dashboard/seller",
+    );
+    expect(freeDashboardResponse.ok()).toBeTruthy();
+    expect((await freeDashboardResponse.json()).entitlements.seofyEnabled).toBe(
+      false,
+    );
+    await freeAccount.page.goto("/dashboard?mode=seller");
+    await expect(
+      freeAccount.page.getByRole("link", { name: "SEO-FY audit" }),
+    ).toHaveCount(0);
     const forgedEntitlement = await freeAccount.page.request.post(
       "/api/seller/seofy/audits",
       {

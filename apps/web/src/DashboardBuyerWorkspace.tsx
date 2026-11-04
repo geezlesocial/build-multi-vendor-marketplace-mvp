@@ -8,6 +8,7 @@ import { announceHeaderActivityChange } from "./header-activity-events.js";
 import { OrderList } from "./BuyerOrderList.js";
 import { Messages } from "./DashboardMessages.js";
 import {
+  DashboardMetrics,
   Tabs,
   type BuyerData,
   type User,
@@ -33,25 +34,53 @@ export function BuyerDashboard({
   reload: () => void;
 }) {
   if (!data) return null;
-  const tabs = [
-    "overview",
-    "orders",
-    "cart",
-    "favorites",
-    "messages",
-    "notifications",
-    "profile",
-    "addresses",
-    "live",
+  const groups = [
+    {
+      label: "Shopping",
+      items: [
+        { id: "overview", label: "Overview" },
+        { id: "cart", label: "Cart" },
+      ],
+    },
+    { label: "Orders", items: [{ id: "orders", label: "Orders" }] },
+    {
+      label: "Saved items",
+      items: [{ id: "favorites", label: "Favorites" }],
+    },
+    {
+      label: "Communications",
+      items: [
+        { id: "messages", label: "Messages" },
+        { id: "notifications", label: "Notifications" },
+      ],
+    },
+    {
+      label: "Account",
+      items: [
+        { id: "profile", label: "Profile" },
+        { id: "addresses", label: "Addresses" },
+      ],
+    },
+    { label: "Live", items: [{ id: "live", label: "Live" }] },
   ];
-  if (data.affiliate) tabs.push("affiliate");
+  if (data.affiliate)
+    groups.push({
+      label: "Growth",
+      items: [{ id: "affiliate", label: "Affiliate" }],
+    });
   const cartCount = data.cart.items.reduce(
     (sum, item) => sum + item.quantity,
     0,
   );
   return (
-    <>
-      <Tabs id="buyer-dashboard" items={tabs} active={tab} setActive={setTab} />
+    <div className="dashboardWorkspaceLayout">
+      <Tabs
+        id="buyer-dashboard"
+        groups={groups}
+        active={tab}
+        setActive={setTab}
+      />
+      <div className="dashboardWorkspaceContent">
       {cartSyncError && (
         <p className="notice" role="alert">
           Cart summary refresh failed; showing the last saved count.{" "}
@@ -69,12 +98,38 @@ export function BuyerDashboard({
       {tab === "live" && <LiveShopping />}
       {tab === "overview" && (
         <>
-          <div className="heroPills">
-            <span>{data.orders.length} recent orders</span>
-            <span aria-live="polite">{cartCount} items in cart</span>
-            <span>{data.favorites.length} favorites</span>
-          </div>
-          <OrderList orders={data.orders.slice(0, 5)} reload={reload} />
+          <DashboardMetrics
+            label="Buyer account summary"
+            items={[
+              {
+                label: "Recent orders",
+                value: data.orders.length,
+                detail: "Track purchases and delivery",
+                href: "/dashboard?tab=orders",
+                action: "View orders",
+              },
+              {
+                label: "Items in cart",
+                value: cartCount,
+                detail: "Continue when you are ready",
+                href: "/dashboard?tab=cart",
+                action: "Review cart",
+              },
+              {
+                label: "Favorites",
+                value: data.favorites.length,
+                detail: "Products you saved",
+                href: "/dashboard?tab=favorites",
+                action: "View favorites",
+              },
+            ]}
+          />
+          <OrderList
+            orders={data.orders.slice(0, 5)}
+            reload={reload}
+            compact
+            onViewAll={() => setTab("orders")}
+          />
         </>
       )}
       {tab === "orders" && <OrderList orders={data.orders} reload={reload} />}
@@ -106,7 +161,8 @@ export function BuyerDashboard({
           <a href="/affiliate">Open affiliate dashboard</a>
         </section>
       )}
-    </>
+      </div>
+    </div>
   );
 }
 

@@ -5,9 +5,13 @@ import { money, request } from "./DashboardShared.js";
 export function OrderList({
   orders,
   reload,
+  compact = false,
+  onViewAll,
 }: {
   orders: any[];
   reload: () => void;
+  compact?: boolean;
+  onViewAll?: () => void;
 }) {
   const [receiptTarget, setReceiptTarget] = useState<{
     parentOrderId: string;
@@ -52,22 +56,46 @@ export function OrderList({
       timeStyle: "short",
     }).format(new Date(value));
   return (
-    <section className="buyerOrders">
+    <section className={`buyerOrders${compact ? " buyerOrders--compact" : ""}`}>
       <header className="ordersSectionHeading">
         <div>
-          <p className="eyebrow">Your purchases</p>
-          <h2>Orders and delivery</h2>
+          <p className="eyebrow">{compact ? "Your purchases" : "Order tracking"}</p>
+          <h2>{compact ? "Recent orders" : "Orders and delivery"}</h2>
           <p className="muted">
-            Track Store updates and confirm receipt after your item ships.
+            {compact
+              ? "Your latest purchases and delivery updates."
+              : "Track Store updates and confirm receipt after your item ships."}
           </p>
         </div>
-        <span className="ordersLiveBadge">
-          <i aria-hidden="true" />
-          Updates every 10 seconds
-        </span>
+        {compact ? (
+          <button
+            className="dashboardTextAction"
+            type="button"
+            onClick={onViewAll}
+          >
+            View all orders <span aria-hidden="true">→</span>
+          </button>
+        ) : (
+          <span className="ordersLiveBadge">
+            <i aria-hidden="true" />
+            Updates every 10 seconds
+          </span>
+        )}
       </header>
       {orders.length === 0 ? (
-        <div className="empty">No orders yet.</div>
+        compact ? (
+          <div className="buyerOrderEmptyState">
+            <div>
+              <strong>No purchases yet</strong>
+              <p>Your order and delivery updates will appear here.</p>
+            </div>
+            <a className="primary" href="/">
+              Browse products
+            </a>
+          </div>
+        ) : (
+          <div className="empty">No orders yet.</div>
+        )
       ) : (
         <div className="buyerOrderList">
           {orders.map((order) => (
