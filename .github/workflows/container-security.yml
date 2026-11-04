@@ -92,6 +92,37 @@ jobs:
       - name: Build React/Nginx web image from this commit
         run: docker build --pull -f apps/web/Dockerfile -t marketplace-web:${GITHUB_SHA} .
 
+      - name: Install verified Trivy CLI from the official release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+            https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+            | node -e 'let body="";process.stdin.on("data",chunk=>body+=chunk).on("end",()=>{const tag=JSON.parse(body).tag_name;if(!/^v[0-9]+[.][0-9]+[.][0-9]+$/.test(tag))process.exit(1);process.stdout.write(tag);})')"
+          version="${tag#v}"
+          case "$(uname -m)" in
+            x86_64) release_arch="64bit" ;;
+            aarch64) release_arch="ARM64" ;;
+            *) echo "Unsupported Trivy runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          archive="trivy_${version}_Linux-${release_arch}.tar.gz"
+          release_url="https://github.com/aquasecurity/trivy/releases/download/${tag}"
+          install_dir="$RUNNER_TEMP/trivy-bin"
+          mkdir -p "$install_dir"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+            "$release_url/$archive" -o "$RUNNER_TEMP/$archive"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+            "$release_url/trivy_${version}_checksums.txt" -o "$RUNNER_TEMP/trivy-checksums.txt"
+          expected="$(awk -v file="$archive" '$2 == file { print $1; exit }' "$RUNNER_TEMP/trivy-checksums.txt")"
+          if [[ ! "$expected" =~ ^[[:xdigit:]]{64}$ ]]; then
+            echo "Official Trivy checksum missing or malformed for $archive" >&2
+            exit 1
+          fi
+          printf '%s  %s\n' "$expected" "$RUNNER_TEMP/$archive" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$install_dir" trivy
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/trivy" version | grep -F "Version: $version"
+
       - name: Scan source tree for secrets (report stays on ephemeral runner)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -99,6 +130,7 @@ jobs:
           scan-ref: .
           scanners: secret
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          skip-setup-trivy: true
           skip-dirs: .git,node_modules,apps/api/dist,apps/web/dist
           format: json
           output: ${{ runner.temp }}/source-secrets.json
