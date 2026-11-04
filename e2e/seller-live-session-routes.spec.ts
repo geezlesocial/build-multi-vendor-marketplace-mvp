@@ -1,6 +1,37 @@
 import { expect, test } from "@playwright/test";
+import { ProductStatus } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import { createTestPrismaClient } from "../scripts/prisma-test-client.mjs";
+import { validateE2EDatabaseURL } from "../scripts/e2e-database-url.mjs";
 
 const password = "LocalDemoOnly-ChangeMe-123!";
+const databaseUrl = process.env.E2E_DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error(
+    "E2E_DATABASE_URL is required; live-session browser tests use the guarded disposable E2E database.",
+  );
+}
+validateE2EDatabaseURL(databaseUrl);
+const prisma = createTestPrismaClient(databaseUrl);
+const fixtureProductIds: string[] = [];
+const fixtureSessionIds: string[] = [];
+
+test.afterAll(async () => {
+  if (fixtureSessionIds.length) {
+    await prisma.liveSession.deleteMany({
+      where: { id: { in: fixtureSessionIds } },
+    });
+  }
+  if (fixtureProductIds.length) {
+    await prisma.inventory.deleteMany({
+      where: { productId: { in: fixtureProductIds } },
+    });
+    await prisma.product.deleteMany({
+      where: { id: { in: fixtureProductIds } },
+    });
+  }
+  await prisma.$disconnect();
+});
 
 test("seller live-session routes preserve list, edit, soft-delete, and restore behavior", async ({
   page,
@@ -14,13 +45,32 @@ test("seller live-session routes preserve list, edit, soft-delete, and restore b
   );
   expect(csrf).toBeTruthy();
   const headers = { "x-csrf-token": csrf!.value };
-  const product = await page.request.get("/api/products");
-  expect(product.ok(), await product.text()).toBeTruthy();
-  const { items } = (await product.json()) as {
-    items: { id: string; slug: string }[];
-  };
-  const demoProduct = items.find((item) => item.slug === "demo-canvas-tote");
-  expect(demoProduct).toBeTruthy();
+  const sellerUser = await prisma.user.findUniqueOrThrow({
+    where: { email: "seller.local@example.test" },
+    select: { id: true },
+  });
+  const seller = await prisma.seller.findUniqueOrThrow({
+    where: { userId: sellerUser.id },
+    select: { id: true },
+  });
+  const productType = await prisma.catalogProductType.findUniqueOrThrow({
+    where: { slug: "physical-product" },
+    select: { id: true },
+  });
+  const product = await prisma.product.create({
+    data: {
+      sellerId: seller.id,
+      productTypeId: productType.id,
+      name: `Live session route fixture ${randomUUID()}`,
+      slug: `live-session-route-${randomUUID()}`,
+      description: "Disposable approved product for live-session route tests.",
+      priceMinor: 1200,
+      status: ProductStatus.APPROVED,
+      inventory: { create: { quantity: 1 } },
+    },
+    select: { id: true },
+  });
+  fixtureProductIds.push(product.id);
 
   const createdResponse = await page.request.post("/api/seller/live-sessions", {
     headers,
@@ -28,7 +78,7 @@ test("seller live-session routes preserve list, edit, soft-delete, and restore b
       title: "Route extraction lifecycle test",
       timezone: "UTC",
       scheduledAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      productIds: [demoProduct!.id],
+      productIds: [product.id],
     },
   });
   expect(createdResponse.status(), await createdResponse.text()).toBe(201);
@@ -37,6 +87,7 @@ test("seller live-session routes preserve list, edit, soft-delete, and restore b
     title: string;
     status: string;
   };
+  fixtureSessionIds.push(created.id);
   expect(created).toMatchObject({
     title: "Route extraction lifecycle test",
     status: "SCHEDULED",
