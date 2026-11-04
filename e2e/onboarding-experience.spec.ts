@@ -293,6 +293,10 @@ test("admin-managed onboarding drafts stay private until publish and retain requ
     );
     expect(staleSave.status()).toBe(409);
 
+    await prisma.user.update({
+      where: { id: member.id },
+      data: { onboardingCompletedAt: null },
+    });
     const restored = await adminPage.request.post(
       `/api/admin/onboarding/experience/revisions/${firstVersion}/restore`,
       { data: { expectedVersion: secondVersion }, headers: editorHeaders },
@@ -404,10 +408,6 @@ test("admin-managed onboarding drafts stay private until publish and retain requ
       await adminPage.setViewportSize({ width, height: 900 });
       await expectNoHorizontalOverflow(adminPage);
     }
-    await prisma.user.update({
-      where: { id: member.id },
-      data: { onboardingCompletedAt: null },
-    });
     await memberPage.goto("/onboarding");
     await expect(memberPage.getByRole("heading", { level: 1 })).toBeVisible();
     for (const width of [320, 375, 768, 1024, 1440]) {
