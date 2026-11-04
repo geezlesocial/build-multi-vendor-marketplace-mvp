@@ -61,7 +61,12 @@ function CatalogActions({
   const busy = busyId === item.id;
   return (
     <div className="catalogRowActions">
-      <button type="button" disabled={busy} onClick={() => onEdit(kind, item)}>
+      <button
+        type="button"
+        aria-label={`Edit ${item.name}`}
+        disabled={busy}
+        onClick={() => onEdit(kind, item)}
+      >
         Edit
       </button>
       <button
