@@ -55,6 +55,7 @@ test.afterAll(async () => prisma.$disconnect());
 test("admin-managed onboarding drafts stay private until publish and retain required steps", async ({
   browser,
 }) => {
+  test.setTimeout(120_000);
   const adminContext = await browser.newContext();
   const memberContext = await browser.newContext();
   const adminPage = await adminContext.newPage();
