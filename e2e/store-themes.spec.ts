@@ -596,6 +596,14 @@ test("paid storefront themes are tenant-scoped, revisioned, and fall back safely
             ".storefrontProductCard > .cardBody > h2 > a",
           ),
         ).toHaveText([budgetProduct.name, product.name, premiumProduct.name]);
+        const productCards = ownerAccount.page.locator(
+          ".storefrontProductCard",
+        );
+        await expect(productCards).toHaveCount(3);
+        await expect(productCards.first()).toContainText("3 in stock");
+        await expect(
+          productCards.first().locator(".cardBody > h2 > a"),
+        ).toHaveAttribute("href", `/products/${budgetProduct.id}`);
       }
       await testInfo.attach(`${preset.toLowerCase()}-desktop`, {
         body: await ownerAccount.page.screenshot({ animations: "disabled" }),
