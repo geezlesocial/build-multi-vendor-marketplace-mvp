@@ -6,10 +6,11 @@ import { audit, prisma, requireAuth, requireRole } from './security.js';
 import { env } from './config.js';
 import { sellerPayoutConnectorAllowed, storeEntitlements } from './store-plan-domain.js';
 import { authorizedBrandingStore } from './store-branding-access.js';
-import { brandingSchema, encryptPayoutDetails, maskIdentifier, payoutMethodEnabled, payoutMethodSchema, payoutStatusTransitionAllowed, platformSettingsSchema, reservedStoreSlug, safePayoutMethod, storeSettingsSchema, storeSlugFromName, storeThemeSchema, taxonomySchema } from './platform-domain.js';
+import { brandingSchema, encryptPayoutDetails, maskIdentifier, payoutMethodEnabled, payoutMethodSchema, payoutStatusTransitionAllowed, platformSettingsSchema, reservedStoreSlug, safePayoutMethod, storeSettingsSchema, storeSlugFromName, storeThemeSchema } from './platform-domain.js';
 import { payoutEligibilityFailure, remainingSaleMinor } from './payout-eligibility.js';
 import { enabledMarketplaceLanguages } from './marketplace-domain.js';
 import { readThemeCatalogConfig, resolvePublishedStoreTheme, resolveStoreThemeAccess } from './store-theme-domain.js';
+import { registerCatalogAdminRoutes } from './catalog-admin-routes.js';
 
 const run = (handler: (req: Request, res: Response, next: NextFunction) => unknown): express.RequestHandler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
@@ -142,16 +143,6 @@ async function themeProductsCheck(db: typeof prisma | Prisma.TransactionClient, 
 function publicBranding(value: unknown) {
   const parsed = brandingSchema.safeParse(value);
   return parsed.success ? parsed.data : brandingSchema.parse({ platformName: 'Market Lane', shortName: 'Market Lane', description: '', seoDescription: '', tagline: '' });
-}
-async function assertCategoryDepth(parentId: string | null | undefined, categoryId?: string) {
-  let depth = 1;
-  let current = parentId ? await prisma.category.findUnique({ where: { id: parentId }, select: { id: true, parentId: true } }) : null;
-  while (current) {
-    if (current.id === categoryId) throw fail(400, 'Category parent would create a cycle');
-    depth += 1;
-    if (depth > 3) throw fail(400, 'Category nesting is limited to three levels');
-    current = current.parentId ? await prisma.category.findUnique({ where: { id: current.parentId }, select: { id: true, parentId: true } }) : null;
-  }
 }
 function settingUpdateData(input: z.infer<typeof platformSettingsSchema>) {
   const { reason: _reason, ...data } = input;
@@ -313,14 +304,7 @@ export function registerPlatformRoutes(app: Express) {
     await audit(actor.id, 'SELLER_STORE_UPDATED', 'Store', updated.id, { sellerId: seller.id, changed: Object.keys(input), slug: updated.slug }); res.json(updated);
   }));
 
-  app.get('/api/admin/categories', requireAuth, requireRole(...admin), run(async (_req, res) => res.json(await prisma.category.findMany({ include: { parent: true, _count: { select: { products: true, children: true } } }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }] }))));
-  app.post('/api/admin/categories', requireAuth, requireRole(...admin), run(async (req, res) => { const actor = user(res); const input = taxonomySchema.parse(req.body); await assertCategoryDepth(input.parentId); const created = await prisma.category.create({ data: input }); await audit(actor.id, 'CATEGORY_CREATED', 'Category', created.id, { name: created.name }); res.status(201).json(created); }));
-  app.patch('/api/admin/categories/:id', requireAuth, requireRole(...admin), run(async (req, res) => { const actor = user(res); const input = taxonomySchema.partial().parse(req.body); const existing = await prisma.category.findUnique({ where: { id: param(req.params.id) } }); if (!existing) return res.status(404).json({ error: 'Category not found' }); await assertCategoryDepth(input.parentId ?? existing.parentId, existing.id); if (input.slug && await prisma.category.findFirst({ where: { slug: input.slug, id: { not: existing.id } } })) throw fail(409, 'Category slug is already in use'); const updated = await prisma.category.update({ where: { id: existing.id }, data: input }); await audit(actor.id, 'CATEGORY_UPDATED', 'Category', updated.id, { changed: Object.keys(input) }); res.json(updated); }));
-  app.delete('/api/admin/categories/:id', requireAuth, requireRole(...admin), run(async (req, res) => { const actor = user(res); const existing = await prisma.category.findUnique({ where: { id: param(req.params.id) }, include: { _count: { select: { products: true, children: true, catalogFeatures: true, childCategorySuggestions: true, featureSuggestions: true } } } }); if (!existing) return res.status(404).json({ error: 'Category not found' }); if (existing._count.products || existing._count.children || existing._count.catalogFeatures || existing._count.childCategorySuggestions || existing._count.featureSuggestions) throw fail(409, 'Reassign or archive referenced products, features, child categories, or suggestions before deletion'); await prisma.category.delete({ where: { id: existing.id } }); await audit(actor.id, 'CATEGORY_DELETED', 'Category', existing.id); res.status(204).send(); }));
-  app.get('/api/admin/brands', requireAuth, requireRole(...admin), run(async (_req, res) => res.json(await prisma.brand.findMany({ include: { _count: { select: { products: true } } }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }] }))));
-  app.post('/api/admin/brands', requireAuth, requireRole(...admin), run(async (req, res) => { const actor = user(res); const input = taxonomySchema.omit({ parentId: true }).parse(req.body); const created = await prisma.brand.create({ data: input }); await audit(actor.id, 'BRAND_CREATED', 'Brand', created.id, { name: created.name }); res.status(201).json(created); }));
-  app.patch('/api/admin/brands/:id', requireAuth, requireRole(...admin), run(async (req, res) => { const actor = user(res); const input = taxonomySchema.omit({ parentId: true }).partial().parse(req.body); const existing = await prisma.brand.findUnique({ where: { id: param(req.params.id) } }); if (!existing) return res.status(404).json({ error: 'Brand not found' }); const conflict = input.slug ? await prisma.brand.findFirst({ where: { slug: input.slug, id: { not: existing.id } } }) : null; if (conflict) throw fail(409, 'Brand slug is already in use'); const updated = await prisma.brand.update({ where: { id: existing.id }, data: input }); await audit(actor.id, 'BRAND_UPDATED', 'Brand', updated.id, { changed: Object.keys(input) }); res.json(updated); }));
-  app.delete('/api/admin/brands/:id', requireAuth, requireRole(...admin), run(async (req, res) => { const actor = user(res); const existing = await prisma.brand.findUnique({ where: { id: param(req.params.id) }, include: { _count: { select: { products: true } } } }); if (!existing) return res.status(404).json({ error: 'Brand not found' }); if (existing._count.products) throw fail(409, 'Reassign or archive products before deleting a referenced brand'); await prisma.brand.delete({ where: { id: existing.id } }); await audit(actor.id, 'BRAND_DELETED', 'Brand', existing.id); res.status(204).send(); }));
+  registerCatalogAdminRoutes(app);
 
   app.get('/api/seller/store-branding/staff', requireAuth, requireRole(Role.SELLER), run(async (_req, res) => {
     const actor = user(res);

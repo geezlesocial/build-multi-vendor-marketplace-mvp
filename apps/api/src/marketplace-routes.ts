@@ -66,7 +66,13 @@ export function registerMarketplaceRoutes(app: Express) {
     const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
     if (!slug) return res.status(404).json({ error: 'This marketplace category is unavailable.' });
     const category = await prisma.category.findFirst({ where: { slug, status: TaxonomyStatus.ACTIVE }, select: { id: true, name: true, slug: true, description: true, imageUrl: true } });
-    if (!category) return res.status(404).json({ error: 'This marketplace category is unavailable.' });
+    if (!category) {
+      const redirect = await prisma.slugRedirect.findUnique({ where: { fromPath: `/category/${slug}` } });
+      if (redirect && redirect.destinationPath.startsWith('/category/') && !redirect.destinationPath.startsWith('//')) {
+        return res.json({ redirectTo: redirect.destinationPath, statusCode: redirect.statusCode });
+      }
+      return res.status(404).json({ error: 'This marketplace category is unavailable.' });
+    }
     const activeCategories = await prisma.category.findMany({ where: { status: TaxonomyStatus.ACTIVE }, select: { id: true, parentId: true, name: true, slug: true, description: true, imageUrl: true, displayOrder: true } });
     const categoriesByParent = new Map<string, typeof activeCategories>();
     for (const item of activeCategories) {

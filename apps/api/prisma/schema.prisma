@@ -1264,6 +1264,13 @@ model CatalogProductType {
   @@index([status, displayOrder])
 }
 
+model CatalogDefaultSuppression {
+  id         String   @id @default(cuid())
+  defaultKey String   @unique
+  entityKind String
+  removedAt  DateTime @default(now())
+}
+
 model CatalogFeature {
   id            String                     @id @default(cuid())
   name          String
