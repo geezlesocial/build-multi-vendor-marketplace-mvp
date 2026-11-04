@@ -360,8 +360,8 @@ jobs:
           fi
           {
             echo "### Real-ClamAV onboarding acceptance evidence"
-            echo "PR source commit: `${{ github.event.pull_request.head.sha || github.sha }}`"
-            echo "Workflow checkout commit: `$GITHUB_SHA`"
+            echo "PR source commit: ${{ github.event.pull_request.head.sha || github.sha }}"
+            echo "Workflow checkout commit: $GITHUB_SHA"
             echo "Scanner log collection exit: $scanner_logs_status"
             echo "The Playwright HTML report, traces, and attached audit evidence are retained with this run's artifact."
           } >> "$GITHUB_STEP_SUMMARY"

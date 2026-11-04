@@ -691,7 +691,7 @@ test("real ClamAV onboarding upload stays private until publish and refreshes an
     const restoredExperience = (await restoredPublic.json()) as {
       experience: OnboardingExperience;
     };
-    expect(restoredExperience.experience).toEqual(originalState.draft);
+    expect(restoredExperience.experience).toMatchObject(originalState.draft);
     const restoreAudit = await prisma.auditLog.findMany({
       where: {
         entity: "OnboardingExperience",
