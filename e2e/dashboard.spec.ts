@@ -322,7 +322,13 @@ test("buyer and seller workspaces fit a narrow mobile viewport without horizonta
         .locator("#buyer-dashboard-section-jump")
         .selectOption("orders");
     } else {
-      await page.getByRole("button", { name: "Orders", exact: true }).click();
+      const ordersButton = page.getByRole("button", {
+        name: "Orders",
+        exact: true,
+      });
+      await ordersButton.focus();
+      await expect(ordersButton).toBeFocused();
+      await page.keyboard.press("Enter");
     }
     await expect(page).toHaveURL(/\/dashboard\?tab=orders$/);
   }
@@ -352,10 +358,12 @@ test("buyer and seller workspaces fit a narrow mobile viewport without horizonta
         .locator("#seller-dashboard-section-jump")
         .selectOption("products");
     } else {
-      await page
+      const productsButton = page
         .getByRole("group", { name: "Catalog" })
-        .getByRole("button", { name: "Products" })
-        .click();
+        .getByRole("button", { name: "Products" });
+      await productsButton.focus();
+      await expect(productsButton).toBeFocused();
+      await page.keyboard.press("Enter");
     }
     await expect(page).toHaveURL(/\/dashboard\?mode=seller&tab=products$/);
   }
