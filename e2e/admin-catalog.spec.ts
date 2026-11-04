@@ -161,7 +161,9 @@ test("admin catalog defaults, edit safety, responsive dialog, taxonomy limits, a
 
     const search = page.getByRole("searchbox", { name: "Search catalog" });
     await search.fill(rootName);
-    await page.getByRole("button", { name: `Edit ${rootName}` }).click();
+    await page
+      .getByRole("button", { name: `Edit ${rootName}`, exact: true })
+      .click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Name").fill(`${rootName} Renamed`);
@@ -183,7 +185,10 @@ test("admin catalog defaults, edit safety, responsive dialog, taxonomy limits, a
 
     await search.fill(`${rootName} Renamed`);
     await page
-      .getByRole("button", { name: `Edit ${rootName} Renamed` })
+      .getByRole("button", {
+        name: `Edit ${rootName} Renamed`,
+        exact: true,
+      })
       .click();
     const secondDialog = page.getByRole("dialog");
     await secondDialog.getByLabel("Name").fill(`${rootName} Renamed Again`);
