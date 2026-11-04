@@ -1,0 +1,387 @@
+.adminOnboardingExperience {
+  display: grid;
+  gap: 1rem;
+}
+.onboardingEditorHeader,
+.onboardingEditorCardHeading,
+.onboardingEditorActions,
+.onboardingEditorHistory li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.onboardingEditorHeader h2,
+.onboardingEditorCard h3,
+.onboardingEditorHistory h3 {
+  margin: 0.15rem 0 0.45rem;
+}
+.onboardingEditorBadges,
+.onboardingPreviewToggle,
+.onboardingEditorActions > div:last-child,
+.onboardingEditorAddBlock,
+.onboardingEditorOrder > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.onboardingEditorBadges span {
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  background: #eaf2eb;
+  color: #315a45;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.onboardingDiffSummary {
+  flex-basis: 100%;
+  margin: 0;
+}
+.onboardingSingleFieldReset {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+}
+.onboardingSingleFieldReset label {
+  flex: 1;
+  min-width: 0;
+}
+.onboardingSingleFieldReset select {
+  width: 100%;
+}
+.onboardingContentIcon {
+  display: inline-grid;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin-right: 0.4rem;
+  place-items: center;
+  border-radius: 50%;
+  background: #eaf2eb;
+  color: #315a45;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.onboardingEditorGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  align-items: start;
+  gap: 1rem;
+}
+.onboardingEditorControls {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+.onboardingEditorCard {
+  display: grid;
+  gap: 0.8rem;
+}
+.onboardingEditorCard label,
+.onboardingSectionEditor label {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+  font-weight: 650;
+}
+.onboardingEditorCard input:not([type="color"]):not([type="range"]),
+.onboardingEditorCard textarea,
+.onboardingEditorCard select,
+.onboardingSectionEditor input,
+.onboardingSectionEditor textarea,
+.onboardingSectionEditor select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+.onboardingEditorCard small,
+.onboardingSectionEditor small {
+  color: #66736a;
+  font-weight: 400;
+}
+.onboardingEditorCardHeading {
+  align-items: flex-start;
+}
+.onboardingEditorCardHeading > div {
+  min-width: 0;
+}
+.onboardingEditorImages {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 0.8rem;
+}
+.onboardingEditorFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+.onboardingEditorFields input[type="color"] {
+  width: 100%;
+  height: 42px;
+}
+.onboardingSectionEditor {
+  display: grid;
+  min-width: 0;
+  gap: 0.7rem;
+  padding: 1rem;
+  border: 1px solid #dce5dd;
+  border-radius: 0.8rem;
+}
+.onboardingSectionEditor legend {
+  text-transform: capitalize;
+  font-weight: 750;
+}
+.onboardingEditorOrder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.onboardingEditorOrder button {
+  min-width: 2.3rem;
+}
+.onboardingEditorPreview {
+  position: sticky;
+  top: 1rem;
+  min-width: 0;
+}
+.onboardingPreviewToggle button[aria-pressed="true"] {
+  border-color: #315a45;
+  background: #315a45;
+  color: #fff;
+}
+.onboardingPreviewFrame {
+  --ob-primary: #315a45;
+  --ob-accent: #b65332;
+  --ob-surface: #f3f4ee;
+  --ob-text: #18211d;
+  display: grid;
+  gap: 0.65rem;
+  max-height: 78vh;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid #dce5dd;
+  border-radius: 1rem;
+  background: var(--ob-surface);
+  color: var(--ob-text);
+  font-family: Arial, sans-serif;
+}
+.onboardingPreviewFrame.isMobile {
+  width: min(100%, 390px);
+  margin-inline: auto;
+}
+.onboardingPreviewFrame[data-variant="bold"] {
+  background: color-mix(in srgb, var(--ob-primary) 8%, white);
+}
+.onboardingPreviewFrame[data-variant="editorial"][data-typography="serif"] {
+  font-family: Georgia, serif;
+}
+.onboardingPreviewFrame[data-card-style="sharp"] .onboardingPreviewCard,
+.onboardingPreviewFrame[data-card-style="sharp"] .onboardingPreviewHero {
+  border-radius: 0.15rem;
+}
+.onboardingPreviewFrame[data-density="compact"] {
+  gap: 0.4rem;
+}
+.onboardingPreviewTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.75rem;
+}
+.onboardingPreviewTop span {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #dce5dd;
+  border-radius: 999px;
+  background: #fff;
+}
+.onboardingPreviewHero {
+  position: relative;
+  display: flex;
+  min-height: 150px;
+  align-items: center;
+  overflow: hidden;
+  padding: 1.1rem;
+  border: 1px solid #dce5dd;
+  border-radius: 1rem;
+  background: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--ob-primary) 12%, white),
+    white 55%,
+    color-mix(in srgb, var(--ob-accent) 10%, white)
+  );
+}
+.onboardingPreviewHero[data-decoration="orbit"]::after,
+.onboardingPreviewHero[data-decoration="arc"]::after {
+  position: absolute;
+  top: -55px;
+  right: -35px;
+  width: 170px;
+  height: 120px;
+  border: 1px solid color-mix(in srgb, var(--ob-primary) 30%, transparent);
+  border-radius: 50%;
+  content: "";
+  transform: rotate(-22deg);
+}
+.onboardingPreviewHero > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.28;
+}
+.onboardingPreviewHero > div {
+  position: relative;
+  z-index: 1;
+  max-width: 85%;
+}
+.onboardingPreviewHero p,
+.onboardingPreviewCard small {
+  margin: 0;
+  color: var(--ob-accent);
+  font-size: 0.65rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.onboardingPreviewHero h3 {
+  margin: 0.35rem 0;
+  font-size: 1.5rem;
+  line-height: 1.08;
+}
+.onboardingPreviewHero span,
+.onboardingPreviewCard p {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.onboardingPreviewCard {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.8rem;
+  border: 1px solid #dce5dd;
+  border-radius: 0.85rem;
+  background: #fff;
+}
+.onboardingPreviewCard h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+.onboardingPreviewCard p {
+  margin: 0;
+  color: #66736a;
+}
+.onboardingPreviewSample {
+  overflow: hidden;
+  padding: 0.55rem;
+  border-radius: 0.55rem;
+  background: #f6f8f5;
+  color: #66736a;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.onboardingPreviewOptional {
+  border-color: color-mix(in srgb, var(--ob-primary) 28%, white);
+}
+.onboardingPreviewButton {
+  width: 100%;
+  padding: 0.7rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ob-primary);
+  color: #fff;
+}
+.onboardingEditorActions {
+  align-items: center;
+}
+.onboardingEditorActions p {
+  max-width: 700px;
+  margin: 0.35rem 0;
+}
+.onboardingEditorHistory ol {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.onboardingEditorHistory li {
+  align-items: center;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid #e3e8e2;
+}
+.onboardingEditorHistory li > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.onboardingEditorHistory li span {
+  color: #66736a;
+  font-size: 0.82rem;
+}
+.onboardingEditorStatus {
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.7rem;
+  background: #e8f1e9;
+  color: #315a45;
+}
+@media (max-width: 1050px) {
+  .onboardingEditorGrid {
+    grid-template-columns: 1fr;
+  }
+  .onboardingEditorPreview {
+    position: static;
+  }
+  .onboardingPreviewFrame {
+    max-height: none;
+  }
+}
+@media (max-width: 640px) {
+  .onboardingEditorHeader,
+  .onboardingEditorCardHeading,
+  .onboardingEditorActions,
+  .onboardingEditorHistory li {
+    flex-direction: column;
+  }
+  .onboardingSingleFieldReset {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .onboardingEditorImages,
+  .onboardingEditorFields {
+    grid-template-columns: 1fr;
+  }
+  .onboardingEditorActions > div:last-child {
+    width: 100%;
+  }
+  .onboardingEditorActions button {
+    flex: 1;
+  }
+  .onboardingEditorHistory li {
+    align-items: stretch;
+  }
+  .onboardingPreviewFrame.isMobile {
+    width: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboardingPreviewFrame *,
+  .onboardingPreviewFrame *::before,
+  .onboardingPreviewFrame *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+.onboardingPreviewFrame[data-motion="none"] *,
+.onboardingPreviewFrame[data-motion="none"] *::before,
+.onboardingPreviewFrame[data-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}

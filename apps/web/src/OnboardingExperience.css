@@ -1,0 +1,124 @@
+.onboardingPage {
+  color: var(--onboarding-text, #18211d);
+  background: var(--onboarding-surface, #f3f4ee);
+}
+.onboardingPage .eyebrow {
+  color: var(--onboarding-accent, #b65332);
+}
+.onboardingPage .primary,
+.onboardingPage
+  .onboardingStoreCard.isFollowing
+  .onboardingStoreActions
+  button {
+  border-color: var(--onboarding-primary, #315a45);
+  background: var(--onboarding-primary, #315a45);
+  color: #fff;
+}
+.onboardingPage .onboardingRequirement,
+.onboardingPage .onboardingBrandFallback {
+  color: var(--onboarding-primary, #315a45);
+}
+.onboardingExperienceLogo {
+  display: block;
+  width: auto;
+  max-width: min(180px, 55%);
+  max-height: 56px;
+  margin: 0 0 1rem;
+  object-fit: contain;
+  object-position: left center;
+}
+.onboardingContentIcon {
+  display: inline-grid;
+  width: 1.45rem;
+  height: 1.45rem;
+  margin-right: 0.45rem;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--onboarding-primary, #315a45) 12%, white);
+  color: var(--onboarding-primary, #315a45);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.onboardingPage[data-decoration="none"] .onboardingHeroArtwork {
+  display: none;
+}
+.onboardingPage[data-decoration="arc"] .onboardingHeroArtwork span:first-child {
+  transform: rotate(18deg) scale(1.08);
+}
+.onboardingPage[data-decoration="orbit"]
+  .onboardingHeroArtwork
+  span:nth-child(2) {
+  transform: rotate(-18deg) scale(0.92);
+}
+.onboardingPage.onboardingDesign-bold .onboardingHero {
+  background: linear-gradient(
+    125deg,
+    color-mix(in srgb, var(--onboarding-primary, #315a45) 15%, white),
+    color-mix(in srgb, var(--onboarding-accent, #b65332) 8%, white)
+  );
+}
+.onboardingPage.onboardingTypography-serif {
+  font-family: Georgia, "Times New Roman", serif;
+}
+.onboardingPage.onboardingCards-sharp .onboardingSection,
+.onboardingPage.onboardingCards-sharp .onboardingAccountCard,
+.onboardingPage.onboardingCards-sharp .onboardingStoreCard {
+  border-radius: 0.2rem;
+}
+.onboardingPage.onboardingDensity-compact .onboardingForm {
+  gap: 0.55rem;
+}
+.onboardingPage.onboardingDensity-compact .onboardingSection {
+  padding: 1rem;
+}
+.onboardingSectionHelp {
+  margin: 0.65rem 0 0;
+  color: #68736b;
+  font-size: 0.84rem;
+}
+.onboardingOptionalBlock {
+  padding: 0.9rem 1rem;
+  border: 1px solid
+    color-mix(in srgb, var(--onboarding-primary, #315a45) 22%, white);
+  border-radius: 0.85rem;
+  background: #fff;
+}
+.onboardingOptionalBlock p {
+  margin: 0.35rem 0 0;
+  color: #68736b;
+}
+.onboardingOptionalBlock summary {
+  color: var(--onboarding-primary, #315a45);
+  font-weight: 700;
+  cursor: pointer;
+}
+.onboardingPage :focus-visible {
+  outline-color: var(--onboarding-accent, #b65332);
+}
+.onboardingPage[data-motion="none"] *,
+.onboardingPage[data-motion="none"] *::before,
+.onboardingPage[data-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboardingPage *,
+  .onboardingPage *::before,
+  .onboardingPage *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+@media (max-width: 600px) {
+  .onboardingExperienceLogo {
+    max-width: 150px;
+    max-height: 46px;
+  }
+  .onboardingPage.onboardingDensity-compact .onboardingSection {
+    padding: 0.8rem;
+  }
+}

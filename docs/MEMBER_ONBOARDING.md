@@ -14,5 +14,8 @@ API endpoints:
 - `POST /api/onboarding/stores/:storeId/follow` and `DELETE /api/onboarding/stores/:storeId/follow` — idempotent authenticated follow changes.
 - `POST /api/onboarding/complete` — validates the requirements and saves completion atomically.
 - `GET /api/admin/onboarding/readiness` — admin-only configuration readiness summary.
+- `GET /api/onboarding?view=experience` — authenticated, uncached published presentation for refreshing an open onboarding page without replacing member selections.
+- Admins can edit, preview, save, publish, reset, and restore versioned onboarding presentation under Admin → Members and security → Onboarding readiness. Drafts are private; members receive only the published configuration. Required account, store-follow, currency, referral, and completion rules remain server-controlled.
+- Onboarding logo and hero images use a dedicated media purpose, remain private while pending/quarantined or draft-only, and become public only after malware approval and explicit publication. Referenced assets are protected from deletion while retained by a draft, publication, or revision.
 
-The migration is additive: it adds onboarding/referral fields and an indexed, cascading store-follow table. Apply it through the normal deployment migration process after reviewing the migration state for the target environment; do not rewrite previously applied migration history.
+The onboarding lifecycle migration is additive: it adds onboarding/referral fields and an indexed, cascading store-follow table. The administrator-managed presentation is introduced separately through the additive `admin_managed_onboarding_experience` migration. Apply migrations through the normal deployment migration process after reviewing the migration state for the target environment; do not rewrite previously applied migration history.

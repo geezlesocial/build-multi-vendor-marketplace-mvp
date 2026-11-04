@@ -4,6 +4,7 @@ import { Prisma, ProductStatus, ReferralSource, Role, SellerStatus } from '@pris
 import { z } from 'zod';
 import { availableGlobalDisplayCurrencies } from './currency-routes.js';
 import { onboardingCompletionBlock, onboardingCompletionSchema } from './onboarding-domain.js';
+import { defaultOnboardingExperience, onboardingExperienceSchema } from './onboarding-experience-domain.js';
 import { env } from './config.js';
 import { prisma, requireAuth, requireRole } from './security.js';
 
@@ -71,15 +72,22 @@ async function currenciesForOnboarding() {
 }
 
 function publishedBrandAssets(value: unknown) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return { platformName: 'Market Lane', tagline: '', logoMediaId: null, bannerMediaId: null };
-  const branding = value as Record<string, unknown>;
+  const branding = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
   const mediaId = (item: unknown) => typeof item === 'string' && item.length <= 128 ? item : null;
   return {
-    platformName: typeof branding.platformName === 'string' && branding.platformName.trim() ? branding.platformName.trim() : 'Market Lane',
+    platformName: typeof branding.platformName === 'string' && branding.platformName.trim() ? branding.platformName.trim() : null,
     tagline: typeof branding.tagline === 'string' ? branding.tagline : '',
     logoMediaId: mediaId(branding.logoMediaId) ?? mediaId(branding.alternateLogoMediaId),
     bannerMediaId: mediaId(branding.socialImageMediaId)
   };
+}
+
+function memberOnboardingExperience(value: unknown, tagline = '') {
+  const parsed = value ? onboardingExperienceSchema.safeParse(value).data : null;
+  const experience = parsed ?? { ...defaultOnboardingExperience, welcome: { ...defaultOnboardingExperience.welcome, description: tagline.trim() || defaultOnboardingExperience.welcome.description } };
+  return { ...experience, welcome: { ...experience.welcome, logoUrl: experience.welcome.logoMediaId ? `/content-media/${encodeURIComponent(experience.welcome.logoMediaId)}` : null, heroUrl: experience.welcome.heroMediaId ? `/content-media/${encodeURIComponent(experience.welcome.heroMediaId)}` : null } };
 }
 
 async function listEligibleStores(userId: string) {
@@ -140,7 +148,16 @@ async function eligibleFollowStoreIds(tx: Prisma.TransactionClient, userId: stri
 }
 
 export function registerOnboardingRoutes(app: Express) {
-  app.get('/api/onboarding', requireAuth, run(async (_req, res) => {
+  app.get('/api/onboarding', requireAuth, run(async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (req.query.view === 'experience') {
+      const [branding, onboardingExperience] = await Promise.all([
+        prisma.platformBranding.findUnique({ where: { id: 'default' }, select: { publishedJson: true } }),
+        prisma.onboardingExperience.findUnique({ where: { id: 'default' }, select: { publishedJson: true } })
+      ]);
+      const brand = publishedBrandAssets(branding?.publishedJson);
+      return res.json({ experience: memberOnboardingExperience(onboardingExperience?.publishedJson, brand.tagline) });
+    }
     const userId = actor(res).id;
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -149,11 +166,12 @@ export function registerOnboardingRoutes(app: Express) {
     if (!user) return res.status(401).json({ error: 'Authentication required.' });
     if (user.onboardingCompletedAt) return res.json({ completed: true, completedAt: user.onboardingCompletedAt });
 
-    const [stores, eligibleStoreCount, currencies, branding] = await Promise.all([
+    const [stores, eligibleStoreCount, currencies, branding, onboardingExperience] = await Promise.all([
       listEligibleStores(userId),
       prisma.store.count({ where: eligibleStoreWhere }),
       currenciesForOnboarding(),
-      prisma.platformBranding.findUnique({ where: { id: 'default' }, select: { publishedJson: true } })
+      prisma.platformBranding.findUnique({ where: { id: 'default' }, select: { publishedJson: true } }),
+      prisma.onboardingExperience.findUnique({ where: { id: 'default' }, select: { publishedJson: true } })
     ]);
     const currentCurrency = user.preference?.displayCurrency;
     const defaultCurrency = currencies.some(currency => currency.code === currentCurrency)
@@ -162,11 +180,13 @@ export function registerOnboardingRoutes(app: Express) {
         ? env.CURRENCY
         : currencies[0]?.code ?? '';
     const brand = publishedBrandAssets(branding?.publishedJson);
+    const experience = memberOnboardingExperience(onboardingExperience?.publishedJson, brand.tagline);
 
     res.json({
       completed: false,
       account: { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarMediaId ? '/api/account/avatar' : null },
       brand: { ...brand, logoUrl: brand.logoMediaId ? `/content-media/${encodeURIComponent(brand.logoMediaId)}` : null, bannerUrl: brand.bannerMediaId ? `/content-media/${encodeURIComponent(brand.bannerMediaId)}` : null },
+      experience,
       stores,
       eligibleStoreCount,
       minimumStores: 2,

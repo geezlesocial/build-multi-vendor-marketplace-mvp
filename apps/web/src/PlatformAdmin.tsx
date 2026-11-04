@@ -18,6 +18,7 @@ import { AdminLiveShopping } from './LiveShopping.js';
 import { JimaAdmin } from './JimaAdmin.js';
 import { AdminSocialAuth } from './AdminSocialAuth.js';
 import { AdminOnboardingReadiness } from './AdminOnboardingReadiness.js';
+import { AdminOnboardingExperience } from './AdminOnboardingExperience.js';
 import { MarketplaceAds } from './MarketplaceAds.js';
 import { useSession } from './session.js';
 import { PlatformCollaborators } from './PlatformCollaborators.js';
@@ -240,7 +241,7 @@ export function PlatformAdmin() {
     {tab === 'members' && <AdminMembers />}
     {tab === 'team' && isAdmin && <PlatformCollaborators />}
     {tab === 'auth' && <AdminSocialAuth />}
-    {tab === 'onboarding' && <AdminOnboardingReadiness />}
+    {tab === 'onboarding' && <><AdminOnboardingReadiness />{isAdmin && <AdminOnboardingExperience />}</>}
     {tab === 'audit' && <section><h2>Audit log</h2><p className="muted">Recent privileged actions. Sensitive metadata and credential references are intentionally omitted from this view.</p>{resourceFallback('audit', 'audit history') ?? (auditEntries.length ? <div className="table">{auditEntries.map(entry => <div className="row adminAuditRow" key={entry.id}><strong>{entry.action}</strong><span>{entry.entity}</span><span>{entry.actor?.name || entry.actor?.email || 'System'}</span><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time></div>)}</div> : <div className="empty">No audit entries yet.</div>)}</section>}
     {tab === 'branding' && (resourceFallback('branding', 'branding settings') ?? <div className="brandingEditor"><h2>Platform branding</h2><p className="muted">Changes are saved as a draft first. Publish makes them public. Uploaded assets stay private until approved by scanning; a pending or rejected image cannot replace the current public identity.</p>
       <div className="two">

@@ -120,30 +120,33 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: [
-    ...(liveShoppingSimulator
-      ? [
+  webServer:
+    process.env.E2E_REUSE_EXISTING_SERVERS === "true"
+      ? undefined
+      : [
+          ...(liveShoppingSimulator
+            ? [
+                {
+                  command: `node scripts/fake-livekit-server.mjs --port ${e2eLiveKitPort}`,
+                  url: `http://${e2eHost}:${e2eLiveKitPort}/healthz`,
+                  reuseExistingServer: false,
+                  timeout: 30_000,
+                },
+              ]
+            : []),
           {
-            command: `node scripts/fake-livekit-server.mjs --port ${e2eLiveKitPort}`,
-            url: `http://${e2eHost}:${e2eLiveKitPort}/healthz`,
+            command: "npm run dev -w apps/api",
+            url: `http://${e2eHost}:${e2eApiPort}/health`,
+            env: webServerEnv,
             reuseExistingServer: false,
-            timeout: 30_000,
+            timeout: 120_000,
           },
-        ]
-      : []),
-    {
-      command: "npm run dev -w apps/api",
-      url: `http://${e2eHost}:${e2eApiPort}/health`,
-      env: webServerEnv,
-      reuseExistingServer: false,
-      timeout: 120_000,
-    },
-    {
-      command: `npm run dev -w apps/web -- --host ${e2eHost} --port ${e2eWebPort}`,
-      url: `http://${e2eHost}:${e2eWebPort}`,
-      env: webServerEnv,
-      reuseExistingServer: false,
-      timeout: 120_000,
-    },
-  ],
+          {
+            command: `npm run dev -w apps/web -- --host ${e2eHost} --port ${e2eWebPort}`,
+            url: `http://${e2eHost}:${e2eWebPort}`,
+            env: webServerEnv,
+            reuseExistingServer: false,
+            timeout: 120_000,
+          },
+        ],
 });

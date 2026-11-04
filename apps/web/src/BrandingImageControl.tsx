@@ -17,6 +17,7 @@ export function BrandingImageControl({
   uploadUrl,
   previewUrl,
   quota = false,
+  disabled = false,
 }: {
   label: string;
   value: string | null;
@@ -27,6 +28,7 @@ export function BrandingImageControl({
   uploadUrl: string;
   previewUrl: (id: string) => string;
   quota?: boolean;
+  disabled?: boolean;
 }) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [usedBytes, setUsedBytes] = useState<number | null>(null);
@@ -160,7 +162,9 @@ export function BrandingImageControl({
     setError("");
     setMessage("");
     try {
-      const endpoint = listUrl.includes("/api/admin/platform/")
+      const endpoint = listUrl.includes("/api/admin/platform/onboarding-media")
+        ? `/api/admin/platform/onboarding-media/${encodeURIComponent(id)}/scan-retry`
+        : listUrl.includes("/api/admin/platform/")
         ? `/api/admin/platform/branding-media/${encodeURIComponent(id)}/scan-retry`
         : `/api/seller/store-media/${encodeURIComponent(id)}/scan-retry`;
       const result = await api<{
@@ -213,6 +217,7 @@ export function BrandingImageControl({
         {label} from media library
         <select
           aria-label={`${label} from media library`}
+          disabled={disabled || busy}
           value={value ?? ""}
           onChange={(event) => {
             const id = event.target.value || null;
@@ -268,6 +273,7 @@ export function BrandingImageControl({
         <input
           type="file"
           accept="image/png,image/jpeg,image/webp,image/gif"
+          disabled={disabled || busy}
           onChange={(event) => pick(event.currentTarget.files?.[0])}
         />
       </label>
@@ -286,6 +292,7 @@ export function BrandingImageControl({
             Horizontal crop position
             <input
               type="range"
+            disabled={disabled || busy}
               min="0"
               max="1"
               step="0.01"
@@ -297,6 +304,7 @@ export function BrandingImageControl({
             Vertical crop position
             <input
               type="range"
+            disabled={disabled || busy}
               min="0"
               max="1"
               step="0.01"
@@ -307,7 +315,7 @@ export function BrandingImageControl({
           <button
             type="button"
             className="primary"
-            disabled={busy}
+            disabled={disabled || busy}
             onClick={() => void upload()}
           >
             {busy ? "Uploading…" : `Upload ${label.toLowerCase()} replacement`}
@@ -323,7 +331,7 @@ export function BrandingImageControl({
       )}
       <button
         type="button"
-        disabled={!value || busy}
+        disabled={!value || busy || disabled}
         onClick={() => {
           onChange(null);
           setMessage(
@@ -361,7 +369,7 @@ export function BrandingImageControl({
             </p>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || disabled}
               onClick={() => void retryScan(asset.id)}
             >
               Retry malware scan
