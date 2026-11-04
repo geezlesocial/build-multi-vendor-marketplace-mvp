@@ -33,7 +33,15 @@ test("buyer dashboard exposes buyer modules and denies seller-scoped data", asyn
   await expect((await page.request.get("/api/dashboard/seller")).status()).toBe(
     403,
   );
+  const buyerDataResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/dashboard/buyer") &&
+      response.request().method() === "GET",
+  );
   await page.goto("/dashboard");
+  const buyerDataResponse = await buyerDataResponsePromise;
+  expect(buyerDataResponse.ok(), await buyerDataResponse.text()).toBeTruthy();
+  const buyerData = (await buyerDataResponse.json()) as { orders: unknown[] };
   await expect(
     page.getByRole("heading", { name: "Buyer dashboard" }),
   ).toBeVisible();
@@ -45,9 +53,15 @@ test("buyer dashboard exposes buyer modules and denies seller-scoped data", asyn
     page.getByRole("button", { name: "Orders", exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Cart" })).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Browse products" }),
-  ).toBeVisible();
+  if (buyerData.orders.length === 0) {
+    await expect(
+      page.getByRole("link", { name: "Browse products" }),
+    ).toBeVisible();
+  } else {
+    await expect(
+      page.getByRole("heading", { name: "Recent orders" }),
+    ).toBeVisible();
+  }
 });
 
 test("approved seller can switch dashboards and view only the public store link", async ({
