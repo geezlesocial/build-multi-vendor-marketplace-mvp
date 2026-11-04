@@ -560,7 +560,9 @@ test("real ClamAV onboarding upload stays private until publish and refreshes an
 
     await adminPage.setViewportSize({ width: 1280, height: 900 });
     await adminPage.goto("/admin/platform");
-    await adminPage.getByLabel("Jump to module").selectOption("onboarding");
+    await adminPage
+      .getByRole("button", { name: "Onboarding readiness", exact: true })
+      .click();
     const pngDataUrl = await adminPage.evaluate(() => {
       const canvas = document.createElement("canvas");
       canvas.width = 24;
