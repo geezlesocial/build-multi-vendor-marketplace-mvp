@@ -114,6 +114,14 @@ test("admin-managed onboarding drafts stay private until publish and retain requ
       data: { email: seller.email, password },
     });
     expect(sellerLogin.ok(), await sellerLogin.text()).toBeTruthy();
+    const incompleteMemberDenied = await memberPage.request.get(
+      "/api/admin/onboarding/experience",
+    );
+    expect(incompleteMemberDenied.status()).toBe(428);
+    await prisma.user.update({
+      where: { id: member.id },
+      data: { onboardingCompletedAt: new Date() },
+    });
     const denied = await memberPage.request.get(
       "/api/admin/onboarding/experience",
     );
@@ -396,6 +404,10 @@ test("admin-managed onboarding drafts stay private until publish and retain requ
       await adminPage.setViewportSize({ width, height: 900 });
       await expectNoHorizontalOverflow(adminPage);
     }
+    await prisma.user.update({
+      where: { id: member.id },
+      data: { onboardingCompletedAt: null },
+    });
     await memberPage.goto("/onboarding");
     await expect(memberPage.getByRole("heading", { level: 1 })).toBeVisible();
     for (const width of [320, 375, 768, 1024, 1440]) {
