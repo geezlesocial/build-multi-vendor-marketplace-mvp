@@ -128,3 +128,8 @@ export const StoreThemeStudio = React.lazy(() =>
     default: module.StoreThemeStudio,
   })),
 );
+export const SellerSeoFy = React.lazy(() =>
+  import("./SellerSeoFy.js").then((module) => ({
+    default: module.SellerSeoFy,
+  })),
+);

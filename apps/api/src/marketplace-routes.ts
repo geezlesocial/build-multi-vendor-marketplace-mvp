@@ -19,6 +19,8 @@ const publicProduct = (product: any) => ({
   slug: product.slug,
   name: product.name,
   description: product.description,
+  seoTitle: product.seoTitle,
+  seoDescription: product.seoDescription,
   priceMinor: product.priceMinor,
   salePriceMinor: product.salePriceMinor,
   wholesaleEnabled: product.wholesaleEnabled,
@@ -39,6 +41,8 @@ const publicStore = (store: any) => ({
   name: store.name,
   slug: store.slug,
   description: store.description,
+  seoTitle: store.seoTitle,
+  seoDescription: store.seoDescription,
   logoMediaId: store.logoMediaId
 });
 

@@ -78,6 +78,37 @@ enum StorePlanAssignmentSource {
   SUBSCRIPTION
 }
 
+enum SeofyAuditTargetType {
+  STORE
+  PRODUCT
+}
+
+enum SeofyAuditStatus {
+  READY
+  APPLIED
+  PARTIALLY_APPLIED
+  STALE
+}
+
+enum SeofyAuditAiStatus {
+  NOT_CONFIGURED
+  USED
+  INVALID_RESPONSE
+  BUSY
+  UNAVAILABLE
+}
+
+enum SeofySuggestionField {
+  SEO_TITLE
+  SEO_DESCRIPTION
+}
+
+enum SeofySuggestionStatus {
+  PENDING
+  APPLIED
+  STALE
+}
+
 enum StorePlanBillingInterval {
   MONTHLY
   ANNUAL
@@ -734,6 +765,7 @@ model User {
   messageReactions                    MessageReaction[]
   aiUsageLogs                         AiUsageLog[]
   jimaConversations                   JimaConversation[]
+  seofyAudits                         SeofyAudit[]
   createdCampaigns                    MarketingCampaign[]
   emailOutbox                         EmailOutbox[]
   platformBrandingRevisions           PlatformBrandingRevision[]
@@ -1038,6 +1070,9 @@ model Store {
   isPlatformStore            Boolean                          @default(false)
   name                       String
   description                String?
+  seoTitle                   String?                          @db.VarChar(160)
+  seoDescription             String?                          @db.VarChar(320)
+  seofyLearningEnabled       Boolean                          @default(false)
   slug                       String                           @unique @default(cuid())
   baseCurrency               String                           @default("USD") @db.VarChar(3)
   logoMediaId                String?
@@ -1063,6 +1098,7 @@ model Store {
   emailSubscribers           StoreEmailSubscriber[]
   emailCampaigns             StoreEmailCampaign[]
   affiliateProgram           StoreAffiliateProgram?
+  seofyAudits                SeofyAudit[]
   currencyOffers             StoreCurrencyOffer[]
   manualExchangeRates        ManualExchangeRateVersion[]
   sellerCommissionPolicies   SellerCommissionPolicyVersion[]
@@ -1286,6 +1322,8 @@ model Product {
   name                     String
   slug                     String                          @unique
   description              String
+  seoTitle                 String?                         @db.VarChar(160)
+  seoDescription           String?                         @db.VarChar(320)
   color                    String?
   priceMinor               Int
   salePriceMinor           Int?
@@ -2158,6 +2196,7 @@ model StorePlanVersion {
   mediaStorageLimitBytes              Int                             @default(2147483647)
   scheduledPublishingEnabled          Boolean                         @default(true)
   advancedContentSeoEnabled           Boolean                         @default(true)
+  seofyEnabled                        Boolean                         @default(false)
   storeBusterEnabled                  Boolean                         @default(false)
   storeBusterCampaignLimit            Int                             @default(0)
   storeBusterMonthlyBudgetMinor       Int                             @default(0)
@@ -3800,6 +3839,44 @@ model JimaConversation {
   messages  JimaMessage[]
 
   @@index([userId, updatedAt])
+}
+
+model SeofyAudit {
+  id            String                @id @default(cuid())
+  storeId       String
+  createdById   String
+  targetType    SeofyAuditTargetType
+  targetId      String
+  status        SeofyAuditStatus       @default(READY)
+  aiStatus      SeofyAuditAiStatus     @default(NOT_CONFIGURED)
+  learningUsed  Boolean                @default(false)
+  sourceHash    String                @db.VarChar(64)
+  findings      Json
+  createdAt     DateTime              @default(now())
+  appliedAt     DateTime?
+  store         Store                 @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  createdBy     User                  @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  suggestions   SeofySuggestion[]
+
+  @@index([storeId, createdAt])
+  @@index([storeId, targetType, targetId, createdAt])
+}
+
+model SeofySuggestion {
+  id               String                 @id @default(cuid())
+  auditId          String
+  field            SeofySuggestionField
+  currentValue     String?                @db.VarChar(320)
+  recommendedValue String                 @db.VarChar(320)
+  rationale        String                 @db.VarChar(500)
+  evidence         String                 @db.VarChar(500)
+  status           SeofySuggestionStatus  @default(PENDING)
+  createdAt        DateTime               @default(now())
+  appliedAt        DateTime?
+  audit            SeofyAudit             @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@unique([auditId, field])
+  @@index([auditId, status])
 }
 
 model JimaMessage {
