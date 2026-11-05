@@ -77,6 +77,8 @@ export function registerCartRoutes(app: Express) {
         : null;
       if (body.variantId && !variant)
         return res.status(409).json({ error: "Variant unavailable" });
+      if (!body.variantId && product.variants.some((item) => item.status === ProductStatus.APPROVED))
+        return res.status(400).json({ error: "Choose an approved color or product option before adding this item to your cart." });
       const configError = wholesaleConfigurationError(product);
       if (configError)
         return res.status(409).json({
@@ -98,10 +100,8 @@ export function registerCartRoutes(app: Express) {
       });
       const item = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "Cart" WHERE "id" = ${cart.id} FOR UPDATE`;
-        const existing = await tx.cartItem.findUnique({
-          where: {
-            cartId_productId: { cartId: cart.id, productId: body.productId },
-          },
+        const existing = await tx.cartItem.findFirst({
+          where: { cartId: cart.id, productId: body.productId, variantId: body.variantId ?? null },
         });
         const nextQuantity = (existing?.quantity ?? 0) + body.quantity;
         const quantityError = wholesaleQuantityError(
@@ -142,19 +142,16 @@ export function registerCartRoutes(app: Express) {
     }),
   );
 
-  app.patch(
-    "/api/cart/items/:productId",
-    requireAuth,
-    run(async (req, res) => {
+  const updateCartLine = (byItemId: boolean) => run(async (req, res) => {
       const user = res.locals.user as { id: string };
       const qty = z
         .object({ quantity: z.number().int().nonnegative().max(99) })
         .parse(req.body).quantity;
-      const productId = param(req.params.productId);
+      const lineOrProductId = param(byItemId ? req.params.itemId : req.params.productId);
       const cart = await prisma.cart.findUnique({ where: { userId: user.id } });
       if (!cart) return res.status(404).json({ error: "Cart not found" });
-      const item = await prisma.cartItem.findUnique({
-        where: { cartId_productId: { cartId: cart.id, productId } },
+      const item = await prisma.cartItem.findFirst({
+        where: { cartId: cart.id, ...(byItemId ? { id: lineOrProductId } : { productId: lineOrProductId }) },
         include: { variant: true, product: { include: { inventory: true } } },
       });
       if (!item) return res.status(404).json({ error: "Cart item not found" });
@@ -177,6 +174,7 @@ export function registerCartRoutes(app: Express) {
         });
       }
       res.status(204).send();
-    }),
-  );
+    });
+  app.patch("/api/cart/items/:productId", requireAuth, updateCartLine(false));
+  app.patch("/api/cart/lines/:itemId", requireAuth, updateCartLine(true));
 }

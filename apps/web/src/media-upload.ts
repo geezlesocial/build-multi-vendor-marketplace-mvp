@@ -52,11 +52,37 @@ export function uploadToSignedPostWithType(url: string, fields: Record<string, s
     xhr.withCredentials = false;
     xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
     xhr.onerror = () => reject(new Error('Managed storage could not be reached. Try again.'));
-    xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error('Managed storage rejected the upload. Choose the file again or retry.'));
+    xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Managed storage rejected ${file.name} (HTTP ${xhr.status}). Retry the upload or contact support if it continues.`));
     const form = new FormData();
     Object.entries(fields).forEach(([key, value]) => form.append(key, value));
     const typedFile = file.type === contentType ? file : new File([file], file.name, { type: contentType, lastModified: file.lastModified });
     form.append('file', typedFile);
     xhr.send(form);
+  });
+}
+
+export function uploadToLocalApi(url: string, file: File, onProgress: (percent: number) => void) {
+  return new Promise<void>((resolve, reject) => {
+    const csrfToken = document.cookie
+      .split('; ')
+      .find(value => value.startsWith('marketplace_csrf='))
+      ?.slice('marketplace_csrf='.length);
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (csrfToken) xhr.setRequestHeader('x-csrf-token', csrfToken);
+    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
+    xhr.onerror = () => reject(new Error(`${file.name}: the local upload service could not be reached. Check your connection and retry.`));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      let message = `${file.name}: upload failed (HTTP ${xhr.status}). Retry the upload.`;
+      try {
+        const body = JSON.parse(xhr.responseText) as { error?: string };
+        if (body.error) message = `${file.name}: ${body.error}`;
+      } catch { /* The API may return a non-JSON request-limit response. */ }
+      reject(new Error(message));
+    };
+    xhr.send(file);
   });
 }

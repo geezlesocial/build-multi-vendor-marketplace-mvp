@@ -9,6 +9,8 @@ type ProductCardActionsProps = {
   productId: string;
   productName: string;
   availableStock: number;
+  variantId?: string;
+  requiresVariantSelection?: boolean;
   hasSeller: boolean;
   wholesaleMinQuantity?: number | null;
   beforeBuy?: () => void | Promise<void>;
@@ -67,7 +69,7 @@ async function copyText(value: string) {
   if (!copied) throw new Error('Copy is not available in this browser. You can copy the product address from the address bar.');
 }
 
-export function ProductCardActions({ productId, productName, availableStock, hasSeller, wholesaleMinQuantity, beforeBuy, onSignIn }: ProductCardActionsProps) {
+export function ProductCardActions({ productId, productName, availableStock, variantId, requiresVariantSelection = false, hasSeller, wholesaleMinQuantity, beforeBuy, onSignIn }: ProductCardActionsProps) {
   const { user } = useSession();
   const [isFavorite, setIsFavorite] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(Boolean(user));
@@ -191,6 +193,7 @@ export function ProductCardActions({ productId, productName, availableStock, has
   };
 
   const buyNow = async () => {
+    if (requiresVariantSelection && !variantId) { setShareMessage('Choose a color or option before continuing to checkout.'); return; }
     if (!user) { login(); return; }
     if (buyBusy || availableStock < 1) return;
     setBuyBusy(true);
@@ -199,7 +202,7 @@ export function ProductCardActions({ productId, productName, availableStock, has
       await beforeBuy?.();
       const quantity = wholesaleMinQuantity ?? 1;
       if (quantity > availableStock) throw new Error(`This wholesale listing requires at least ${quantity} units, but only ${availableStock} are available.`);
-      await mutate('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId, quantity }) });
+      await mutate('/api/cart/items', { method: 'POST', body: JSON.stringify({ productId, quantity, ...(variantId ? { variantId } : {}) }) });
       window.dispatchEvent(new Event('marketplace:cart-changed'));
       window.location.assign('/checkout');
     } catch (error) {
@@ -255,8 +258,8 @@ export function ProductCardActions({ productId, productName, availableStock, has
         <summary aria-label={`Share ${productName}`} aria-haspopup="true">Share</summary>
       </details>
       {hasSeller && <button type="button" className="productActionButton" onClick={() => { if (!user) { login(); return; } setContactMessage(''); setConversationId(''); setContactOpen(true); }}>Contact seller</button>}
-      <button type="button" className="productActionButton productBuyNow" disabled={availableStock < 1 || buyBusy} onClick={() => void buyNow()}>
-        {buyBusy ? 'Opening checkout…' : availableStock > 0 ? 'Buy now' : 'Out of stock'}
+      <button type="button" className="productActionButton productBuyNow" disabled={availableStock < 1 || buyBusy || (requiresVariantSelection && !variantId)} onClick={() => void buyNow()}>
+        {buyBusy ? 'Opening checkout…' : requiresVariantSelection && !variantId ? 'Choose an option' : availableStock > 0 ? 'Buy now' : 'Out of stock'}
       </button>
     </div>
     {shareOpen && sharePosition && createPortal(<div

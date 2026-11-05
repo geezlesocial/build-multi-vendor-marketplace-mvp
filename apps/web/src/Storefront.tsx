@@ -138,15 +138,25 @@ export function Storefront({ slug }: { slug: string }) {
             : null,
         )
         .catch(() => null),
+      fetch(`/api/stores/${encodeURIComponent(slug)}/variants`, { credentials: "include" })
+        .then(async (response) => response.ok ? response.json() as Promise<{ productId: string; variants: StorefrontProduct["variants"] }[]> : [])
+        .catch(() => [] as { productId: string; variants: StorefrontProduct["variants"] }[]),
     ])
-      .then(([body, content, currencyData, preferenceData]) => {
+      .then(([body, content, currencyData, preferenceData, variantRows]) => {
         if (!active) return;
         if (body.redirectTo) {
           window.history.replaceState({}, "", body.redirectTo);
           window.location.reload();
           return;
         }
-        setStore({ ...body, content });
+        setStore({
+          ...body,
+          content,
+          products: body.products.map((product) => ({
+            ...product,
+            variants: variantRows.find((row) => row.productId === product.id)?.variants ?? product.variants ?? [],
+          })),
+        });
         const availableCurrencies = currencyData.currencies.filter(
           (currency) => currency.displayAvailable,
         );

@@ -1,7 +1,38 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { S3Client } from '@aws-sdk/client-s3';
-import { S3ContentStorage } from './content-storage.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { LocalContentStorage, S3ContentStorage } from './content-storage.js';
+
+describe('local private media storage', () => {
+  let root = '';
+  let storage: LocalContentStorage;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'marketplace-content-storage-'));
+    storage = new LocalContentStorage(root);
+  });
+
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  it('stores, bounds, reads, and removes local upload objects', async () => {
+    const bytes = Buffer.from('private image fixture');
+    await storage.put('stores/store-1/pending/asset-1', bytes, 'image/png');
+    await expect(storage.head('stores/store-1/pending/asset-1')).resolves.toEqual({ ContentLength: bytes.length, ContentType: 'image/png' });
+    await expect(storage.readLimited('stores/store-1/pending/asset-1', bytes.length)).resolves.toMatchObject({ bytes, contentLength: bytes.length, contentType: 'image/png' });
+    await expect(storage.readLimited('stores/store-1/pending/asset-1', bytes.length - 1)).rejects.toThrow('Uploaded object exceeded its reserved size');
+    await storage.remove('stores/store-1/pending/asset-1');
+    await expect(storage.head('stores/store-1/pending/asset-1')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects path traversal outside its configured local directory', async () => {
+    await expect(storage.put('../outside', Buffer.from('unsafe'))).rejects.toThrow('Unsafe storage path');
+  });
+});
 
 describe('S3-compatible managed media storage (loopback protocol fixture)', () => {
   let server: ReturnType<typeof createServer>;

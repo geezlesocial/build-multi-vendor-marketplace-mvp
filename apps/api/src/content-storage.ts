@@ -20,18 +20,23 @@ export interface ManagedContentStorage extends ContentStorage {
   readLimited(key: string, maxBytes: number): Promise<{ bytes: Buffer; contentLength: number; contentType: string | null }>;
 }
 
-function safePath(key: string) {
-  const root = path.resolve(env.CONTENT_STORAGE_DIR);
+function safePath(key: string, storageDir = env.CONTENT_STORAGE_DIR) {
+  const root = path.resolve(storageDir);
   const target = path.resolve(root, key);
   if (target !== root && !target.startsWith(`${root}${path.sep}`)) throw new Error('Unsafe storage path');
   return target;
 }
 
-export class LocalContentStorage implements ContentStorage {
+export class LocalContentStorage implements ManagedContentStorage {
   private readonly metadata = new Map<string, { size: number; contentType: string }>();
+  private readonly storageDir: string;
+
+  constructor(storageDir = env.CONTENT_STORAGE_DIR) {
+    this.storageDir = path.resolve(storageDir);
+  }
 
   async put(key: string, bytes: Buffer, contentType = 'application/octet-stream') {
-    const target = safePath(key);
+    const target = safePath(key, this.storageDir);
     await mkdir(path.dirname(target), { recursive: true });
     const temporary = `${target}.uploading`;
     await writeFile(temporary, bytes, { flag: 'wx' });
@@ -43,23 +48,28 @@ export class LocalContentStorage implements ContentStorage {
     throw new Error('Local storage uses the authenticated application upload endpoint.');
   }
 
-  async head(key: string) {
-    const file = await stat(safePath(key));
-    const metadata = this.metadata.get(key);
-    return { ContentLength: file.size, ContentType: metadata?.contentType ?? 'application/octet-stream' };
+  async head(key: string): Promise<{ ContentLength: number; ContentType: string }> {
+    const file = await stat(safePath(key, this.storageDir));
+    return {
+      ContentLength: file.size,
+      ContentType: this.metadata.get(key)?.contentType ?? 'application/octet-stream',
+    };
   }
 
   async readLimited(key: string, maxBytes: number) {
-    const bytes = await readFile(safePath(key));
+    const target = safePath(key, this.storageDir);
+    const file = await stat(target);
+    if (file.size > maxBytes) throw new Error('Uploaded object exceeded its reserved size');
+    const bytes = await readFile(target);
     if (bytes.length > maxBytes) throw new Error('Uploaded object exceeded its reserved size');
     const metadata = this.metadata.get(key);
-    return { bytes, contentLength: bytes.length, contentType: metadata?.contentType ?? 'application/octet-stream' };
+    return { bytes, contentLength: bytes.length, contentType: metadata?.contentType ?? null };
   }
 
-  open(key: string, range?: { start: number; end: number }) { return createReadStream(safePath(key), range); }
+  open(key: string, range?: { start: number; end: number }) { return createReadStream(safePath(key, this.storageDir), range); }
 
   async remove(key: string) {
-    try { await unlink(safePath(key)); this.metadata.delete(key); }
+    try { await unlink(safePath(key, this.storageDir)); this.metadata.delete(key); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
 }

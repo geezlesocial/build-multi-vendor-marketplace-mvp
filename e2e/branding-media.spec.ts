@@ -93,7 +93,7 @@ test("platform branding upload keeps a local quarantined image private until sca
   expect(await afterPublic.json()).toEqual(await beforePublic.json());
 });
 
-test("branding media APIs deny buyer access and storage failures keep seller image references unchanged", async ({
+test("branding media APIs deny buyer access and local seller uploads do not change published image references", async ({
   page,
 }) => {
   await login(page, buyerEmail);
@@ -135,8 +135,9 @@ test("branding media APIs deny buyer access and storage failures keep seller ima
   await logoGroup
     .getByRole("button", { name: "Upload store logo replacement" })
     .click();
-  await expect(logoGroup.getByRole("alert")).toContainText(
-    "Managed browser uploads are not configured",
+  await expect(logoGroup.getByRole("status")).toContainText(
+    /Image (uploaded to private quarantine|scanned and saved as a draft)/,
+    { timeout: 15_000 },
   );
   const after = await (
     await page.request.get("/api/seller/store-theme")

@@ -12,22 +12,34 @@ import {
 
 const mocks = vi.hoisted(() => {
   const env = { CURRENCY: "USD" };
+  const product = {
+    findMany: vi.fn(async (_args: unknown): Promise<unknown[]> => []),
+    count: vi.fn(async (_args: unknown): Promise<number> => 0),
+    findFirst: vi.fn(async (_args: unknown): Promise<unknown> => null),
+    findUnique: vi.fn(async (_args: unknown): Promise<unknown> => null),
+    create: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
+    update: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
+    updateMany: vi.fn(async (_args: unknown) => ({ count: 0 })),
+  };
+  const productVariant = {
+    findMany: vi.fn(async (_args: unknown): Promise<unknown[]> => []),
+    findFirst: vi.fn(async (_args: unknown): Promise<unknown> => null),
+    findUnique: vi.fn(async (_args: unknown): Promise<unknown> => null),
+    create: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
+    update: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
+    updateMany: vi.fn(async (_args: unknown) => ({ count: 0 })),
+    delete: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
+    count: vi.fn(async (_args: unknown): Promise<number> => 0),
+  };
+  const transaction = {
+    product,
+    productVariant,
+    auditLog: { create: vi.fn(async (_args: unknown) => ({})) },
+    $queryRaw: vi.fn(async () => []),
+  };
   const methods = {
-    product: {
-      findMany: vi.fn(async (_args: unknown): Promise<unknown[]> => []),
-      count: vi.fn(async (_args: unknown): Promise<number> => 0),
-      findFirst: vi.fn(async (_args: unknown): Promise<unknown> => null),
-      findUnique: vi.fn(async (_args: unknown): Promise<unknown> => null),
-      create: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
-      update: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
-    },
-    productVariant: {
-      findMany: vi.fn(async (_args: unknown): Promise<unknown[]> => []),
-      findFirst: vi.fn(async (_args: unknown): Promise<unknown> => null),
-      findUnique: vi.fn(async (_args: unknown): Promise<unknown> => null),
-      create: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
-      update: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
-    },
+    product,
+    productVariant,
     category: {
       findMany: vi.fn(async (_args: unknown): Promise<unknown[]> => []),
     },
@@ -36,6 +48,7 @@ const mocks = vi.hoisted(() => {
     },
     store: {
       findFirst: vi.fn(async (_args: unknown): Promise<unknown> => null),
+      findUnique: vi.fn(async (_args: unknown): Promise<unknown> => null),
     },
     productFeatureAssignment: {
       deleteMany: vi.fn(async (_args: unknown) => ({ count: 0 })),
@@ -44,7 +57,10 @@ const mocks = vi.hoisted(() => {
     inventory: {
       update: vi.fn(async (_args: unknown): Promise<unknown> => ({})),
     },
-    $transaction: vi.fn(async () => null),
+    $transaction: vi.fn(async (callback?: unknown) => {
+      if (typeof callback !== "function") return null;
+      return (callback as (tx: typeof transaction) => unknown)(transaction);
+    }),
   };
   return { env, methods };
 });
@@ -291,8 +307,10 @@ describe("product route HTTP behavior", () => {
     mocks.methods.product.findUnique.mockResolvedValue({
       id: "product-owned",
       sellerId: "seller-a",
+      status: "APPROVED",
       currency: "SGD",
     });
+    mocks.methods.store.findUnique.mockResolvedValue({ id: "store-a" });
     mocks.methods.productVariant.create.mockResolvedValue({
       id: "variant-created",
       status: "PENDING",

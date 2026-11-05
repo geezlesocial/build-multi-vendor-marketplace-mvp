@@ -104,7 +104,11 @@ export function BrandingImageControl({
       const cropped = await cropRaster(file, ratio, focusX, focusY);
       const reservation = await api<{
         id: string;
-        upload: { url: string; fields: Record<string, string> };
+        upload: {
+          url: string;
+          fields: Record<string, string>;
+          transport?: "LOCAL" | "OBJECT";
+        };
       }>(uploadUrl, {
         method: "POST",
         body: JSON.stringify({
@@ -118,6 +122,7 @@ export function BrandingImageControl({
         reservation.upload.fields,
         cropped,
         (value) => setProgress(value),
+        reservation.upload.transport,
       );
       const finalizeBase = uploadUrl.replace(/\/uploads$/, "");
       const finalized = await api<{

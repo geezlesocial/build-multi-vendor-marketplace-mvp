@@ -1,4 +1,5 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { CatalogSearchableOption } from "./CatalogSearchableOption.js";
 
 export type CatalogCategory = {
   id: string;
@@ -88,6 +89,8 @@ export function CatalogFields({
 }) {
   const [path, setPath] = useState<CatalogCategory[]>([]);
   const [features, setFeatures] = useState<CatalogFeature[]>([]);
+  const [featuresLoading, setFeaturesLoading] = useState(false);
+  const [featureQuery, setFeatureQuery] = useState("");
   const [featureError, setFeatureError] = useState("");
   const colorListId = useId();
   const featureIdsRef = useRef(featureIds);
@@ -101,6 +104,7 @@ export function CatalogFields({
   );
   useEffect(() => {
     let active = true;
+    setFeaturesLoading(true);
     const params = new URLSearchParams();
     if (categoryId) params.set("categoryId", categoryId);
     if (productTypeId) params.set("productTypeId", productTypeId);
@@ -118,6 +122,9 @@ export function CatalogFields({
       })
       .catch((error) => {
         if (active) setFeatureError((error as Error).message);
+      })
+      .finally(() => {
+        if (active) setFeaturesLoading(false);
       });
     return () => {
       active = false;
@@ -156,24 +163,21 @@ export function CatalogFields({
       </p>
       <label>
         Product type
-        <select
-          required
+        <CatalogSearchableOption
+          label="Product type"
           value={productTypeId}
+          options={productTypes.map((type) => ({
+            value: type.id,
+            label: `${type.name}${type.requiresShipping ? " · ships to buyer" : " · digital / no shipping"}`,
+          }))}
+          placeholder="Search product types"
+          emptyLabel="No product type selected"
+          required
           onChange={(event) => {
-            onProductTypeChange(event.target.value);
+            onProductTypeChange(event);
             onFeatureIdsChange([]);
           }}
-        >
-          <option value="">Select product type</option>
-          {productTypes.map((type) => (
-            <option key={type.id} value={type.id}>
-              {type.name}
-              {type.requiresShipping
-                ? " · ships to buyer"
-                : " · digital / no shipping"}
-            </option>
-          ))}
-        </select>
+        />
       </label>
       {[0, 1, 2].map((level) => {
         const options = categoriesAt(level);
@@ -186,36 +190,28 @@ export function CatalogFields({
               : level === 1
                 ? "Child category"
                 : "Further subcategory"}
-            <select
-              required={level === 0}
+            <CatalogSearchableOption
+              label={level === 0 ? "Category" : level === 1 ? "Child category" : "Further subcategory"}
               value={path[level]?.id ?? ""}
-              onChange={(event) => chooseCategory(level, event.target.value)}
-            >
-              <option value="">
-                {level === 0 ? "Select a category" : "No further category"}
-              </option>
-              {options.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
+              options={options.map((category) => ({ value: category.id, label: category.name }))}
+              placeholder={`Search ${level === 0 ? "categories" : "child categories"}`}
+              emptyLabel={level === 0 ? "No category selected" : "Clear this level"}
+              required={level === 0}
+              onChange={(id) => chooseCategory(level, id)}
+            />
           </label>
         );
       })}
       <label>
         Brand
-        <select
+        <CatalogSearchableOption
+          label="Brand"
           value={brandId ?? ""}
-          onChange={(event) => onBrandChange(event.target.value || null)}
-        >
-          <option value="">Unbranded / no brand</option>
-          {brands.map((brand) => (
-            <option key={brand.id} value={brand.id}>
-              {brand.name}
-            </option>
-          ))}
-        </select>
+          options={brands.map((brand) => ({ value: brand.id, label: brand.name }))}
+          placeholder="Search brands"
+          emptyLabel="Unbranded / no brand"
+          onChange={(value) => onBrandChange(value || null)}
+        />
       </label>
       <label>
         Color
@@ -251,9 +247,24 @@ export function CatalogFields({
       </label>
       <fieldset className="catalogFeatureChoices">
         <legend>Product features</legend>
-        {features.length ? (
+        {featuresLoading ? (
+          <small role="status" aria-busy="true">Loading approved features…</small>
+        ) : features.length ? (
+          <label className="catalogFeatureSearch">
+            Search features
+            <input
+              type="search"
+              value={featureQuery}
+              onChange={(event) => setFeatureQuery(event.target.value)}
+              placeholder="Type to filter features"
+            />
+          </label>
+        ) : null}
+        {!featuresLoading && features.length ? (
           <div className="catalogFeatureGrid">
-            {features.map((feature) => (
+            {features
+              .filter((feature) => feature.name.toLocaleLowerCase().includes(featureQuery.trim().toLocaleLowerCase()))
+              .map((feature) => (
               <label className="catalogFeatureChoice" key={feature.id}>
                 <input
                   type="checkbox"
@@ -262,15 +273,19 @@ export function CatalogFields({
                 />
                 {feature.name}
               </label>
-            ))}
+              ))}
           </div>
-        ) : (
+        ) : !featuresLoading ? (
           <small>
             {productTypeId || categoryId
               ? "No features have been approved for this product type/category yet."
               : "Select a product type and category to see relevant features."}
           </small>
+        ) : null}
+        {!featuresLoading && features.length > 0 && !features.some((feature) => feature.name.toLocaleLowerCase().includes(featureQuery.trim().toLocaleLowerCase())) && (
+          <small role="status">No approved feature matches that search. Use the suggestion request below if the feature is missing.</small>
         )}
+        {featureIds.length > 0 && <small>{featureIds.length} feature(s) selected.</small>}
         {featureError && (
           <p className="catalogFieldError" role="alert">
             {featureError}
