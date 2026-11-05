@@ -27,7 +27,7 @@ test("selected color stays attached to cart and checkout order snapshots", async
   expect(sellerTemplate.sellerId).toBeTruthy();
   const product = await prisma.product.create({
     data: {
-      sellerId: sellerTemplate.sellerId,
+      seller: { connect: { id: sellerTemplate.sellerId! } },
       productType: { connect: { slug: "physical-product" } },
       name: `Color Checkout ${suffix.slice(0, 8)}`,
       slug: `color-checkout-${suffix}`,
