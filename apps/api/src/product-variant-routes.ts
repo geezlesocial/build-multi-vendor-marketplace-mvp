@@ -1,6 +1,12 @@
 import type { Express } from "express";
 import express from "express";
-import { MediaKind, MediaScanStatus, MediaUploadStatus, ProductStatus, Role } from "@prisma/client";
+import {
+  MediaKind,
+  MediaScanStatus,
+  MediaUploadStatus,
+  ProductStatus,
+  Role,
+} from "@prisma/client";
 import { prisma, requireAuth, requireRole } from "./security.js";
 import { variantSchema } from "./validation.js";
 
@@ -12,6 +18,10 @@ const asyncRoute =
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 
+const normalizeColorName = (value: string) =>
+  value.trim().normalize("NFKC").replace(/\s+/gu, " ");
+const colorNameKey = (value: string) => normalizeColorName(value).toLowerCase();
+
 type Actor = { id: string; role: Role; sellerId?: string };
 const actor = (res: express.Response) => res.locals.user as Actor;
 
@@ -21,11 +31,17 @@ async function productMediaScope(sellerId: string | null) {
     where: { sellerId },
     select: { id: true },
   });
-  if (!store) throw Object.assign(new Error("Product Store scope is unavailable."), { statusCode: 409 });
+  if (!store)
+    throw Object.assign(new Error("Product Store scope is unavailable."), {
+      statusCode: 409,
+    });
   return store.id;
 }
 
-async function approvedVariantImage(mediaAssetId: string | null | undefined, storeId: string | null) {
+async function approvedVariantImage(
+  mediaAssetId: string | null | undefined,
+  storeId: string | null,
+) {
   if (!mediaAssetId) return;
   const asset = await prisma.mediaAsset.findFirst({
     where: {
@@ -37,7 +53,11 @@ async function approvedVariantImage(mediaAssetId: string | null | undefined, sto
     },
     select: { id: true },
   });
-  if (!asset) throw Object.assign(new Error("Choose an approved image from this Store's media library."), { statusCode: 409 });
+  if (!asset)
+    throw Object.assign(
+      new Error("Choose an approved image from this Store's media library."),
+      { statusCode: 409 },
+    );
 }
 
 function publicVariant(variant: {
@@ -46,7 +66,12 @@ function publicVariant(variant: {
   priceMinor: number;
   currency: string;
   stock: number;
-  mediaAsset?: { id: string; kind: MediaKind; uploadStatus: MediaUploadStatus; scanStatus: MediaScanStatus } | null;
+  mediaAsset?: {
+    id: string;
+    kind: MediaKind;
+    uploadStatus: MediaUploadStatus;
+    scanStatus: MediaScanStatus;
+  } | null;
 }) {
   return {
     id: variant.id,
@@ -54,11 +79,15 @@ function publicVariant(variant: {
     priceMinor: variant.priceMinor,
     currency: variant.currency,
     stock: variant.stock,
-    image: variant.mediaAsset?.kind === MediaKind.IMAGE &&
+    image:
+      variant.mediaAsset?.kind === MediaKind.IMAGE &&
       variant.mediaAsset.uploadStatus === MediaUploadStatus.COMPLETE &&
       variant.mediaAsset.scanStatus === MediaScanStatus.APPROVED
-      ? { id: variant.mediaAsset.id, url: `/content-media/${encodeURIComponent(variant.mediaAsset.id)}` }
-      : null,
+        ? {
+            id: variant.mediaAsset.id,
+            url: `/content-media/${encodeURIComponent(variant.mediaAsset.id)}`,
+          }
+        : null,
   };
 }
 
@@ -80,7 +109,12 @@ export function registerProductVariantRoutes(app: Express) {
         orderBy: { name: "asc" },
         include: {
           mediaAsset: {
-            select: { id: true, kind: true, uploadStatus: true, scanStatus: true },
+            select: {
+              id: true,
+              kind: true,
+              uploadStatus: true,
+              scanStatus: true,
+            },
           },
         },
       });
@@ -104,12 +138,29 @@ export function registerProductVariantRoutes(app: Express) {
           variants: {
             where: { status: ProductStatus.APPROVED },
             orderBy: { name: "asc" },
-            include: { mediaAsset: { select: { id: true, kind: true, uploadStatus: true, scanStatus: true } } },
+            include: {
+              mediaAsset: {
+                select: {
+                  id: true,
+                  kind: true,
+                  uploadStatus: true,
+                  scanStatus: true,
+                },
+              },
+            },
           },
         },
       });
-      res.setHeader("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
-      res.json(products.map((product) => ({ productId: product.id, variants: product.variants.map(publicVariant) })));
+      res.setHeader(
+        "Cache-Control",
+        "public, max-age=30, stale-while-revalidate=60",
+      );
+      res.json(
+        products.map((product) => ({
+          productId: product.id,
+          variants: product.variants.map(publicVariant),
+        })),
+      );
     }),
   );
 
@@ -119,48 +170,141 @@ export function registerProductVariantRoutes(app: Express) {
     requireRole(Role.SELLER, Role.ADMIN),
     asyncRoute(async (req, res) => {
       const user = actor(res);
-      const input = variantSchema.parse(req.body);
+      const parsedInput = variantSchema.parse(req.body);
+      const input = {
+        ...parsedInput,
+        name: normalizeColorName(parsedInput.name),
+      };
       const product = await prisma.product.findUnique({
         where: { id: routeParam(req.params.id) },
         select: { id: true, sellerId: true, status: true, currency: true },
       });
-      if (!product || (user.role !== Role.ADMIN && product.sellerId !== user.sellerId))
+      if (
+        !product ||
+        (user.role !== Role.ADMIN && product.sellerId !== user.sellerId)
+      )
         return res.status(404).json({ error: "Product not found" });
       if (product.status === ProductStatus.ARCHIVED)
-        return res.status(409).json({ error: "Restore this listing before editing its color options." });
+        return res
+          .status(409)
+          .json({
+            error: "Restore this listing before editing its color options.",
+          });
       const storeId = await productMediaScope(product.sellerId);
       await approvedVariantImage(input.mediaAssetId, storeId);
-      const variant = await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${product.id} FOR UPDATE`;
-        const created = await tx.productVariant.create({
-          data: {
-            productId: product.id,
-            name: input.name,
-            sku: input.sku,
-            priceMinor: input.priceMinor,
-            stock: input.stock,
-            mediaAssetId: input.mediaAssetId ?? null,
-            currency: product.currency,
-            status: user.role === Role.ADMIN ? ProductStatus.APPROVED : ProductStatus.PENDING,
-          },
-        });
-        if (user.role !== Role.ADMIN && product.status === ProductStatus.APPROVED) {
-          await tx.product.updateMany({
-            where: { id: product.id, sellerId: user.sellerId, status: ProductStatus.APPROVED },
-            data: { status: ProductStatus.PENDING },
-          });
-        }
-        await tx.auditLog.create({
-          data: {
-            actorId: user.id,
-            action: "PRODUCT_VARIANT_CREATED",
-            entity: "ProductVariant",
-            entityId: created.id,
-            metadata: { productId: product.id, mediaAssetId: created.mediaAssetId, status: created.status },
-          },
-        });
-        return created;
+      const matchesRequest = (
+        existing: {
+          productId: string;
+          name: string;
+          sku: string;
+          priceMinor: number;
+          stock: number;
+          mediaAssetId: string | null;
+        } | null,
+      ) =>
+        Boolean(
+          existing &&
+          existing.productId === product.id &&
+          existing.name === input.name &&
+          existing.sku === input.sku &&
+          existing.priceMinor === input.priceMinor &&
+          existing.stock === input.stock &&
+          existing.mediaAssetId === (input.mediaAssetId ?? null),
+        );
+      const existingBySku = await prisma.productVariant.findUnique({
+        where: { sku: input.sku },
       });
+      if (existingBySku) {
+        if (matchesRequest(existingBySku)) {
+          res.status(200).json(existingBySku);
+          return;
+        }
+        res
+          .status(409)
+          .json({
+            error: "This SKU is already assigned to a different variant.",
+          });
+        return;
+      }
+      let variant;
+      try {
+        variant = await prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${product.id} FOR UPDATE`;
+          const existingColors = await tx.productVariant.findMany({
+            where: { productId: product.id },
+            select: { id: true, name: true },
+          });
+          if (
+            existingColors.some(
+              (existing) =>
+                colorNameKey(existing.name) === colorNameKey(input.name),
+            )
+          )
+            throw Object.assign(
+              new Error(
+                "A color with that name already exists on this listing.",
+              ),
+              { statusCode: 409 },
+            );
+          const created = await tx.productVariant.create({
+            data: {
+              productId: product.id,
+              name: input.name,
+              sku: input.sku,
+              priceMinor: input.priceMinor,
+              stock: input.stock,
+              mediaAssetId: input.mediaAssetId ?? null,
+              currency: product.currency,
+              status:
+                user.role === Role.ADMIN
+                  ? ProductStatus.APPROVED
+                  : ProductStatus.PENDING,
+            },
+          });
+          if (
+            user.role !== Role.ADMIN &&
+            product.status === ProductStatus.APPROVED
+          ) {
+            await tx.product.updateMany({
+              where: {
+                id: product.id,
+                sellerId: user.sellerId,
+                status: ProductStatus.APPROVED,
+              },
+              data: { status: ProductStatus.PENDING },
+            });
+          }
+          await tx.auditLog.create({
+            data: {
+              actorId: user.id,
+              action: "PRODUCT_VARIANT_CREATED",
+              entity: "ProductVariant",
+              entityId: created.id,
+              metadata: {
+                productId: product.id,
+                mediaAssetId: created.mediaAssetId,
+                status: created.status,
+              },
+            },
+          });
+          return created;
+        });
+      } catch (error) {
+        if ((error as { code?: string }).code !== "P2002") throw error;
+        const concurrentVariant = await prisma.productVariant.findUnique({
+          where: { sku: input.sku },
+        });
+        if (matchesRequest(concurrentVariant)) {
+          res.status(200).json(concurrentVariant);
+          return;
+        }
+        res
+          .status(409)
+          .json({
+            error: "This SKU is already assigned to a different variant.",
+          });
+        return;
+      }
       res.status(201).json(variant);
     }),
   );
@@ -171,7 +315,13 @@ export function registerProductVariantRoutes(app: Express) {
     requireRole(Role.SELLER, Role.ADMIN),
     asyncRoute(async (req, res) => {
       const user = actor(res);
-      const input = variantSchema.partial().parse(req.body);
+      const parsedInput = variantSchema.partial().parse(req.body);
+      const input = {
+        ...parsedInput,
+        ...(parsedInput.name !== undefined
+          ? { name: normalizeColorName(parsedInput.name) }
+          : {}),
+      };
       const variant = await prisma.productVariant.findFirst({
         where: {
           id: routeParam(req.params.variantId),
@@ -180,31 +330,70 @@ export function registerProductVariantRoutes(app: Express) {
             ...(user.role === Role.ADMIN ? {} : { sellerId: user.sellerId }),
           },
         },
-        include: { product: { select: { id: true, sellerId: true, status: true } } },
+        include: {
+          product: { select: { id: true, sellerId: true, status: true } },
+        },
       });
       if (!variant) return res.status(404).json({ error: "Variant not found" });
       if (variant.product.status === ProductStatus.ARCHIVED)
-        return res.status(409).json({ error: "Restore this listing before editing its color options." });
+        return res
+          .status(409)
+          .json({
+            error: "Restore this listing before editing its color options.",
+          });
       if (Object.hasOwn(input, "mediaAssetId")) {
-        const storeId = await productMediaScope(variant.product.sellerId);
-        await approvedVariantImage(input.mediaAssetId, storeId);
+        if (input.mediaAssetId) {
+          const storeId = await productMediaScope(variant.product.sellerId);
+          await approvedVariantImage(input.mediaAssetId, storeId);
+        }
       }
       const updated = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${variant.product.id} FOR UPDATE`;
+        if (input.name !== undefined) {
+          const existingColors = await tx.productVariant.findMany({
+            where: { productId: variant.product.id, id: { not: variant.id } },
+            select: { id: true, name: true },
+          });
+          if (
+            existingColors.some(
+              (existing) =>
+                colorNameKey(existing.name) === colorNameKey(input.name!),
+            )
+          )
+            throw Object.assign(
+              new Error(
+                "A color with that name already exists on this listing.",
+              ),
+              { statusCode: 409 },
+            );
+        }
         const result = await tx.productVariant.update({
           where: { id: variant.id },
           data: {
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.sku !== undefined ? { sku: input.sku } : {}),
-            ...(input.priceMinor !== undefined ? { priceMinor: input.priceMinor } : {}),
+            ...(input.priceMinor !== undefined
+              ? { priceMinor: input.priceMinor }
+              : {}),
             ...(input.stock !== undefined ? { stock: input.stock } : {}),
-            ...(Object.hasOwn(input, "mediaAssetId") ? { mediaAssetId: input.mediaAssetId ?? null } : {}),
-            ...(user.role === Role.ADMIN ? {} : { status: ProductStatus.PENDING }),
+            ...(Object.hasOwn(input, "mediaAssetId")
+              ? { mediaAssetId: input.mediaAssetId ?? null }
+              : {}),
+            ...(user.role === Role.ADMIN
+              ? {}
+              : { status: ProductStatus.PENDING }),
           },
         });
-        if (user.role !== Role.ADMIN && variant.product.status === ProductStatus.APPROVED) {
+        if (
+          user.role !== Role.ADMIN &&
+          variant.product.status === ProductStatus.APPROVED
+        ) {
           await tx.product.updateMany({
-            where: { id: variant.product.id, sellerId: user.sellerId, status: ProductStatus.APPROVED },
+            where: {
+              id: variant.product.id,
+              sellerId: user.sellerId,
+              status: ProductStatus.APPROVED,
+            },
             data: { status: ProductStatus.PENDING },
           });
         }
@@ -214,7 +403,11 @@ export function registerProductVariantRoutes(app: Express) {
             action: "PRODUCT_VARIANT_UPDATED",
             entity: "ProductVariant",
             entityId: result.id,
-            metadata: { productId: variant.product.id, mediaAssetId: result.mediaAssetId, status: result.status },
+            metadata: {
+              productId: variant.product.id,
+              mediaAssetId: result.mediaAssetId,
+              status: result.status,
+            },
           },
         });
         return result;
@@ -237,17 +430,30 @@ export function registerProductVariantRoutes(app: Express) {
             ...(user.role === Role.ADMIN ? {} : { sellerId: user.sellerId }),
           },
         },
-        select: { id: true, productId: true, product: { select: { status: true } } },
+        select: {
+          id: true,
+          productId: true,
+          product: { select: { status: true } },
+        },
       });
       if (!variant) return res.status(404).json({ error: "Variant not found" });
       if (variant.product.status === ProductStatus.ARCHIVED)
-        return res.status(409).json({ error: "Restore this listing before editing its color options." });
+        return res
+          .status(409)
+          .json({
+            error: "Restore this listing before editing its color options.",
+          });
       const [cartReferences, orderReferences] = await Promise.all([
         prisma.cartItem.count({ where: { variantId: variant.id } }),
         prisma.orderItem.count({ where: { variantId: variant.id } }),
       ]);
       if (cartReferences || orderReferences)
-        return res.status(409).json({ error: "This color is referenced by a cart or order and cannot be removed." });
+        return res
+          .status(409)
+          .json({
+            error:
+              "This color is referenced by a cart or order and cannot be removed.",
+          });
       await prisma.$transaction(async (tx) => {
         await tx.productVariant.delete({ where: { id: variant.id } });
         await tx.auditLog.create({
