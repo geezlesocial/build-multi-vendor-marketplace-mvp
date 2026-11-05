@@ -158,6 +158,5 @@ export function SellerStoreGrowth() {
       <p className="muted">Only double-opt-in subscribers are eligible. The provider receives one message per recipient; consent and unsubscribe status are rechecked immediately before each send.</p>
     </section>
     <section className="card cardBody"><h2>Affiliate tools</h2><p>{!affiliate.included ? 'Not enabled for this plan.' : affiliate.marketplaceProgramAvailable ? 'Included and available through the existing platform affiliate program.' : 'Included, but the marketplace affiliate program is currently disabled.'}</p><label className="storePlanCheck"><input type="checkbox" checked={affiliate.enabled} disabled={busy || !affiliate.included || !affiliate.marketplaceProgramAvailable} onChange={event => void setAffiliateEnabled(event.target.checked)} />Allow approved affiliates to promote my Store products</label><p className="muted">Affiliate links remain consent-based and use the existing platform attribution and commission ledger. This Store plan does not create seller commissions or seller payouts; no payout capability is enabled here.</p></section>
-    <p><a href="/dashboard">Back to seller dashboard</a></p>
   </section>;
 }

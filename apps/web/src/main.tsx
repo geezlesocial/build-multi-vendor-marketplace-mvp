@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import './DashboardPolish.css';
+import { WorkspaceLoadingPage } from './WorkspaceNavigation.js';
 import './currency-location.css';
 import './store-themes.css';
 import './checkout-discount.css';
@@ -468,7 +469,7 @@ function RoutedPage() {
   if (liveRoute) return <LivePublicPage sessionId={safePathSegment(liveRoute[1]!)} />;
   return window.location.pathname === '/email/verify' ? <EmailVerificationAction /> : <PageRouter />;
 }
-function RouteLoading() { return <main className="shellLoading" role="status"><p className="eyebrow">Marketplace</p><h1>Opening your page…</h1></main>; }
+function RouteLoading() { return <WorkspaceLoadingPage eyebrow="Marketplace" title="Opening your workspace" description="Preparing the tools and information for this page." />; }
 function RoutedPageBoundary() { return <React.Suspense fallback={<RouteLoading />}><RoutedPage /></React.Suspense>; }
 function safePathSegment(value: string) { try { return decodeURIComponent(value); } catch { return ''; } }
 const liveEmbedRoute = window.location.pathname.match(/^\/live\/([^/]+)\/embed\/?$/);

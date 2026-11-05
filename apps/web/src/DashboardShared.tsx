@@ -1,4 +1,5 @@
 import { formatMinor } from "./money.js";
+import { DashboardHomeAction } from "./WorkspaceNavigation.js";
 
 export type User = {
   id: string;
@@ -90,6 +91,11 @@ export function Tabs({
 }) {
   return (
     <>
+      {active !== "overview" && (
+        <div className="dashboardSectionActions">
+          <DashboardHomeAction onClick={() => setActive("overview")} />
+        </div>
+      )}
       <label className="dashboardMobileJump" htmlFor={`${id}-section-jump`}>
         <span>Dashboard section</span>
         <select

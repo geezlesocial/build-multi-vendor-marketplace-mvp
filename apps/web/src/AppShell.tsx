@@ -5,6 +5,7 @@ import { JimaWidget } from './JimaWidget.js';
 import { HeaderActivity } from './HeaderActivity.js';
 import { SiteChromeFooter, SiteChromeHeader } from './SiteChrome.js';
 import type { SiteChromeBrand, SiteChromeConfiguration } from './site-chrome-types.js';
+import { WorkspaceRouteNavigation } from './WorkspaceNavigation.js';
 
 const CART_SYNC_STORAGE_KEY = 'marketplace:cart-sync';
 const SITE_CHROME_SYNC_STORAGE_KEY = 'marketplace:site-chrome-published';
@@ -163,6 +164,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (user && !user.onboardingCompletedAt && window.location.pathname !== '/email/verify') return <div className="app onboardingAppShell"><main className="onboardingGate"><Onboarding /></main></div>;
 
   const dashboardHref = user?.role === 'ADMIN' || user?.role === 'PLATFORM_STAFF' ? '/admin/platform' : '/dashboard';
+  const currentPath = window.location.pathname;
+  const isAdminControlPage = currentPath === '/admin/platform' || currentPath === '/admin/themes';
+  const workspaceModule = Boolean(user) && currentPath !== '/dashboard' && !isAdminControlPage && (
+    currentPath.startsWith('/admin/') || currentPath.startsWith('/seller/') ||
+    currentPath.startsWith('/affiliate') || ['/ads', '/favorites', '/settings', '/wallet', '/club-coins', '/pos'].includes(currentPath)
+  );
+  const moduleDashboardHref = user?.role === 'ADMIN' || user?.role === 'PLATFORM_STAFF'
+    ? '/admin/platform'
+    : user?.role === 'CONTENT_EDITOR'
+      ? '/admin/content'
+      : user?.role === 'SELLER' || user?.role === 'CASHIER'
+        ? '/dashboard?mode=seller'
+        : '/dashboard?mode=buyer';
+  const moduleDashboardLabel = user?.role === 'ADMIN' || user?.role === 'PLATFORM_STAFF'
+    ? 'Back to admin dashboard'
+    : user?.role === 'CONTENT_EDITOR'
+      ? 'Back to content workspace'
+      : 'Back to dashboard';
   const platformName = publicBranding?.platformName?.trim() || publicBranding?.shortName?.trim() || 'Market Lane';
   const platformShortName = publicBranding?.shortName?.trim() || platformName;
   const platformTagline = publicBranding?.tagline?.trim() || 'independent marketplace';
@@ -200,7 +219,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </nav>
     </header>}
     {user && !user.emailVerifiedAt && <div className="notice emailVerificationBanner" role="status">Verify <strong>{user.email}</strong> to review products and qualify for account rewards. <a href="/settings#profile">Open account settings</a></div>}
-    <main className="shellMain">{children}</main>
+    <main className={`shellMain${workspaceModule ? ' shellMainWorkspace' : ''}`}>
+      {workspaceModule ? <div className="workspaceModuleFrame"><WorkspaceRouteNavigation dashboardHref={moduleDashboardHref} dashboardLabel={moduleDashboardLabel} />{children}</div> : children}
+    </main>
     {siteChrome?.configuration ? <><SiteChromeFooter configuration={siteChrome.configuration} brand={chromeBrand} suppressed={siteChrome.footerSuppressed} /><p className="platformLegalDisclosure">{platformName} · Platform payments are collected by the owner; automated seller payouts are not included.</p></> : <footer>{platformName} · Platform payments are collected by the owner; automated seller payouts are not included.</footer>}
     <JimaWidget userName={user?.name} />
   </div>;

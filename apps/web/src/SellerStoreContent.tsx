@@ -134,6 +134,5 @@ export function SellerStoreContent() {
       </section>
     </div>
     <section className="card cardBody"><h2>{kind === 'posts' ? 'Your posts' : 'Your pages'}</h2>{items.length === 0 ? <div className="empty">No {kind === 'posts' ? 'posts' : 'pages'} yet. Start with a draft above.</div> : <div className="table">{items.map(item => <div className="row" key={item.id}><span><strong>{item.title}</strong><br /><small>{item.status} · {item.slug}</small></span><span>{item.status === 'PUBLISHED' ? <a href={`${data.publicPrefix}/${kind === 'posts' ? 'blog' : 'pages'}/${encodeURIComponent(item.slug)}`} target="_blank" rel="noreferrer">View published</a> : <button type="button" onClick={() => edit(item)}>Edit</button>}</span>{item.status !== 'PUBLISHED' && item.status !== 'ARCHIVED' && <button type="button" disabled={busy} onClick={() => void publish(item)}>Publish</button>}</div>)}</div>}</section>
-    <p><a href="/dashboard">Back to seller dashboard</a></p>
   </section>;
 }

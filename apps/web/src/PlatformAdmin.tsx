@@ -24,6 +24,7 @@ import { useSession } from './session.js';
 import { PlatformCollaborators } from './PlatformCollaborators.js';
 import { SiteChromeBuilder } from './SiteChromeBuilder.js';
 import { StoreThemesAdmin } from './StoreThemesAdmin.js';
+import { DashboardHomeAction, PreviousPageButton } from './WorkspaceNavigation.js';
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const csrf = document.cookie.split('; ').find(value => value.startsWith('marketplace_csrf='))?.split('=')[1];
@@ -225,6 +226,10 @@ export function PlatformAdmin() {
     : resourceErrors[key] ? <AdminDataUnavailable label={label} error={resourceErrors[key]!} onRetry={() => void refreshAdminData()} /> : null;
   useEffect(() => { if (tab && !permittedSection(tab, isAdmin, permissions)) selectTab(firstAllowedSection); }, [tab, isAdmin, user?.id, permissions.join(','), firstAllowedSection]);
   return <section className="page adminControlCenter"><p className="eyebrow">{isAdmin ? 'Platform administration' : `${user?.platformPositionName ?? user?.platformPosition?.replaceAll('_', ' ') ?? 'Team'} workspace`}</p><h1>{isAdmin ? 'Control center' : 'Team workspace'}</h1><p className="muted">{isAdmin ? 'Manage implemented marketplace operations and review areas that are still gated or planned.' : 'You can access only the modules assigned to your platform account. Contact an administrator if you need a different access level.'}</p>{message && <p className="notice" role="status">{message}</p>}
+    <nav className="workspacePageActions" aria-label="Control center navigation">
+      <PreviousPageButton fallbackHref="/admin/platform" />
+      {tab !== firstAllowedSection && <DashboardHomeAction onClick={() => selectTab(firstAllowedSection)} />}
+    </nav>
     <div className="adminControlLayout">
       {visibleNavigation.length > 0 && <><div className="adminMobileNav"><label htmlFor="admin-section-jump">Jump to module</label><select id="admin-section-jump" value={tab} onChange={event => navigateToSection(event.target.value)}>{visibleNavigation.map(group => <optgroup label={group.group} key={group.group}>{group.items.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</optgroup>)}</select><small>Choose a section to open its tools and settings.</small></div>
       <nav className="adminControlNav" aria-label="Platform administration sections">{visibleNavigation.map(group => <div className="adminNavGroup" key={group.group}><h2>{group.group}</h2>{group.items.map(item => <button type="button" key={item.id} className={tab === item.id ? 'active' : ''} aria-current={tab === item.id ? 'page' : undefined} onClick={() => navigateToSection(item.id)}>{item.label}</button>)}</div>)}</nav></>}

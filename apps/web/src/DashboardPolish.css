@@ -422,3 +422,164 @@ a.dashboardMetric:hover {
     animation: none;
   }
 }
+
+/* One workspace navigation and page-heading treatment for standalone tools. */
+.workspaceModuleFrame {
+  min-width: 0;
+}
+
+.workspaceRouteNavigation,
+.workspacePageActions,
+.dashboardSectionActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.workspaceRouteNavigation {
+  justify-content: space-between;
+  width: min(1160px, calc(100% - 2rem));
+  margin: 1rem auto 0;
+}
+
+.workspacePageActions,
+.dashboardSectionActions {
+  margin: 0 0 1rem;
+}
+
+.workspaceNavigationButton,
+.workspaceNavigationLink {
+  display: inline-flex;
+  min-height: 2.7rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 0.95rem;
+  border: 1px solid #c6d0c7;
+  border-radius: 999px;
+  background: #fff;
+  color: #315d47;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.workspaceNavigationButton:hover,
+.workspaceNavigationLink:hover {
+  border-color: #315d47;
+  background: #edf5ee;
+}
+
+.workspaceModuleFrame > .page > h1,
+.adminControlCenter > h1 {
+  margin-top: 0.25rem;
+  font-size: clamp(2.25rem, 4.2vw, 3.65rem);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
+  text-wrap: balance;
+}
+
+.workspaceModuleFrame > .page > h1 + .muted,
+.adminControlCenter > h1 + .muted {
+  max-width: 75ch;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid #dce1d9;
+}
+
+.workspaceModuleFrame > .page > .eyebrow:first-child,
+.adminControlCenter > .eyebrow:first-child {
+  color: #b85632;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.workspaceLoadingPage {
+  width: min(1160px, calc(100% - 2rem));
+  min-width: 0;
+  margin: 0 auto;
+  padding: clamp(2rem, 5vw, 4rem) 0;
+}
+
+.workspaceLoadingPage h1 {
+  margin: 0.25rem 0 0.55rem;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+
+.workspaceLoadingSkeleton {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1.5rem;
+}
+
+.workspaceLoadingSkeleton span {
+  min-height: 7rem;
+  border: 1px solid #e0e7df;
+  border-radius: 1rem;
+  background: linear-gradient(105deg, #fff 25%, #eef3ec 45%, #fff 65%);
+  background-size: 220% 100%;
+  animation: workspaceLoadingShimmer 1.5s ease-in-out infinite;
+}
+
+.workspaceModuleFrame [role="status"][aria-busy="true"],
+.dashboardWorkspace [role="status"][aria-busy="true"] {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.workspaceModuleFrame [role="status"][aria-busy="true"]::before,
+.dashboardWorkspace [role="status"][aria-busy="true"]::before {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: 0 0 0.8rem;
+  border: 2px solid #d5e3d7;
+  border-top-color: #315d47;
+  border-radius: 50%;
+  content: "";
+  animation: workspaceStatusSpin 0.8s linear infinite;
+}
+
+@keyframes workspaceStatusSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes workspaceLoadingShimmer {
+  to { background-position-x: -220%; }
+}
+
+@media (max-width: 720px) {
+  .workspaceRouteNavigation {
+    align-items: stretch;
+  }
+
+  .workspaceNavigationButton,
+  .workspaceNavigationLink {
+    flex: 1 1 10rem;
+  }
+
+  .workspaceLoadingSkeleton {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspaceLoadingSkeleton span:not(:first-child) {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspaceLoadingSkeleton span {
+    animation: none;
+  }
+
+  .workspaceModuleFrame [role="status"][aria-busy="true"]::before,
+  .dashboardWorkspace [role="status"][aria-busy="true"]::before {
+    animation: none;
+  }
+}

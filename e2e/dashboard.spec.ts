@@ -144,8 +144,16 @@ test("seller currency and commission dashboard tabs open from direct URLs and na
     page.getByRole("heading", { name: "Currency and display" }),
   ).toBeVisible();
 
-  const backLink = page.getByRole("link", { name: "Back to dashboard" });
-  await expect(backLink).toHaveCSS("color", "rgb(49, 93, 71)");
+  const dashboardButton = page.getByRole("button", {
+    name: "Back to dashboard",
+  });
+  await expect(dashboardButton).toBeVisible();
+  await dashboardButton.click();
+  await expect(page).toHaveURL(/\/dashboard\?mode=seller$/);
+  await page.getByRole("button", { name: "Currency", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Currency and display" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Commission", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard\?mode=seller&tab=commission/);
   await expect(
@@ -154,6 +162,30 @@ test("seller currency and commission dashboard tabs open from direct URLs and na
   await expect(
     page.getByRole("button", { name: "Commission", exact: true }),
   ).toHaveAttribute("aria-current", "page");
+});
+
+test("standalone seller modules share safe previous-page and dashboard navigation", async ({
+  page,
+}) => {
+  await login(page, "seller.local@example.test");
+  await page.goto("/seller/currency");
+  await expect(
+    page.getByRole("heading", { name: "Currency and display" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Go back to the previous page" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Back to dashboard" }),
+  ).toHaveAttribute("href", "/dashboard?mode=seller");
+  await expect(
+    page.getByRole("link", { name: "Back to dashboard" }),
+  ).toHaveCount(1);
+  await page.getByRole("link", { name: "Back to dashboard" }).click();
+  await expect(page).toHaveURL(/\/dashboard\?mode=seller$/);
+  await expect(
+    page.getByRole("heading", { name: "Seller dashboard" }),
+  ).toBeVisible();
 });
 
 test("seller dashboard renders historical gross totals separately with explicit currency codes", async ({

@@ -11,6 +11,7 @@ import {
   type User,
   request,
 } from "./DashboardShared.js";
+import { WorkspaceLoadingPage } from "./WorkspaceNavigation.js";
 
 type WorkspaceTabs = { buyer: string; seller: string };
 const CART_SYNC_STORAGE_KEY = "marketplace:cart-sync";
@@ -222,15 +223,7 @@ export function Dashboard() {
       </section>
     );
   if (!access && loading[mode])
-    return (
-      <section className="page dashboard" aria-busy="true">
-        <p className="eyebrow">Your account</p>
-        <h1>Preparing your dashboard</h1>
-        <p className="muted" role="status">
-          Loading your server-verified account access and activity…
-        </p>
-      </section>
-    );
+    return <WorkspaceLoadingPage eyebrow="Your account" title="Preparing your dashboard" description="Loading your server-verified account access and activity." />;
   if (!access && errors[mode])
     return (
       <section className="page dashboard">
