@@ -17,8 +17,25 @@ test("selected color stays attached to cart and checkout order snapshots", async
   page,
 }) => {
   const suffix = randomUUID();
-  const product = await prisma.product.findUniqueOrThrow({
+  const sellerTemplate = await prisma.product.findUniqueOrThrow({
     where: { slug: "demo-canvas-tote" },
+    select: {
+      sellerId: true,
+      seller: { select: { store: { select: { name: true } } } },
+    },
+  });
+  expect(sellerTemplate.sellerId).toBeTruthy();
+  const product = await prisma.product.create({
+    data: {
+      sellerId: sellerTemplate.sellerId,
+      productType: { connect: { slug: "physical-product" } },
+      name: `Color Checkout ${suffix.slice(0, 8)}`,
+      slug: `color-checkout-${suffix}`,
+      description: "Synthetic physical listing for color checkout coverage.",
+      priceMinor: 2499,
+      status: "APPROVED",
+      inventory: { create: { quantity: 8 } },
+    },
     select: { id: true, name: true },
   });
   const variantName = `Ocean Blue ${suffix.slice(0, 4)}`;
@@ -50,6 +67,13 @@ test("selected color stays attached to cart and checkout order snapshots", async
     where: { id: user.id },
     data: { onboardingCompletedAt: new Date() },
   });
+  const login = await page.request.post("/api/auth/login", {
+    data: { email: buyerEmail, password: "LocalDemoOnly-ChangeMe-123!" },
+  });
+  expect(login.ok(), await login.text()).toBeTruthy();
+  const session = await page.request.get("/api/auth/me");
+  expect(session.ok(), await session.text()).toBeTruthy();
+  expect(await session.json()).toMatchObject({ user: { id: user.id } });
 
   await page.goto(`/products/${product.id}`);
   const oceanBlue = page.getByRole("radio", {
@@ -59,7 +83,15 @@ test("selected color stays attached to cart and checkout order snapshots", async
   await page.keyboard.press("Space");
   await expect(oceanBlue).toBeChecked();
   await expect(page.locator(".productPrice")).toContainText("19.99");
+  const addToCart = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/cart/items") &&
+      response.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "Add to cart" }).click();
+  const addResponse = await addToCart;
+  expect(addResponse.status(), await addResponse.text()).toBe(201);
+  await expect(page.getByText("Added to cart.", { exact: true })).toBeVisible();
 
   const cartResponse = await page.request.get("/api/cart");
   expect(cartResponse.ok(), await cartResponse.text()).toBeTruthy();
@@ -94,7 +126,9 @@ test("selected color stays attached to cart and checkout order snapshots", async
   await page.getByLabel("Country code", { exact: true }).fill("US");
   await page.getByRole("button", { name: "Calculate shipping" }).click();
   await expect(
-    page.getByRole("combobox", { name: "Delivery service for Demo Store" }),
+    page.getByRole("combobox", {
+      name: `Delivery service for ${sellerTemplate.seller?.store?.name}`,
+    }),
   ).toHaveValue("local-demo-shipping-service");
   await page.getByRole("button", { name: "Place order" }).click();
   await expect(page.locator(".orderConfirmation")).toContainText(
