@@ -132,7 +132,7 @@ test("selected color stays attached to cart and checkout order snapshots", async
   ).toHaveValue("local-demo-shipping-service");
   await page.getByRole("button", { name: "Place order" }).click();
   await expect(page.locator(".orderConfirmation")).toContainText(
-    "Order confirmed",
+    "Order received",
   );
 
   const order = await prisma.parentOrder.findFirstOrThrow({
