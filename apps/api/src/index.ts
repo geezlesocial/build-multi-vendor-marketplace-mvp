@@ -278,8 +278,9 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   if (!chargeCurrencyCapability) return res.status(409).json({ error: `Checkout in ${env.CURRENCY} is unavailable because the platform currency capability is disabled. Your cart is preserved.`, code: 'CHECKOUT_CURRENCY_UNAVAILABLE' });
   const liveActivationBlock = await livePaymentActivationBlock(method);
   if (liveActivationBlock) return res.status(503).json(liveActivationBlock);
-  const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { productType: true, inventory: true, seller: true } } } } } });
+  const cart = await prisma.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { productType: true, inventory: true, seller: true, variants: { where: { status: ProductStatus.APPROVED }, select: { id: true } } } } } } } });
   if (!cart?.items.length) return res.status(400).json({ error: 'Cart is empty' });
+  if (cart.items.some(item => !item.variant && item.product.variants.length > 0)) return res.status(409).json({ error: 'A product in your cart now requires a color or option. Remove it and add the option you want.', code: 'CART_VARIANT_REQUIRED' });
   const settings = await prisma.marketplaceSettings.findUnique({ where: { id: 'default' }, select: { affiliateEnabled: true, affiliateAttributionRule: true } });
   const affiliateToken = input.affiliateToken ?? req.cookies?.affiliate_attribution as string | undefined;
   if (affiliateToken && !settings?.affiliateEnabled) return res.status(409).json({ error: 'Affiliate attribution is disabled' });
@@ -296,9 +297,10 @@ app.post('/api/orders/checkout', requireAuth, asyncRoute(async (req, res) => {
   const grouped = new Map<string, typeof cart.items>();
   for (const item of cart.items) { if ((item.variant?.stock ?? item.product.inventory?.quantity ?? 0) < item.quantity) return res.status(409).json({ error: `Insufficient stock for ${item.product.name}` }); const key = item.product.sellerId ?? 'platform'; grouped.set(key, [...(grouped.get(key) ?? []), item]); }
   const committed = await prisma.$transaction(async tx => {
-    const freshCart = await tx.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { productType: true, inventory: true, seller: { include: { store: { include: { currencyOffers: true } } } } } } } } } });
+    const freshCart = await tx.cart.findUnique({ where: { userId: user.id }, include: { items: { include: { variant: true, product: { include: { productType: true, inventory: true, seller: { include: { store: { include: { currencyOffers: true } } } }, variants: { where: { status: ProductStatus.APPROVED }, select: { id: true } } } } } } } });
     if (!freshCart?.items.length) throw Object.assign(new Error('Cart changed; refresh and try again'), { statusCode: 409, code: 'SHIPPING_CART_STALE' });
     for (const item of freshCart.items) {
+      if (!item.variant && item.product.variants.length > 0) throw Object.assign(new Error(`Choose a color or option for ${item.product.name} before checkout.`), { statusCode: 409, code: 'CART_VARIANT_REQUIRED' });
       const quantityError = wholesaleQuantityError(item.product, item.quantity, true);
       if (quantityError) throw Object.assign(new Error(`${item.product.name}: ${quantityError}`), { statusCode: 409, code: 'WHOLESALE_QUANTITY_INVALID' });
     }
@@ -772,7 +774,7 @@ app.post('/api/admin/sellers/:id/provision-store', requireAuth, requireRole(Role
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   res.json(result);
 }));
-app.patch('/api/admin/products/:id', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const input = z.object({ status: z.nativeEnum(ProductStatus), reason: z.string().max(500).optional() }).parse(req.body); const product = await prisma.product.update({ where: { id: routeParam(req.params.id) }, data: { status: input.status } }); await audit(user.id, `PRODUCT_${input.status}`, 'Product', product.id, { reason: input.reason }); res.json(product); }));
+app.patch('/api/admin/products/:id', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (req, res) => { const user = res.locals.user as { id: string }; const input = z.object({ status: z.nativeEnum(ProductStatus), reason: z.string().max(500).optional() }).parse(req.body); const product = await prisma.$transaction(async tx => { const updated = await tx.product.update({ where: { id: routeParam(req.params.id) }, data: { status: input.status } }); if (input.status === ProductStatus.APPROVED || input.status === ProductStatus.REJECTED) await tx.productVariant.updateMany({ where: { productId: updated.id, status: ProductStatus.PENDING }, data: { status: input.status } }); return updated; }); await audit(user.id, `PRODUCT_${input.status}`, 'Product', product.id, { reason: input.reason }); res.json(product); }));
 app.get('/api/seller/summary', requireAuth, requireRole(Role.SELLER, Role.CASHIER), asyncRoute(async (_req, res) => { const user = res.locals.user as { sellerId?: string }; if (!user.sellerId) return res.status(403).json({ error: 'Seller scope required' }); res.json(await sellerDashboardSummary(user.sellerId)); }));
 app.get('/api/admin/orders', requireAuth, requireRole(Role.ADMIN), asyncRoute(async (_req, res) => res.json(await prisma.parentOrder.findMany({ include: { payment: true, sellerOrders: { include: { seller: { include: { store: true } }, items: true } } }, orderBy: { createdAt: 'desc' }, take: 100 }))));
 

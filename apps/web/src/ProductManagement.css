@@ -59,7 +59,7 @@
 .sellerQuickLinks>a:focus-visible{outline:3px solid #bd754e;outline-offset:2px}
 .sellerQuickLinks small{color:#68736b;font-size:.66rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
 .sellerQuickLinks strong{overflow-wrap:anywhere;font-size:.9rem;line-height:1.25}
-.sellerProducts{display:grid;gap:1.1rem;min-width:0;margin-top:.35rem}
+.sellerProducts{display:grid;gap:1.1rem;min-width:0;margin-top:.35rem;container-type:inline-size;container-name:seller-products}
 .sellerProductsHeader{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:1rem;padding:.25rem 0 .45rem}
 .sellerProductsHeader h2{margin:.12rem 0;font-size:clamp(1.45rem,2.8vw,2rem)}
 .sellerProductsHeader>div:first-child>p:last-child{margin:.15rem 0 0}
@@ -107,6 +107,38 @@
 .sellerDiscounts .profileActions{justify-content:flex-end}
 @media(max-width:850px){.sellerQuickLinks{grid-template-columns:repeat(2,minmax(0,1fr))}.sellerProductsHeader{grid-template-columns:minmax(0,1fr)}.sellerListingMetrics{justify-content:flex-start}}
 @media(max-width:650px){.sellerQuickLinks{gap:.5rem}.sellerQuickLinks>a{min-height:3.75rem;padding:.6rem}.sellerProducts{gap:.8rem}.sellerListingMetrics>span{font-size:.7rem}.sellerProductModule{padding:.9rem}.sellerProductCreate,.productEditor form{grid-template-columns:minmax(0,1fr)}.sellerProductCreate>.sellerPriceFields,.sellerProductCreate>.catalogFields,.sellerProductCreate>button,.productEditor form>label:nth-child(2),.productEditor form>.sellerPriceFields,.productEditor form>.catalogFields,.productEditor form>button{grid-column:1}.sellerSectionHeading{gap:.6rem}.sellerStep{flex-basis:1.9rem;width:1.9rem;height:1.9rem}.sellerDiscounts{padding:.9rem}.sellerDiscounts .row{grid-template-columns:minmax(0,1fr)}.sellerDiscounts .profileActions{justify-content:flex-start}}
+
+.sellerVariantManager{display:grid;gap:.8rem;min-width:0;padding:1rem;border:1px solid #dfe6df;border-radius:.9rem;background:#f9faf7}
+.sellerVariantManager>header{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
+.sellerVariantManager>header h4,.sellerVariantManager>header p{margin:.12rem 0}
+.sellerVariantManager>p{margin:0;max-width:80ch;line-height:1.5}
+.sellerVariantList{display:grid;gap:.5rem;margin:0;padding:0;list-style:none}
+.sellerVariantList>li{display:grid;grid-template-columns:3.4rem minmax(0,1fr) auto;align-items:center;gap:.7rem;padding:.6rem;border:1px solid #e0e7df;border-radius:.7rem;background:#fff}
+.sellerVariantList img,.sellerVariantImageFallback{display:grid;width:3.4rem;height:3.4rem;place-items:center;border-radius:.55rem;background:#e9f0e9;object-fit:cover;color:#315d47;font-weight:800}
+.sellerVariantSummary{display:grid;gap:.2rem;min-width:0;overflow-wrap:anywhere}
+.sellerVariantSummary small{color:#68736b}
+.sellerVariantActions,.sellerVariantFormActions{display:flex;flex-wrap:wrap;gap:.45rem}
+.sellerVariantForm{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end;gap:.7rem;padding-top:.75rem;border-top:1px solid #e5eae4}
+.sellerVariantForm h5,.sellerVariantImageField,.sellerVariantSelectedPreview,.sellerVariantFormActions{grid-column:1/-1}
+.sellerVariantForm h5{margin:0;font-size:.95rem}
+.sellerVariantSelectedPreview{width:5rem;height:5rem;border:1px solid #dfe6df;border-radius:.7rem;background:#fff;object-fit:cover}
+.productAttachment{display:grid;grid-template-columns:minmax(3.5rem,5rem) minmax(0,1fr) auto;align-items:center;gap:.65rem;min-width:0}
+.productAttachment>img,.productAttachment>video{width:5rem;height:4rem;border-radius:.55rem;background:#f5f6f2;object-fit:cover}
+.productAttachment>span{min-width:0;overflow-wrap:anywhere}
+.sellerMediaFilePicker{display:grid;gap:.45rem;max-width:none!important;padding:1rem;border:1px dashed #aebdb0;border-radius:.8rem;background:#f9fbf8}
+.sellerUploadQueue,.sellerMediaAssetList{display:grid;gap:.55rem;min-width:0}
+.sellerUploadRow,.sellerMediaAssetRow{display:grid;grid-template-columns:3.6rem minmax(0,1fr) auto;align-items:center;gap:.7rem;min-width:0;padding:.65rem;border:1px solid #dfe6df;border-radius:.75rem;background:#fff}
+.sellerUploadRow>img,.sellerMediaAssetRow>img{width:3.6rem;height:3.6rem;border-radius:.55rem;object-fit:cover;background:#f5f6f2}
+.sellerUploadRowDetails,.sellerMediaAssetRow>div{display:grid;gap:.2rem;min-width:0;overflow-wrap:anywhere}
+.sellerUploadStatus{width:max-content;padding:.17rem .5rem;border-radius:999px;background:#edf1ed;font-size:.72rem;font-weight:700}
+.sellerUploadStatus.is-approved{background:#e7f3e9;color:#245b37}.sellerUploadStatus.is-rejected,.sellerUploadStatus.is-failed{background:#fff0e9;color:#9b3b26}.sellerUploadStatus.is-awaiting-scan{background:#fff4dc;color:#79520a}
+.sellerUploadRowActions{display:flex;flex-wrap:wrap;gap:.4rem}
+.marketplaceProductCard,.storefrontProductCard{min-width:0}
+.marketplaceProductCard>.productMediaGallery,.storefrontProductCard>.productMediaGallery{margin:0}
+.marketplaceProductCard .cardBody,.storefrontProductCard .cardBody{min-width:0}
+.marketplaceProductCard .cardBody>h3,.storefrontProductCard .cardBody>h2{overflow-wrap:anywhere}
+.marketplaceProductCard .productMediaGalleryControls,.storefrontProductCard .productMediaGalleryControls{min-height:2.25rem}
+@container seller-products (max-width:680px){.sellerProductCreate,.productEditor form,.sellerVariantForm{grid-template-columns:minmax(0,1fr)}.sellerProductCreate>.sellerPriceFields,.sellerProductCreate>.catalogFields,.sellerProductCreate>button,.productEditor form>label:nth-child(2),.productEditor form>.sellerPriceFields,.productEditor form>.catalogFields,.productEditor form>button,.sellerVariantForm h5,.sellerVariantImageField,.sellerVariantSelectedPreview,.sellerVariantFormActions{grid-column:1}.sellerVariantList>li,.sellerUploadRow,.sellerMediaAssetRow{grid-template-columns:3rem minmax(0,1fr)}.sellerVariantList img,.sellerVariantImageFallback,.sellerUploadRow>img,.sellerMediaAssetRow>img{width:3rem;height:3rem}.sellerVariantActions,.sellerUploadRowActions,.sellerMediaAssetRow>button{grid-column:2}}
 
 /* Shared buyer/seller dashboard rhythm and responsive navigation. */
 .dashboardPageHeader{display:flex;align-items:flex-end;justify-content:space-between;gap:1.25rem;margin-bottom:1.2rem}

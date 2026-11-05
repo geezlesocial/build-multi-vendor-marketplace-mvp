@@ -3,11 +3,12 @@ import { formatMinor } from './money.js';
 import { LiveWatchModal, type LiveSession } from './LiveShopping.js';
 import { JimaRecommendations } from './JimaRecommendations.js';
 import { ProductCardActions } from './ProductCardActions.js';
+import { MarketplaceProductCard, type MarketplaceProductCardData } from './MarketplaceProductCard.js';
 import { MarketplaceAdPlacementSection } from './MarketplaceAds.js';
 import { PublicCampaignPlacement, PublicCampaigns, type PublicCampaign } from './PublicCampaigns.js';
 
 type User = { id: string; name: string; role: string; emailVerifiedAt?: string | null } | null;
-type Product = { id: string; name: string; description: string; priceMinor: number; salePriceMinor?: number | null; currency: string; availableStock: number; wholesaleEnabled?: boolean; wholesaleMinQuantity?: number | null; wholesaleMaxQuantity?: number | null; image: { url: string; alt: string } | null; category: { name: string; slug: string } | null; store: { name: string; slug: string } | null };
+type Product = MarketplaceProductCardData;
 type Store = { id: string; name: string; slug: string; description: string | null; logoMediaId: string | null };
 type HomeData = { hero: { title: string; description: string }; categories: { id: string; name: string; slug: string; imageUrl: string | null }[]; featuredDeals: Product[]; productCollection: Product[]; featuredStores: Store[] };
 type SearchData = { products: (Product & { type: 'Product' })[]; stores: (Store & { type: 'Store' })[] };
@@ -61,7 +62,7 @@ function SponsoredProductCard({ item, onAdd }: { item: SponsoredProduct; onAdd: 
   </article>;
 }
 
-export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: (productId: string, quantity?: number) => void; onSignIn: () => void }) {
+export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: (productId: string, quantity?: number, variantId?: string) => void; onSignIn: () => void }) {
   const [home, setHome] = useState<HomeData | null>(null);
   const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get('search') ?? '');
   const [search, setSearch] = useState<SearchData>({ products: [], stores: [] });
@@ -215,7 +216,17 @@ export function MarketplaceHome({ user, onAdd, onSignIn }: { user: User; onAdd: 
     </div>
     <section id="categories"><div className="sectionHeading"><div><p className="eyebrow">Browse by interest</p><h2>Start with a category</h2></div><span className="muted">Public, approved catalog</span></div><div className="categoryGrid">{home.categories.map(category => <a key={category.id} className="categoryChip" href={`/category/${encodeURIComponent(category.slug)}`} onClick={() => recordCategoryInterest(category.id)}>{category.name}</a>)}</div></section>
     {user && user.role !== 'ADMIN' && sponsoredProducts.length > 0 && <section className="memberRecommendations sponsoredPlacements" aria-labelledby="sponsored-title"><div className="sectionHeading"><div><p className="eyebrow">Paid placement · clearly labeled</p><h2 id="sponsored-title">Sponsored finds</h2><p className="muted">Independent stores may pay per verified click or per qualified view. These placements are separate from organic recommendations.</p></div></div><div className="grid">{sponsoredProducts.map(item => <SponsoredProductCard key={`${item.campaignId}-${item.product.id}`} item={item} onAdd={onAdd} />)}</div></section>}
-    <section id="featured"><div className="sectionHeading"><div><p className="eyebrow">Featured collection</p><h2>Good finds from active stores</h2></div><span className="muted">{user ? 'Add to your cart when signed in' : 'Sign in to add items'}</span></div><PublicCampaignPlacement placement="collection" title="Featured collection promotions" /><MarketplaceAdPlacementSection placement="COLLECTIONS" title="Sponsored in this collection" /><div className="grid">{cards.map(product => <article className="card productCard" key={product.id}>{product.image ? <a href={`/products/${product.id}`}><img src={product.image.url} alt={product.image.alt} /></a> : <a className="productVisual productVisualFallback" href={`/products/${product.id}`} aria-label={`View ${product.name}`}><span className="visualOrb visualOrbOne" /><span className="visualOrb visualOrbTwo" /><span className="visualShelf" /><span className="productVisualLabel">{product.category?.name ?? 'Featured'}</span></a>}<div className="cardBody"><p className="eyebrow">Product · {product.store?.name ?? 'Platform store'}</p><h3><a href={`/products/${product.id}`}>{product.name}</a></h3><p>{product.description}</p>{product.wholesaleEnabled && <small className="wholesaleLabel">Wholesale · order {product.wholesaleMinQuantity}–{product.wholesaleMaxQuantity} units</small>}<div className="cardBottom"><strong>{money(product.salePriceMinor ?? product.priceMinor, product.currency)}</strong><button onClick={() => user ? onAdd(product.id, product.wholesaleEnabled ? product.wholesaleMinQuantity ?? 1 : 1) : onSignIn()} disabled={product.availableStock < (product.wholesaleEnabled ? product.wholesaleMinQuantity ?? 1 : 1)}>{product.availableStock > 0 ? 'Add to cart' : 'Out of stock'}</button></div>{product.salePriceMinor != null && <small><del>{money(product.priceMinor, product.currency)}</del> · Sale price</small>}<small>{product.availableStock} available</small><ProductCardActions productId={product.id} productName={product.name} availableStock={product.availableStock} hasSeller={Boolean(product.store)} wholesaleMinQuantity={product.wholesaleEnabled ? product.wholesaleMinQuantity : null} onSignIn={onSignIn} /></div></article>)}</div>{!cards.length && <div className="empty">No approved products are currently available.</div>}</section>
+    <section id="featured">
+      <div className="sectionHeading"><div><p className="eyebrow">Featured collection</p><h2>Good finds from active stores</h2></div><span className="muted">{user ? 'Add to your cart when signed in' : 'Sign in to add items'}</span></div>
+      <PublicCampaignPlacement placement="collection" title="Featured collection promotions" />
+      <MarketplaceAdPlacementSection placement="COLLECTIONS" title="Sponsored in this collection" />
+      <div className="grid">
+        {cards.map((product) => (
+          <MarketplaceProductCard key={product.id} product={product} categoryLabel={product.store?.name ?? product.category?.name ?? "Featured"} onAdd={onAdd} onSignIn={onSignIn} />
+        ))}
+      </div>
+      {!cards.length && <div className="empty">No approved products are currently available.</div>}
+    </section>
     <section id="stores"><div className="sectionHeading"><div><p className="eyebrow">Meet the stores</p><h2>Independent sellers, clearly labeled</h2></div></div><div className="storeGrid">{home.featuredStores.map(store => <a className="storeCard" key={store.id} href={`/store/${store.slug}`}><span className="storeLogo" aria-hidden="true"><span className="storeLogoMark" /></span><span><strong>{store.name}</strong><small>{store.description || 'View approved products'}</small></span><span aria-hidden="true">→</span></a>)}</div>{!home.featuredStores.length && <div className="empty">Approved stores will appear here.</div>}</section>
     {watchLiveOpen && <LiveWatchModal sessions={liveSessions} onClose={closeLiveViewer} canEarn={Boolean(user?.emailVerifiedAt)} canReact={Boolean(user)} />}
   </section>;

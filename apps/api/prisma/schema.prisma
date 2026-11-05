@@ -1425,14 +1425,17 @@ model ProductVariant {
   stock          Int                  @default(0)
   status         ProductStatus        @default(APPROVED)
   imageUrl       String?
+  mediaAssetId   String?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   product        Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
   cartItems      CartItem[]
   orderItems     OrderItem[]
   wholesaleTiers WholesaleTierPrice[]
+  mediaAsset     MediaAsset?           @relation("ProductVariantImage", fields: [mediaAssetId], references: [id], onDelete: Restrict)
 
   @@index([productId, status])
+  @@index([mediaAssetId])
 }
 
 model Cart {
@@ -1453,7 +1456,7 @@ model CartItem {
   product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
 
-  @@unique([cartId, productId])
+  @@unique([cartId, productId, variantId])
   @@index([variantId])
 }
 
@@ -2902,6 +2905,7 @@ model MediaAsset {
   storeBanners           Store[]                        @relation("StoreBanner")
   productImages          ProductImage[]
   productMedia           ProductMedia[]
+  variantImages          ProductVariant[]               @relation("ProductVariantImage")
   storeBusterAdCreatives StoreBusterCampaignCreative[]
   authPageLogo           AuthPageCustomization?         @relation("AuthPageLogo")
   messageAttachments     MessageAttachment[]

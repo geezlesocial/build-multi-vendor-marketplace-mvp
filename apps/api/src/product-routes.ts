@@ -27,6 +27,38 @@ const asyncRoute =
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 
+function publicVariants(variants: Array<{
+  id: string;
+  name: string;
+  priceMinor: number;
+  currency: string;
+  stock: number;
+  mediaAsset?: { id: string; kind: string; uploadStatus: string; scanStatus: string } | null;
+}> | undefined) {
+  return (variants ?? []).map((variant) => ({
+    id: variant.id,
+    name: variant.name,
+    priceMinor: variant.priceMinor,
+    currency: variant.currency,
+    stock: variant.stock,
+    image:
+      variant.mediaAsset?.kind === "IMAGE" &&
+      variant.mediaAsset.uploadStatus === "COMPLETE" &&
+      variant.mediaAsset.scanStatus === "APPROVED"
+        ? {
+            id: variant.mediaAsset.id,
+            url: `/content-media/${encodeURIComponent(variant.mediaAsset.id)}`,
+          }
+        : null,
+  }));
+}
+
+function productStock(product: { inventory?: { quantity: number } | null; variants?: { stock: number }[] }) {
+  return product.variants?.length
+    ? product.variants.reduce((sum, variant) => sum + variant.stock, 0)
+    : product.inventory?.quantity ?? 0;
+}
+
 export function registerProductRoutes(app: Express) {
   app.get(
     "/api/products",
@@ -77,6 +109,15 @@ export function registerProductRoutes(app: Express) {
             featureAssignments: { include: { feature: true } },
             inventory: true,
             images: true,
+            variants: {
+              where: { status: ProductStatus.APPROVED },
+              orderBy: { name: "asc" },
+              include: {
+                mediaAsset: {
+                  select: { id: true, kind: true, uploadStatus: true, scanStatus: true },
+                },
+              },
+            },
           },
           orderBy: { createdAt: "desc" },
           skip: (page - 1) * pageSize,
@@ -87,7 +128,8 @@ export function registerProductRoutes(app: Express) {
       res.json({
         items: items.map((product) => ({
           ...product,
-          availableStock: product.inventory?.quantity ?? 0,
+          variants: publicVariants(product.variants),
+          availableStock: productStock(product),
         })),
         page,
         pageSize,
@@ -133,6 +175,15 @@ export function registerProductRoutes(app: Express) {
               },
             },
           },
+          variants: {
+            where: { status: ProductStatus.APPROVED },
+            orderBy: { name: "asc" },
+            include: {
+              mediaAsset: {
+                select: { id: true, kind: true, uploadStatus: true, scanStatus: true },
+              },
+            },
+          },
         },
       });
       if (!product) return res.status(404).json({ error: "Product not found" });
@@ -149,7 +200,8 @@ export function registerProductRoutes(app: Express) {
         ...product,
         features: product.featureAssignments.map((item) => item.feature),
         mediaAttachments,
-        availableStock: product.inventory?.quantity ?? 0,
+        variants: publicVariants(product.variants),
+        availableStock: productStock(product),
       });
     }),
   );

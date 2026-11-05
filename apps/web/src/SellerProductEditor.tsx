@@ -10,6 +10,7 @@ import {
   type CatalogCategory,
   type CatalogProductType,
 } from "./CatalogFields.js";
+import { SellerProductVariants } from "./SellerProductVariants.js";
 import "./ProductManagement.css";
 
 type DashboardRequest = <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -351,6 +352,7 @@ export function ProductEditor({
         <strong>Gallery and product files</strong>
         {product.images?.map((image: any) => (
           <div className="productAttachment" key={`legacy-${image.id}`}>
+            <img src={image.url} alt={image.alt || `${product.name} gallery image`} loading="lazy" />
             <span>IMAGE · {image.alt}</span>
             <button
               type="button"
@@ -372,6 +374,8 @@ export function ProductEditor({
         ))}
         {product.mediaAttachments?.map((attachment: any) => (
           <div className="productAttachment" key={attachment.id}>
+            {attachment.mediaAsset.kind === "IMAGE" && <img src={`/api/seller/store-media/${encodeURIComponent(attachment.mediaAsset.id)}/preview`} alt={attachment.label || attachment.mediaAsset.originalName || `${product.name} image`} loading="lazy" />}
+            {attachment.mediaAsset.kind === "VIDEO" && <video src={`/api/seller/store-media/${encodeURIComponent(attachment.mediaAsset.id)}/preview`} aria-label={attachment.label || `${product.name} video preview`} muted controls playsInline preload="metadata" />}
             <span>
               {attachment.mediaAsset.kind} ·{" "}
               {attachment.label || attachment.mediaAsset.originalName}
@@ -398,6 +402,13 @@ export function ProductEditor({
           <small>No product media attached yet.</small>
         )}
       </div>
+      <SellerProductVariants
+        product={product}
+        approvedMedia={approvedMedia}
+        request={request}
+        reload={reload}
+        setMessage={setMessage}
+      />
       <div className="productMediaUploadControl">
         <label>
           Upload to this product from your device

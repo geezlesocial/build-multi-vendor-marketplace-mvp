@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => {
     inventoryFindUnique: vi.fn(async (_args?: unknown): Promise<unknown> => ({
       quantity: 8,
     })),
-    cartItemFindUnique: vi.fn(
+    cartItemFindFirst: vi.fn(
       async (_args?: unknown): Promise<unknown> => null,
     ),
     cartItemCreate: vi.fn(
@@ -44,7 +44,7 @@ const mocks = vi.hoisted(() => {
   const tx = {
     $queryRaw: calls.queryRaw,
     cartItem: {
-      findUnique: calls.cartItemFindUnique,
+      findFirst: calls.cartItemFindFirst,
       create: calls.cartItemCreate,
       update: calls.cartItemUpdate,
     },
@@ -57,7 +57,7 @@ const mocks = vi.hoisted(() => {
     product: { findFirst: calls.productFindFirst },
     inventory: { findUnique: calls.inventoryFindUnique },
     cartItem: {
-      findUnique: calls.cartItemFindUnique,
+      findFirst: calls.cartItemFindFirst,
       create: calls.cartItemCreate,
       update: calls.cartItemUpdate,
       delete: calls.cartItemDelete,
@@ -130,11 +130,12 @@ async function addItem(
   baseUrl: string,
   quantity = 2,
   headers: Record<string, string> = authHeaders(),
+  variantId?: string,
 ) {
   return fetch(`${baseUrl}/api/cart/items`, {
     method: "POST",
     headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ productId, quantity }),
+    body: JSON.stringify({ productId, quantity, ...(variantId ? { variantId } : {}) }),
   });
 }
 
@@ -154,7 +155,7 @@ beforeEach(() => {
     wholesaleMaxQuantity: null,
   });
   mocks.calls.inventoryFindUnique.mockResolvedValue({ quantity: 8 });
-  mocks.calls.cartItemFindUnique.mockResolvedValue(null);
+  mocks.calls.cartItemFindFirst.mockResolvedValue(null);
   mocks.calls.cartItemCreate.mockImplementation(async ({ data }) => ({
     id: "item-created",
     ...data,
@@ -209,6 +210,45 @@ describe("cart HTTP routes", () => {
     expect(mocks.calls.cartUpsert).not.toHaveBeenCalled();
   });
 
+  it("requires buyers to choose an approved option when a listing has variants", async () => {
+    mocks.calls.productFindFirst.mockResolvedValue({
+      id: productId,
+      name: "Color product",
+      status: "APPROVED",
+      variants: [{ id: "c123456789012345678901234", status: "APPROVED", stock: 4 }],
+      wholesaleEnabled: false,
+      wholesaleMinQuantity: null,
+      wholesaleMaxQuantity: null,
+    });
+    const baseUrl = await startServer();
+    const response = await addItem(baseUrl, 1);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("Choose an approved color") });
+    expect(mocks.calls.cartUpsert).not.toHaveBeenCalled();
+  });
+
+  it("adds a selected variant as a distinct cart line", async () => {
+    const variantId = "c123456789012345678901234";
+    mocks.calls.productFindFirst.mockResolvedValue({
+      id: productId,
+      name: "Color product",
+      status: "APPROVED",
+      variants: [{ id: variantId, status: "APPROVED", stock: 4 }],
+      wholesaleEnabled: false,
+      wholesaleMinQuantity: null,
+      wholesaleMaxQuantity: null,
+    });
+    const baseUrl = await startServer();
+    const response = await addItem(baseUrl, 1, authHeaders(), variantId);
+    expect(response.status).toBe(201);
+    expect(mocks.calls.cartItemFindFirst).toHaveBeenCalledWith({
+      where: { cartId: "cart-buyer-a", productId, variantId },
+    });
+    expect(mocks.calls.cartItemCreate).toHaveBeenCalledWith({
+      data: { cartId: "cart-buyer-a", productId, variantId, quantity: 1 },
+    });
+  });
+
   it("adds an approved in-stock product under a locked cart row", async () => {
     const baseUrl = await startServer();
     const response = await addItem(baseUrl, 2, authHeaders("buyer-b"));
@@ -234,7 +274,7 @@ describe("cart HTTP routes", () => {
   });
 
   it("rejects a cumulative quantity above available stock without changing the existing cart line", async () => {
-    mocks.calls.cartItemFindUnique.mockResolvedValue({
+    mocks.calls.cartItemFindFirst.mockResolvedValue({
       id: "item-existing",
       quantity: 7,
     });
@@ -248,7 +288,7 @@ describe("cart HTTP routes", () => {
 
   it("scopes cart-line updates to the authenticated user cart and refuses quantities above stock", async () => {
     mocks.calls.cartFindUnique.mockResolvedValue({ id: "cart-buyer-b" });
-    mocks.calls.cartItemFindUnique.mockResolvedValue({
+    mocks.calls.cartItemFindFirst.mockResolvedValue({
       id: "item-buyer-b",
       quantity: 1,
       variant: null,
@@ -274,9 +314,9 @@ describe("cart HTTP routes", () => {
     expect(mocks.calls.cartFindUnique).toHaveBeenCalledWith({
       where: { userId: "buyer-b" },
     });
-    expect(mocks.calls.cartItemFindUnique).toHaveBeenCalledWith(
+    expect(mocks.calls.cartItemFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { cartId_productId: { cartId: "cart-buyer-b", productId } },
+        where: { cartId: "cart-buyer-b", productId },
       }),
     );
     expect(mocks.calls.cartItemUpdate).not.toHaveBeenCalled();
@@ -284,7 +324,7 @@ describe("cart HTTP routes", () => {
 
   it("removes only the requested line from the authenticated user cart when quantity is zero", async () => {
     mocks.calls.cartFindUnique.mockResolvedValue({ id: "cart-buyer-b" });
-    mocks.calls.cartItemFindUnique.mockResolvedValue({ id: "item-buyer-b" });
+    mocks.calls.cartItemFindFirst.mockResolvedValue({ id: "item-buyer-b" });
     const baseUrl = await startServer();
     const response = await fetch(`${baseUrl}/api/cart/items/${productId}`, {
       method: "PATCH",
@@ -295,9 +335,9 @@ describe("cart HTTP routes", () => {
       body: JSON.stringify({ quantity: 0 }),
     });
     expect(response.status).toBe(204);
-    expect(mocks.calls.cartItemFindUnique).toHaveBeenCalledWith(
+    expect(mocks.calls.cartItemFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { cartId_productId: { cartId: "cart-buyer-b", productId } },
+        where: { cartId: "cart-buyer-b", productId },
       }),
     );
     expect(mocks.calls.cartItemDelete).toHaveBeenCalledWith({

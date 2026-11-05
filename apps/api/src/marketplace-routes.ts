@@ -14,29 +14,93 @@ const approvedProductWhere = (query?: string): Prisma.ProductWhereInput => ({
   ]
 });
 
-const publicProduct = (product: any) => ({
-  id: product.id,
-  slug: product.slug,
-  name: product.name,
-  description: product.description,
-  seoTitle: product.seoTitle,
-  seoDescription: product.seoDescription,
-  priceMinor: product.priceMinor,
-  salePriceMinor: product.salePriceMinor,
-  wholesaleEnabled: product.wholesaleEnabled,
-  wholesaleMinQuantity: product.wholesaleMinQuantity,
-  wholesaleMaxQuantity: product.wholesaleMaxQuantity,
-  color: product.color,
-  features: (product.featureAssignments ?? []).map((assignment: any) => ({ id: assignment.feature.id, name: assignment.feature.name })),
-  currency: product.currency,
-  availableStock: product.inventory?.quantity ?? 0,
-  image: product.images?.[0] ? { url: product.images[0].url, alt: product.images[0].alt } : product.mediaAttachments?.find((item: any) => item.mediaAsset.kind === 'IMAGE') ? { url: `/content-media/${encodeURIComponent(product.mediaAttachments.find((item: any) => item.mediaAsset.kind === 'IMAGE').mediaAsset.id)}`, alt: product.name } : null,
-  category: product.category ? { name: product.category.name, slug: product.category.slug } : null,
-  brand: product.brand ? { name: product.brand.name, slug: product.brand.slug } : null,
-  store: product.seller?.store ? { name: product.seller.store.name, slug: product.seller.store.slug } : null
+const availableProductWhere: Prisma.ProductWhereInput = {
+  OR: [
+    { variants: { some: { status: ProductStatus.APPROVED, stock: { gt: 0 } } } },
+    {
+      AND: [
+        { inventory: { quantity: { gt: 0 } } },
+        { NOT: { variants: { some: { status: ProductStatus.APPROVED } } } },
+      ],
+    },
+  ]
+};
+
+const publicProductInclude = {
+  inventory: true,
+  images: { orderBy: { id: 'asc' }, take: 6 },
+  mediaAttachments: {
+    where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } },
+    orderBy: { position: 'asc' },
+    include: { mediaAsset: { select: { id: true, kind: true, originalName: true, detectedMime: true } } }
+  },
+  variants: {
+    where: { status: ProductStatus.APPROVED },
+    orderBy: { name: 'asc' },
+    include: { mediaAsset: { select: { id: true, kind: true, uploadStatus: true, scanStatus: true } } }
+  },
+  category: true,
+  brand: true,
+  featureAssignments: { include: { feature: true } },
+  seller: { include: { store: true } }
+} satisfies Prisma.ProductInclude;
+
+type PublicProductRecord = Prisma.ProductGetPayload<{ include: typeof publicProductInclude }>;
+
+const publicVariant = (variant: PublicProductRecord['variants'][number]) => ({
+  id: variant.id,
+  name: variant.name,
+  priceMinor: variant.priceMinor,
+  currency: variant.currency,
+  stock: variant.stock,
+  image: variant.mediaAsset?.kind === 'IMAGE' && variant.mediaAsset.uploadStatus === 'COMPLETE' && variant.mediaAsset.scanStatus === 'APPROVED'
+    ? { id: variant.mediaAsset.id, url: `/content-media/${encodeURIComponent(variant.mediaAsset.id)}` }
+    : null
 });
 
-const publicStore = (store: any) => ({
+const publicProduct = (product: PublicProductRecord) => {
+  const variants = (product.variants ?? []).map(publicVariant);
+  const gallery = [
+    ...(product.images ?? []).map((image) => ({ id: `image-${image.id}`, kind: 'IMAGE', url: image.url, alt: image.alt })),
+    ...(product.mediaAttachments ?? []).map(({ mediaAsset, ...attachment }) => ({
+      id: attachment.id,
+      kind: mediaAsset.kind,
+      url: `/content-media/${encodeURIComponent(mediaAsset.id)}`,
+      alt: attachment.label || product.name,
+      label: attachment.label,
+      originalName: mediaAsset.originalName,
+      detectedMime: mediaAsset.detectedMime,
+    })),
+  ];
+  const defaultImage = gallery.find((item) => item.kind === 'IMAGE')
+    ? { url: gallery.find((item) => item.kind === 'IMAGE')!.url, alt: gallery.find((item) => item.kind === 'IMAGE')!.alt ?? product.name }
+    : null;
+  return {
+    id: product.id,
+    slug: product.slug,
+    name: product.name,
+    description: product.description,
+    seoTitle: product.seoTitle,
+    seoDescription: product.seoDescription,
+    priceMinor: product.priceMinor,
+    salePriceMinor: product.salePriceMinor,
+    wholesaleEnabled: product.wholesaleEnabled,
+    wholesaleMinQuantity: product.wholesaleMinQuantity,
+    wholesaleMaxQuantity: product.wholesaleMaxQuantity,
+    color: product.color,
+    features: (product.featureAssignments ?? []).map((assignment) => ({ id: assignment.feature.id, name: assignment.feature.name })),
+    currency: product.currency,
+    availableStock: variants.length ? variants.reduce((sum, variant) => sum + variant.stock, 0) : product.inventory?.quantity ?? 0,
+    image: defaultImage,
+    gallery,
+    variants,
+    category: product.category ? { name: product.category.name, slug: product.category.slug } : null,
+    brand: product.brand ? { name: product.brand.name, slug: product.brand.slug } : null,
+    store: product.seller?.store ? { name: product.seller.store.name, slug: product.seller.store.slug } : null
+  };
+};
+
+const publicStore = (store: Prisma.StoreGetPayload<Prisma.StoreDefaultArgs>) => ({
   id: store.id,
   name: store.name,
   slug: store.slug,
@@ -50,7 +114,7 @@ export function registerMarketplaceRoutes(app: Express) {
   app.get('/api/marketplace/home', run(async (_req, res) => {
     const [categories, products, stores] = await Promise.all([
       prisma.category.findMany({ where: { status: TaxonomyStatus.ACTIVE }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }], take: 8 }),
-      prisma.product.findMany({ where: { ...approvedProductWhere(), inventory: { quantity: { gt: 0 } } }, include: { inventory: true, images: { take: 1 }, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true } } } }, category: true, brand: true, featureAssignments: { include: { feature: true } }, seller: { include: { store: true } } }, orderBy: { createdAt: 'desc' }, take: 12 }),
+      prisma.product.findMany({ where: { ...approvedProductWhere(), ...availableProductWhere }, include: publicProductInclude, orderBy: { createdAt: 'desc' }, take: 12 }),
       prisma.store.findMany({ where: { seller: { status: SellerStatus.APPROVED, products: { some: { status: ProductStatus.APPROVED } } } }, orderBy: { name: 'asc' }, take: 8 })
     ]);
     res.json({
@@ -91,8 +155,8 @@ export function registerMarketplaceRoutes(app: Express) {
         pending.push(child.id);
       }
     }
-    const children = (categoriesByParent.get(category.id) ?? []).sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)).map(({ id, name, slug, description, imageUrl }) => ({ id, name, slug, description, imageUrl }));
-    const products = await prisma.product.findMany({ where: { ...approvedProductWhere(), inventory: { quantity: { gt: 0 } }, categoryId: { in: [...descendants] } }, include: { inventory: true, images: { take: 1 }, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true } } } }, category: true, brand: true, featureAssignments: { include: { feature: true } }, seller: { include: { store: true } } }, orderBy: { createdAt: 'desc' }, take: 48 });
+    const children = (categoriesByParent.get(category.id) ?? []).sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)).map(({ id, name, slug: childSlug, description, imageUrl }) => ({ id, name, slug: childSlug, description, imageUrl }));
+    const products = await prisma.product.findMany({ where: { ...approvedProductWhere(), ...availableProductWhere, categoryId: { in: [...descendants] } }, include: publicProductInclude, orderBy: { createdAt: 'desc' }, take: 48 });
     res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
     res.json({ category, children, items: products.map(publicProduct) });
   }));
@@ -100,7 +164,7 @@ export function registerMarketplaceRoutes(app: Express) {
   app.get('/api/marketplace/search', run(async (req, res) => {
     const input = normalizeMarketplaceSearch({ q: req.query.q, limit: req.query.limit });
     const [products, stores] = await Promise.all([
-      prisma.product.findMany({ where: approvedProductWhere(input.q), include: { inventory: true, images: { take: 1 }, mediaAttachments: { where: { mediaAsset: { uploadStatus: 'COMPLETE', scanStatus: 'APPROVED' } }, orderBy: { position: 'asc' }, include: { mediaAsset: { select: { id: true, kind: true } } } }, category: true, brand: true, featureAssignments: { include: { feature: true } }, seller: { include: { store: true } } }, orderBy: { updatedAt: 'desc' }, take: input.limit }),
+      prisma.product.findMany({ where: approvedProductWhere(input.q), include: publicProductInclude, orderBy: { updatedAt: 'desc' }, take: input.limit }),
       prisma.store.findMany({ where: { seller: { status: SellerStatus.APPROVED, products: { some: { status: ProductStatus.APPROVED } } }, OR: [{ name: { contains: input.q, mode: 'insensitive' } }, { description: { contains: input.q, mode: 'insensitive' } }] }, orderBy: { name: 'asc' }, take: input.limit })
     ]);
     res.json({

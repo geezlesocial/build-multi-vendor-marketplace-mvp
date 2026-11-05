@@ -210,9 +210,9 @@ function NotificationList({
 }
 
 function BuyerCart({ data }: { data: BuyerData }) {
-  const update = async (productId: string, quantity: number) => {
+  const update = async (itemId: string, quantity: number) => {
     try {
-      await request(`/api/cart/items/${productId}`, {
+      await request(`/api/cart/lines/${encodeURIComponent(itemId)}`, {
         method: "PATCH",
         body: JSON.stringify({ quantity }),
       });
@@ -233,7 +233,7 @@ function BuyerCart({ data }: { data: BuyerData }) {
           {data.cart.items.map((item) => (
             <div className="row" key={item.id}>
               <span>
-                {item.product.name} ·{" "}
+                {item.product.name}{item.variant ? ` — ${item.variant.name}` : ""} ·{" "}
                 {money(
                   item.variant?.priceMinor ??
                     item.product.salePriceMinor ??
@@ -246,7 +246,7 @@ function BuyerCart({ data }: { data: BuyerData }) {
                   aria-label={`Decrease ${item.product.name}`}
                   disabled={item.quantity <= 1}
                   onClick={() =>
-                    void update(item.product.id, item.quantity - 1)
+                    void update(item.id, item.quantity - 1)
                   }
                 >
                   −
@@ -255,13 +255,13 @@ function BuyerCart({ data }: { data: BuyerData }) {
                 <button
                   aria-label={`Increase ${item.product.name}`}
                   onClick={() =>
-                    void update(item.product.id, item.quantity + 1)
+                    void update(item.id, item.quantity + 1)
                   }
                 >
                   +
                 </button>
               </span>
-              <button onClick={() => void update(item.product.id, 0)}>
+              <button onClick={() => void update(item.id, 0)}>
                 Remove
               </button>
             </div>
