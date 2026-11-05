@@ -14,7 +14,7 @@ const sellerEmail = 'seller.local@example.test';
 let product: { id: string; name: string; storeSlug: string; sellerUserId: string };
 let buyerId = '';
 let hadFavorite = false;
-let originalCartQuantity: number | null = null;
+let originalCartItems: { variantId: string | null; quantity: number }[] = [];
 let cartId = '';
 let messageId = '';
 let sellerReplyMessageId = '';
@@ -35,7 +35,7 @@ test.beforeAll(async () => {
   const cart = await prisma.cart.findUnique({ where: { userId: buyerId } });
   if (cart) {
     cartId = cart.id;
-    originalCartQuantity = (await prisma.cartItem.findUnique({ where: { cartId_productId: { cartId, productId: product.id } }, select: { quantity: true } }))?.quantity ?? null;
+    originalCartItems = await prisma.cartItem.findMany({ where: { cartId, productId: product.id }, select: { variantId: true, quantity: true } });
   }
   const existingConversation = await prisma.conversation.findFirst({ where: { buyerId, sellerId: listing.sellerId!, productId: product.id, status: 'OPEN' }, select: { id: true } });
   createdConversation = !existingConversation;
@@ -60,8 +60,10 @@ test.afterAll(async () => {
     if (hadFavorite) await prisma.favorite.upsert({ where: { userId_productId: { userId: buyerId, productId: product.id } }, update: {}, create: { userId: buyerId, productId: product.id } });
     else await prisma.favorite.deleteMany({ where: { userId: buyerId, productId: product.id } });
     if (cartId) {
-      if (originalCartQuantity == null) await prisma.cartItem.deleteMany({ where: { cartId, productId: product.id } });
-      else await prisma.cartItem.updateMany({ where: { cartId, productId: product.id }, data: { quantity: originalCartQuantity } });
+      await prisma.cartItem.deleteMany({ where: { cartId, productId: product.id } });
+      if (originalCartItems.length) {
+        await prisma.cartItem.createMany({ data: originalCartItems.map(item => ({ cartId, productId: product.id, variantId: item.variantId, quantity: item.quantity })) });
+      }
     }
   }
   if (messageId || sellerReplyMessageId || replyMessageId) await prisma.message.deleteMany({ where: { id: { in: [messageId, sellerReplyMessageId, replyMessageId].filter(Boolean) } } });

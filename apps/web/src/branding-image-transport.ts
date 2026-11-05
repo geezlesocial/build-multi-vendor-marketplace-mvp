@@ -63,10 +63,12 @@ export function uploadToSignedPost(
   fields: Record<string, string>,
   file: File,
   progress: (value: number) => void,
+  transport?: "LOCAL" | "OBJECT",
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const request = new XMLHttpRequest();
-    const localUpload = fields["x-local-upload"] === "1";
+    const localUpload =
+      transport === "LOCAL" || fields["x-local-upload"] === "1";
     request.open(localUpload ? "PUT" : "POST", url);
     request.withCredentials = false;
     if (localUpload) {

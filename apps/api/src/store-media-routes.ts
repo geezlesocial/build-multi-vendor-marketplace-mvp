@@ -167,7 +167,7 @@ export function registerStoreMediaRoutes(app: Express, storage: ManagedContentSt
     requireAuth,
     requireRole(Role.SELLER, Role.CASHIER),
     express.raw({
-      type: "application/octet-stream",
+      type: "*/*",
       limit: Math.max(env.CONTENT_MAX_IMAGE_BYTES, env.CONTENT_MAX_VIDEO_BYTES, env.CONTENT_MAX_DOCUMENT_BYTES),
     }),
     run(async (req, res) => {
@@ -189,6 +189,9 @@ export function registerStoreMediaRoutes(app: Express, storage: ManagedContentSt
         },
       });
       if (!asset) throw fail(404, "This local upload reservation is unavailable. Choose the file again to create a fresh upload.");
+      const contentType = (req.get("content-type") ?? "").split(";")[0]?.trim();
+      if (contentType !== asset.detectedMime && contentType !== "application/octet-stream")
+        throw fail(400, "The uploaded file type did not match its reservation. Choose the file again.");
       if (bytes.length !== asset.sizeBytes || bytes.length > maxBytes(asset.kind)) throw fail(400, "The uploaded file size did not match its reservation. Choose the file again.");
       const claim = await prisma.mediaAsset.updateMany({
         where: {

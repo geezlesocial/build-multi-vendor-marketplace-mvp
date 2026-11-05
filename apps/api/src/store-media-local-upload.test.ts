@@ -155,75 +155,140 @@ afterEach(async () => {
 });
 
 describe("local seller media upload transport", () => {
-  it("reserves a private upload and receives its bytes through the authenticated API", async () => {
+  it.each([
+    [
+      "application/pdf",
+      "application/octet-stream",
+      "sample.pdf",
+      Buffer.from("%PDF-1.7\n", "ascii"),
+    ],
+    [
+      "image/png",
+      "image/png",
+      "sample.png",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    ],
+  ])(
+    "receives %s uploads through the authenticated API",
+    async (reservedType, uploadContentType, fileName, bytes) => {
+      const storagePath = await mkdtemp(
+        path.join(tmpdir(), "marketplace-media-test-"),
+      );
+      try {
+        const storage = new LocalContentStorage(storagePath);
+        const baseUrl = await startServer(storage);
+        const reservationResponse = await fetch(
+          `${baseUrl}/api/seller/store-media/uploads`,
+          {
+            method: "POST",
+            headers: {
+              "x-test-auth": "yes",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              fileName,
+              contentType: reservedType,
+              sizeBytes: bytes.length,
+            }),
+          },
+        );
+        expect(reservationResponse.status).toBe(201);
+        const reservation = (await reservationResponse.json()) as {
+          id: string;
+          upload: { transport: string; url: string };
+          publicAfterUpload: boolean;
+        };
+        expect(reservation.upload).toMatchObject({
+          transport: "LOCAL",
+          url: `/api/seller/store-media/${reservation.id}/content`,
+        });
+        expect(reservation.publicAfterUpload).toBe(false);
+        expect(mocks.calls.createdAsset).toMatchObject({
+          storageProvider: "LOCAL",
+          uploadStatus: "PENDING",
+          scanStatus: "QUARANTINED",
+        });
+
+        mocks.calls.assetFindFirst.mockImplementation(
+          async () => mocks.calls.createdAsset,
+        );
+        const receiveResponse = await fetch(
+          `${baseUrl}${reservation.upload.url}`,
+          {
+            method: "PUT",
+            headers: {
+              "x-test-auth": "yes",
+              "content-type": uploadContentType,
+            },
+            body: bytes,
+          },
+        );
+        expect(receiveResponse.status).toBe(204);
+        expect(mocks.calls.assetFindFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              id: reservation.id,
+              uploaderId: "seller-user",
+              storeId: "store-1",
+              uploadStatus: "PENDING",
+            }),
+          }),
+        );
+        expect(mocks.calls.assetUpdateMany).toHaveBeenCalledTimes(2);
+        expect(
+          await storage.readLimited(
+            String(mocks.calls.createdAsset?.storageKey),
+            bytes.length,
+          ),
+        ).toMatchObject({ bytes, contentLength: bytes.length });
+      } finally {
+        await rm(storagePath, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects a byte upload whose declared MIME differs from its reservation", async () => {
     const storagePath = await mkdtemp(
       path.join(tmpdir(), "marketplace-media-test-"),
     );
     try {
       const storage = new LocalContentStorage(storagePath);
       const baseUrl = await startServer(storage);
-      const bytes = Buffer.from("%PDF-1.7\n", "ascii");
+      const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
       const reservationResponse = await fetch(
         `${baseUrl}/api/seller/store-media/uploads`,
         {
           method: "POST",
-          headers: { "x-test-auth": "yes", "content-type": "application/json" },
+          headers: {
+            "x-test-auth": "yes",
+            "content-type": "application/json",
+          },
           body: JSON.stringify({
-            fileName: "sample.pdf",
-            contentType: "application/pdf",
+            fileName: "sample.png",
+            contentType: "image/png",
             sizeBytes: bytes.length,
           }),
         },
       );
-      expect(reservationResponse.status).toBe(201);
       const reservation = (await reservationResponse.json()) as {
-        id: string;
-        upload: { transport: string; url: string };
-        publicAfterUpload: boolean;
+        upload: { url: string };
       };
-      expect(reservation.upload).toMatchObject({
-        transport: "LOCAL",
-        url: `/api/seller/store-media/${reservation.id}/content`,
-      });
-      expect(reservation.publicAfterUpload).toBe(false);
-      expect(mocks.calls.createdAsset).toMatchObject({
-        storageProvider: "LOCAL",
-        uploadStatus: "PENDING",
-        scanStatus: "QUARANTINED",
-      });
-
       mocks.calls.assetFindFirst.mockImplementation(
         async () => mocks.calls.createdAsset,
       );
-      const receiveResponse = await fetch(
-        `${baseUrl}${reservation.upload.url}`,
-        {
-          method: "PUT",
-          headers: {
-            "x-test-auth": "yes",
-            "content-type": "application/octet-stream",
-          },
-          body: bytes,
+      const response = await fetch(`${baseUrl}${reservation.upload.url}`, {
+        method: "PUT",
+        headers: {
+          "x-test-auth": "yes",
+          "content-type": "image/jpeg",
         },
-      );
-      expect(receiveResponse.status).toBe(204);
-      expect(mocks.calls.assetFindFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            id: reservation.id,
-            uploaderId: "seller-user",
-            storeId: "store-1",
-            uploadStatus: "PENDING",
-          }),
-        }),
-      );
-      expect(mocks.calls.assetUpdateMany).toHaveBeenCalledTimes(2);
-      expect(
-        await storage.readLimited(
-          String(mocks.calls.createdAsset?.storageKey),
-          bytes.length,
-        ),
-      ).toMatchObject({ bytes, contentLength: bytes.length });
+        body: bytes,
+      });
+      expect(response.status).toBe(400);
+      expect(mocks.calls.assetUpdateMany).not.toHaveBeenCalled();
+      await expect(
+        storage.head(String(mocks.calls.createdAsset?.storageKey)),
+      ).rejects.toThrow();
     } finally {
       await rm(storagePath, { recursive: true, force: true });
     }
