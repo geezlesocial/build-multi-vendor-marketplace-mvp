@@ -141,6 +141,5 @@ export function SellerStorePlan() {
       {!options.checkoutAvailable && <p className="notice" role="status">{billing.checkoutUnavailableReason}</p>}
       {options.checkoutAvailable && <p className="notice" role="status">Stripe test-mode only. No live billing, tax calculation, seller payouts, or automatic refunds are enabled.</p>}
     </section>
-    <p><a href="/dashboard">Back to seller dashboard</a></p>
   </section>;
 }
