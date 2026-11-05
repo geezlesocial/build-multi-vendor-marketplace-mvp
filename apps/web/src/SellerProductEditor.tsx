@@ -327,7 +327,6 @@ export function ProductEditor({
           categoryId={form.categoryId}
           brandId={form.brandId}
           productTypeId={form.productTypeId}
-          color={form.color}
           featureIds={form.featureIds}
           onCategoryChange={(categoryId) =>
             setForm((current) => ({ ...current, categoryId }))
@@ -338,14 +337,16 @@ export function ProductEditor({
           onProductTypeChange={(productTypeId) =>
             setForm((current) => ({ ...current, productTypeId }))
           }
-          onColorChange={(color) =>
-            setForm((current) => ({ ...current, color }))
-          }
           onFeatureIdsChange={(featureIds) =>
             setForm((current) => ({ ...current, featureIds }))
           }
           onMessage={setMessage}
         />
+        {product.color && (
+          <p className="legacyProductColorNote">
+            Existing single-color value: <strong>{product.color}</strong>. It remains unchanged for this legacy listing; use Color variants below for additional selectable colors.
+          </p>
+        )}
         <button disabled={saving}>{saving ? "Saving…" : "Save product"}</button>
       </form>
       <div className="productAttachments">

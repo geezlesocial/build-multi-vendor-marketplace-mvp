@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CatalogSearchableOption } from "./CatalogSearchableOption.js";
 
 export type CatalogCategory = {
@@ -63,12 +63,10 @@ export function CatalogFields({
   categoryId,
   brandId,
   productTypeId,
-  color,
   featureIds,
   onCategoryChange,
   onBrandChange,
   onProductTypeChange,
-  onColorChange,
   onFeatureIdsChange,
   onMessage,
 }: {
@@ -78,12 +76,10 @@ export function CatalogFields({
   categoryId: string | null;
   brandId: string | null;
   productTypeId: string;
-  color: string;
   featureIds: string[];
   onCategoryChange: (value: string | null) => void;
   onBrandChange: (value: string | null) => void;
   onProductTypeChange: (value: string) => void;
-  onColorChange: (value: string) => void;
   onFeatureIdsChange: (value: string[]) => void;
   onMessage: (value: string) => void;
 }) {
@@ -92,7 +88,6 @@ export function CatalogFields({
   const [featuresLoading, setFeaturesLoading] = useState(false);
   const [featureQuery, setFeatureQuery] = useState("");
   const [featureError, setFeatureError] = useState("");
-  const colorListId = useId();
   const featureIdsRef = useRef(featureIds);
   featureIdsRef.current = featureIds;
   const onFeatureIdsChangeRef = useRef(onFeatureIdsChange);
@@ -212,38 +207,6 @@ export function CatalogFields({
           emptyLabel="Unbranded / no brand"
           onChange={(value) => onBrandChange(value || null)}
         />
-      </label>
-      <label>
-        Color
-        <input
-          list={colorListId}
-          maxLength={80}
-          value={color}
-          onChange={(event) => onColorChange(event.target.value)}
-          placeholder="Choose or enter a color"
-        />
-        <datalist id={colorListId}>
-          {[
-            "Black",
-            "White",
-            "Gray",
-            "Brown",
-            "Beige",
-            "Red",
-            "Orange",
-            "Yellow",
-            "Green",
-            "Blue",
-            "Purple",
-            "Pink",
-            "Multicolor",
-            "Clear",
-            "Gold",
-            "Silver",
-          ].map((value) => (
-            <option key={value} value={value} />
-          ))}
-        </datalist>
       </label>
       <fieldset className="catalogFeatureChoices">
         <legend>Product features</legend>

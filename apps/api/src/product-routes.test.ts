@@ -50,6 +50,9 @@ const mocks = vi.hoisted(() => {
       findFirst: vi.fn(async (_args: unknown): Promise<unknown> => null),
       findUnique: vi.fn(async (_args: unknown): Promise<unknown> => null),
     },
+    mediaAsset: {
+      findFirst: vi.fn(async (_args: unknown): Promise<unknown> => null),
+    },
     productFeatureAssignment: {
       deleteMany: vi.fn(async (_args: unknown) => ({ count: 0 })),
       createMany: vi.fn(async (_args: unknown) => ({ count: 0 })),
@@ -173,6 +176,7 @@ describe("product route HTTP behavior", () => {
       productApprovalPolicy: "MANUAL",
     });
     mocks.methods.store.findFirst.mockResolvedValue(null);
+    mocks.methods.mediaAsset.findFirst.mockResolvedValue(null);
   });
 
   async function request(
@@ -336,6 +340,160 @@ describe("product route HTTP behavior", () => {
         status: "PENDING",
       }),
     });
+  });
+
+  it("returns an existing matching variant on retry instead of creating a duplicate", async () => {
+    const input = {
+      name: "Ocean Blue",
+      sku: "BOTTLE-OCEAN-BLUE",
+      priceMinor: 1999,
+      stock: 24,
+    };
+    const savedVariant = {
+      id: "variant-created",
+      productId: "product-owned",
+      ...input,
+      mediaAssetId: null,
+      status: "PENDING",
+      currency: "USD",
+    };
+    mocks.methods.product.findUnique.mockResolvedValue({
+      id: "product-owned",
+      sellerId: "seller-a",
+      status: "PENDING",
+      currency: "USD",
+    });
+    mocks.methods.store.findUnique.mockResolvedValue({ id: "store-a" });
+    mocks.methods.productVariant.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(savedVariant);
+    mocks.methods.productVariant.create.mockResolvedValue(savedVariant);
+
+    const first = await request("/api/products/product-owned/variants", {
+      method: "POST",
+      role: "SELLER",
+      sellerId: "seller-a",
+      body: input,
+    });
+    const retry = await request("/api/products/product-owned/variants", {
+      method: "POST",
+      role: "SELLER",
+      sellerId: "seller-a",
+      body: input,
+    });
+
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({
+      id: "variant-created",
+      name: "Ocean Blue",
+    });
+    expect(mocks.methods.productVariant.create).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a duplicate color name even when the SKU is different", async () => {
+    mocks.methods.product.findUnique.mockResolvedValue({
+      id: "product-owned",
+      sellerId: "seller-a",
+      status: "PENDING",
+      currency: "USD",
+    });
+    mocks.methods.store.findUnique.mockResolvedValue({ id: "store-a" });
+    mocks.methods.productVariant.findMany.mockResolvedValue([
+      { id: "variant-existing", name: "Ocean Blue" },
+    ]);
+
+    const response = await request("/api/products/product-owned/variants", {
+      method: "POST",
+      role: "SELLER",
+      sellerId: "seller-a",
+      body: {
+        name: "  ocean   blue  ",
+        sku: "BOTTLE-OCEAN-BLUE-2",
+        priceMinor: 1999,
+        stock: 24,
+      },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "A color with that name already exists on this listing.",
+    });
+    expect(mocks.methods.productVariant.create).not.toHaveBeenCalled();
+  });
+
+  it("allows replacing a color image only with an approved Store image", async () => {
+    mocks.methods.productVariant.findFirst.mockResolvedValue({
+      id: "variant-existing",
+      product: { id: "product-owned", sellerId: "seller-a", status: "PENDING" },
+    });
+    mocks.methods.store.findUnique.mockResolvedValue({ id: "store-a" });
+    const approvedImageId = "c123456789012345678901234";
+    mocks.methods.mediaAsset.findFirst.mockResolvedValue({
+      id: approvedImageId,
+    });
+    mocks.methods.productVariant.update.mockResolvedValue({
+      id: "variant-existing",
+      mediaAssetId: approvedImageId,
+    });
+
+    const response = await request(
+      "/api/products/product-owned/variants/variant-existing",
+      {
+        method: "PATCH",
+        role: "SELLER",
+        sellerId: "seller-a",
+        body: { mediaAssetId: approvedImageId },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.methods.mediaAsset.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: approvedImageId,
+        storeId: "store-a",
+        kind: "IMAGE",
+        uploadStatus: "COMPLETE",
+        scanStatus: "APPROVED",
+      },
+      select: { id: true },
+    });
+    expect(mocks.methods.productVariant.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "variant-existing" },
+        data: expect.objectContaining({ mediaAssetId: approvedImageId }),
+      }),
+    );
+  });
+
+  it("removes a color image by restoring the general product-image fallback", async () => {
+    mocks.methods.productVariant.findFirst.mockResolvedValue({
+      id: "variant-existing",
+      product: { id: "product-owned", sellerId: "seller-a", status: "PENDING" },
+    });
+    mocks.methods.productVariant.update.mockResolvedValue({
+      id: "variant-existing",
+      mediaAssetId: null,
+    });
+
+    const response = await request(
+      "/api/products/product-owned/variants/variant-existing",
+      {
+        method: "PATCH",
+        role: "SELLER",
+        sellerId: "seller-a",
+        body: { mediaAssetId: null },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.methods.productVariant.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "variant-existing" },
+        data: expect.objectContaining({ mediaAssetId: null }),
+      }),
+    );
+    expect(mocks.methods.mediaAsset.findFirst).not.toHaveBeenCalled();
   });
 
   it("does not allow a seller to add a variant to another seller's product", async () => {

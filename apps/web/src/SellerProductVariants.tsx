@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { normalizeColorVariantName } from "./SellerColorVariantFields.js";
 
 type SellerVariant = {
   id: string;
@@ -48,6 +49,7 @@ export function SellerProductVariants({
   const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const colorListId = useId();
   const images = approvedMedia.filter((asset) => asset.kind === "IMAGE");
 
   if (!product.productType?.requiresShipping && variants.length === 0)
@@ -62,6 +64,11 @@ export function SellerProductVariants({
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
+    const normalizedName = normalizeColorVariantName(draft.name);
+    if (variants.some((variant) => variant.id !== editingId && normalizeColorVariantName(variant.name) === normalizedName)) {
+      setPreviewError("A color with that name already exists on this listing.");
+      return;
+    }
     setBusy(true);
     setPreviewError("");
     try {
@@ -189,17 +196,24 @@ export function SellerProductVariants({
       >
         <h5>{editingId ? "Edit color option" : "Add a color option"}</h5>
         <label>
-          Color / option name
+          Search or enter a color
           <input
+            type="search"
             required
             minLength={1}
             maxLength={120}
+            list={colorListId}
             value={draft.name}
             onChange={(event) =>
               setDraft({ ...draft, name: event.target.value })
             }
             placeholder="Ocean Blue"
           />
+          <datalist id={colorListId}>
+            {["Black", "White", "Gray", "Brown", "Beige", "Red", "Orange", "Yellow", "Green", "Blue", "Ocean Blue", "Navy", "Purple", "Pink", "Multicolor", "Clear", "Gold", "Silver"].map((color) => (
+              <option key={color} value={color} />
+            ))}
+          </datalist>
         </label>
         <label>
           SKU
@@ -256,12 +270,21 @@ export function SellerProductVariants({
           </select>
         </label>
         {selectedImage && (
-          <img
-            className="sellerVariantSelectedPreview"
-            src={`/api/seller/store-media/${encodeURIComponent(selectedImage.id)}/preview`}
-            alt={`Preview of ${draft.name || "selected color"} image`}
-            loading="lazy"
-          />
+          <div className="sellerVariantImageAssignment">
+            <img
+              className="sellerVariantSelectedPreview"
+              src={`/api/seller/store-media/${encodeURIComponent(selectedImage.id)}/preview`}
+              alt={`Preview of ${draft.name || "selected color"} image`}
+              loading="lazy"
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setDraft({ ...draft, mediaAssetId: "" })}
+            >
+              Remove color image
+            </button>
+          </div>
         )}
         <div className="sellerVariantFormActions">
           <button type="submit" disabled={busy}>
