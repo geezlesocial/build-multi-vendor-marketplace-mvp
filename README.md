@@ -1,6 +1,21 @@
 # Market Lane — Multi-Vendor Marketplace MVP
 
-An independent React + Express + Prisma marketplace MVP with buyer, seller, cashier, and admin flows. This repository is intentionally separate from every other project.
+Market Lane is a full-stack multi-vendor marketplace MVP built with React/Vite, Express, Prisma, and PostgreSQL. It includes buyer, seller, cashier/POS, and administrator workflows. Permissions, seller approval, Store-plan entitlements, and external-service configuration determine which capabilities are available.
+
+## Architecture
+
+The request path is browser → React/Vite web app → Express API → Prisma → PostgreSQL. The API owns authentication, authorization, validation, and business rules; the browser does not connect directly to the database. The repository uses npm workspaces for apps/web, apps/api, and packages/migrator. Prisma schema and migrations live with the API; the separate migrator workspace keeps the Prisma CLI in a dedicated one-shot container image. Normal API startup does not apply migrations.
+
+The web container serves the Vite build through unprivileged Nginx and proxies API requests to the Node/Express container. The root Compose file provides local PostgreSQL and ClamAV services; docker-compose.staging-test.yml describes an isolated integration stack, not a production deployment. See [Architecture](docs/ARCHITECTURE.md) and [Local container testing](docs/LOCAL_CONTAINER_STAGING.md).
+
+## Product map
+
+- Buyers can browse the approved marketplace catalog, manage a cart and account, check out, follow Stores, and use order, messaging, and onboarding workflows.
+- Sellers manage listings and Store presentation, orders and shipping, and available growth tools. Selling requires seller approval; plan-gated seller features are checked against server-side Store entitlements.
+- Administrators manage seller and catalog governance, onboarding, Store plans and platform settings, audits, and content. CMS drafting is available to ADMIN and CONTENT_EDITOR; publishing and other privileged content controls are administrator-only.
+- SEO-FY is an optional paid-plan feature for approved seller Stores and approved products. It provides deterministic checks and, when the optional local Jima runtime is configured, drafts only search titles and descriptions. Sellers must explicitly approve drafts; SEO-FY does not guarantee rankings or sales. Jima is disabled by default, accepts loopback runtime configuration only, and is not required for commerce. See [Jima and SEO-FY](docs/JIMA_AI.md).
+
+Availability is narrower than the feature list: paid tools require their plan and permission gates, and external services require separate configuration and operational verification. Live shopping session management does not create a broadcast. SMTP delivery, object storage, scanning, and live-provider behavior are not assumed to be available just because their settings or adapters exist.
 
 ## Scope and financial boundary
 
@@ -8,7 +23,7 @@ The MVP supports Stripe and PayPal sandbox checkout, PayMongo hosted checkout fo
 
 The POS is cash-only browser checkout. It does not integrate card readers, Stripe Terminal, printers, or third-party inventory systems. This project is not a claim of PCI, tax, privacy-law, or other legal compliance.
 
-Live shopping uses a fail-closed LiveKit adapter. It remains unavailable until the owner configures `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` in a deployment secret store, sets `LIVE_SHOPPING_AVAILABLE=true`, deploys/restarts, passes readiness checks, and enables the audited admin setting. See `docs/LIVE_SHOPPING_IMPLEMENTATION_PLAN.md` and `docs/LIVE_SHOPPING.md`.
+Live shopping supports session planning and administration but does not create a live broadcast. Provider publishing, playback, recording, and moderation capabilities remain unavailable or owner-dependent; see [live-shopping limits](docs/LIVE_SHOPPING.md) and [known limitations](docs/KNOWN_LIMITATIONS.md).
 
 ## Local Windows PowerShell setup
 
@@ -46,9 +61,8 @@ Local-only demo accounts seeded by `npm run db:seed`:
 - `editor.local@example.test`
 - `buyer.local@example.test`
 - `seller.local@example.test`
-- Password: `LocalDemoOnly-ChangeMe-123!`
 
-Change or remove these accounts before any staging use. The seed is not a production credential mechanism.
+The test-only password is defined in [the local seed](apps/api/prisma/seed.ts); never reuse these accounts outside local development. They are not a production credential mechanism.
 
 ## Verification commands
 
@@ -57,63 +71,60 @@ npm run typecheck
 npm test
 npm run build
 npm run lint
+npm run format:check
+npm run env:example:check
 ```
 
-### CMS browser E2E
+### Playwright browser tests
 
-The minimal Playwright suite uses only seeded local accounts and a disposable PostgreSQL database. Install the browser once, set test-only `DATABASE_URL`, `PASSWORD_PEPPER`, and `CONTENT_SCAN_REQUIRED=true`, then run:
+The Playwright configuration requires `E2E_DATABASE_URL`. Its guard accepts only a PostgreSQL URL on loopback (`localhost`, `127.0.0.1`, or `::1`) whose database name contains `e2e` or `test`. Create a fresh disposable database for each run; never use the persistent local `marketplace` database, staging, or production. The local development database bootstrap does not create or prepare E2E databases.
+
+The suite starts its own API and Vite servers and runs every configured Playwright project/spec, including the extended site-chrome project. The CI workflow step retains its existing name, “Run CMS browser tests,” but runs `npm run e2e` and is not CMS-only. CI creates a fresh PostgreSQL database, migrates and seeds it, then runs the configured suite without live payment or live-shopping providers.
+
+Browser/API integration tests use a separate database from local development. The following example uses PostgreSQL client tools and the repository-generated local `.env`; run it in a dedicated PowerShell session and use a fresh database name:
 
 ```powershell
 npm run e2e:install
+$testDb = "marketplace_e2e_$([guid]::NewGuid().ToString('N'))"
+createdb --host=127.0.0.1 --port=5432 --username=marketplace $testDb
+
+# Load only the generated local .env connection, then change its database path.
+Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+$env:E2E_DATABASE_URL = node --env-file=.env -e "const u = new URL(process.env.DATABASE_URL); if (!['postgres:', 'postgresql:'].includes(u.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) || u.port !== '5432' || u.pathname !== '/marketplace') throw new Error('Expected the generated loopback marketplace .env target'); u.pathname = '/' + process.argv[1]; process.stdout.write(u.href)" $testDb
+if ($LASTEXITCODE -ne 0) { throw 'Could not build the disposable E2E database URL.' }
+$env:DATABASE_URL = $env:E2E_DATABASE_URL
+
+npm run db:generate
+npm run db:deploy
+npm run db:seed
 npm run e2e
 ```
 
-The suite starts the API and Vite web server itself, and covers admin publishing/metadata, editor permissions, CSRF-aware mutations, and quarantined media delivery. CI provisions a disposable PostgreSQL 17 service, applies migrations, seeds local test accounts, installs the Chromium headless shell, and runs the same suite. It does not deploy or use payment/live-shopping providers.
+Create the database on an already-running local PostgreSQL service; do not start a second database just to follow the example. The command above uses PostgreSQL client tools. If the repository Compose PostgreSQL service is already running in this same Compose project, replace that command with docker compose exec -T postgres createdb -U marketplace $testDb. Set both E2E_DATABASE_URL and DATABASE_URL to the same disposable URL before migration and seeding. Adjust the local database role if it differs from the repository Compose default.
 
-Browser/API integration tests must use their unique disposable database (`E2E_DATABASE_URL` or the test-specific database variable documented by the script), never the persistent local `marketplace` database. The local development bootstrap does not create, migrate, seed, or delete E2E databases.
+Provider sandbox integrations require their own credentials and webhook setup; the browser suite does not contact payment or live-shopping providers. Live payment activation remains blocked pending provider verification. Never commit `.env` or real credentials.
 
-Provider sandbox tests require the corresponding environment variables in `.env`. Live-provider sandbox tests remain blocked pending provider approval and credentials. Never commit `.env` or real credentials.
+## Environment configuration
 
-## Environment variable names
+The table lists selected examples only; it is not a complete variable inventory. The checked-in [.env.example](.env.example) and [environment example checker](scripts/check-env-example.mjs) are the maintained sources of truth. The checker compares API and Prisma configuration, required example entries, and fail-closed sample gates. Do not commit .env files or real credentials.
 
-`NODE_ENV`, `API_PORT`, `WEB_ORIGIN`, `DATABASE_URL`, `SESSION_COOKIE_NAME`, `SESSION_TTL_DAYS`, `PASSWORD_PEPPER`, `SOCIAL_LOGIN_ENCRYPTION_KEY`, `PAYOUT_ENCRYPTION_KEY`, `DROPSHIPPING_ENCRYPTION_KEY`, `CURRENCY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL`, `PAYPAL_WEBHOOK_ID`, `PAYMONGO_SECRET_KEY`, `PAYMONGO_WEBHOOK_SECRET`, `PAYSTACK_SECRET_KEY`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `UPLOAD_DIR`, `LIVE_SHOPPING_AVAILABLE`, `SITE_URL`, `CONTENT_STORAGE_DIR`, `CONTENT_SCAN_REQUIRED`, `CONTENT_MAX_IMAGE_BYTES`, `CONTENT_MAX_VIDEO_BYTES`, `CONTENT_MAX_DOCUMENT_BYTES`, `AFFILIATE_DEFAULT_BASIS_POINTS`, `AFFILIATE_SIGNING_SECRET`, `STORE_EMAIL_DELIVERY_AVAILABLE`, `STORE_EMAIL_SMTP_HOST`, `STORE_EMAIL_SMTP_PORT`, `STORE_EMAIL_SMTP_SECURE`, `STORE_EMAIL_SMTP_REQUIRE_TLS`, `STORE_EMAIL_SMTP_USER`, `STORE_EMAIL_SMTP_PASSWORD`, `STORE_EMAIL_FROM`, `STORE_EMAIL_REPLY_TO`, `STORE_EMAIL_TOKEN_SECRET`.
+| Area                           | Selected variable names                                                                                                                |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| API and database               | NODE_ENV, API_PORT, WEB_ORIGIN, DATABASE_URL, SESSION_TTL_DAYS                                                                         |
+| Authentication and proxy       | PASSWORD_PEPPER, TRUST_PROXY_HOPS, SOCIAL_LOGIN_ENCRYPTION_KEY                                                                         |
+| Media and scanning             | CONTENT_SCAN_REQUIRED, CONTENT_SCANNER_AVAILABLE, CONTENT_SCANNER_HOST, CONTENT_STORAGE_DIR, CONTENT_OBJECT_STORAGE_AVAILABLE          |
+| Payments and external services | STRIPE_SECRET_KEY, PAYPAL_CLIENT_ID, PAYMONGO_SECRET_KEY, PAYSTACK_SECRET_KEY, LIVE_SHOPPING_AVAILABLE, STORE_EMAIL_DELIVERY_AVAILABLE |
 
-## Key routes
+## Further product and operations guides
 
-- `GET /api/products`, `GET /api/products/:id`, `GET /api/categories`
-- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
-- `GET /api/onboarding`, `POST/DELETE /api/onboarding/stores/:storeId/follow`, `POST /api/onboarding/complete`, `GET /api/admin/onboarding/readiness`
-- `GET /api/cart`, `POST /api/cart/items`, `PATCH /api/cart/items/:productId`
-- `POST /api/orders/checkout`, `POST /api/orders/:id/paypal-capture`, `GET /api/orders`
-- `GET/POST/PATCH /api/seller/shipping/services`, `POST /api/seller/shipping/discounts`, `POST /api/shipping/quote`, `GET /api/admin/shipping`
-- `GET /api/seller/dropshipping`, `POST/DELETE /api/seller/dropshipping/connections/cj`, `GET /api/seller/dropshipping/products`, `POST /api/seller/dropshipping/imports`
-- `POST /api/pos/sales`, `GET /api/pos/receipts/:id`
-- `GET/PATCH /api/admin/settings`, `GET/PATCH /api/admin/sellers`, `GET /api/admin/orders`, `GET /api/admin/audit`
-- `GET/PUT /api/admin/platform/branding`, `POST /api/admin/platform/branding/publish`, `GET/PATCH /api/admin/platform/settings`
-- `GET /api/admin/vendors`, `GET/POST/PATCH/DELETE /api/admin/categories`, `GET/POST/PATCH/DELETE /api/admin/brands`
-- `GET/POST /api/seller/payout-methods`, `GET/POST /api/seller/payouts`, `GET /api/admin/payout-readiness`, `GET /api/admin/payouts`
-- `GET /api/live-shopping/status`, `GET /api/live-sessions`, `GET /api/seller/live-sessions`
-- `GET/POST /api/admin/live-sessions`, `GET/PATCH /api/admin/live-reports`
-- `POST /api/webhooks/stripe`, `POST /api/webhooks/paypal`, `POST /api/webhooks/paymongo`, `POST /api/webhooks/paystack`
+For detailed behavior and limits, see [payments and provider boundaries](docs/PAYMENTS.md), [known limitations](docs/KNOWN_LIMITATIONS.md), [production readiness](docs/PRODUCTION_LAUNCH_CHECKLIST.md), [live shopping](docs/LIVE_SHOPPING.md), [seller shipping](docs/SELLER_SHIPPING.md), [dropshipping](docs/DROPSHIPPING.md), [social login](docs/SOCIAL_LOGIN_SETUP.md), [member onboarding](docs/MEMBER_ONBOARDING.md), [Store plans](docs/SAAS_STORE_PLANS.md), [affiliate program](docs/AFFILIATE_PROGRAM.md), [wholesale](docs/WHOLESALE.md), and [email and notifications](docs/EMAIL_AND_NOTIFICATIONS.md).
 
-See `docs/PAYMENTS.md` before connecting a provider. See `docs/PRODUCTION_LAUNCH_CHECKLIST.md` before any staging or launch decision.
-See `docs/LIVE_SHOPPING.md` before enabling live shopping.
-See `docs/SELLER_SHIPPING.md` for zone matching, discount precedence, immutable order snapshots, and carrier-integration limits.
-See `docs/DROPSHIPPING.md` for supplier onboarding, plan gating, encrypted credentials, and importer limitations.
-See `docs/SOCIAL_LOGIN_SETUP.md` for admin-managed Google, LinkedIn, Facebook, and X sign-in, the Scrolith OIDC limitation, callback setup, and account-page customization.
-See `docs/MEMBER_ONBOARDING.md` for the new-member flow, eligibility and currency policy, legacy-account backfill, and onboarding endpoints.
-See `docs/LOCAL_CONTAINER_STAGING.md` for a disposable PostgreSQL 17, API, Nginx, Mailpit, and ClamAV integration setup; Azure deployment remains deferred.
+Email delivery requires separately supplied SMTP configuration and runtime verification. No paid email, hosted AI, push provider, or native Android app is provisioned by this repository. See [Jima AI](docs/JIMA_AI.md) for the local-only runtime and privacy boundaries.
 
-## Growth modules
+## Scanned media
 
-The additive growth foundation includes variants, owner-scoped favorites, wholesale applications/tier reads, server-recorded affiliate attribution and append-only commission ledger, manual payout requests, durable in-app notifications, web-push subscription registration, participant-scoped buyer/seller messaging, typed campaign records, and provider-neutral email/AI boundaries. See `docs/MONETIZATION_AND_GROWTH_IMPLEMENTATION_PLAN.md`, `docs/AFFILIATE_PROGRAM.md`, `docs/WHOLESALE.md`, `docs/EMAIL_AND_NOTIFICATIONS.md`, `docs/AI_FEATURES.md`, and `docs/MARKETING_AND_CONTENT.md`.
-
-No paid email/AI/push provider is configured, no affiliate payout is issued, and no native Android app exists in this repository. SMTP delivery requires owner-supplied deployment secrets and runtime verification; no credentials or external provider account are provisioned here.
-
-Store email marketing supports double-opt-in subscriptions, signed unsubscribe links, seller draft/queue/cancel controls, consent rechecks, plan quotas, and an SMTP worker. Account verification and transactional order/support/account notifications use the platform SMTP transport with a durable email outbox, verified-recipient/preference rechecks, bounded retries, queue health, and audited failed-job requeue. Configure server-only `STORE_EMAIL_SMTP_*` and `STORE_EMAIL_FROM`; Store marketing additionally requires `STORE_EMAIL_TOKEN_SECRET` and `STORE_EMAIL_DELIVERY_AVAILABLE=true`. Verify SMTP in Admin > Store Buster & email. Sending remains paused until an admin verifies the connection in each running API process; verification expires after 24 hours and resets on restart. The admin screen never displays or accepts secrets. SMTP delivery is at-least-once if a provider accepts a message but the process loses its connection before recording success; SMTP cannot guarantee exactly-once delivery. See `docs/EMAIL_AND_NOTIFICATIONS.md` and `docs/STORE_EMAIL_DELIVERY.md`.
+CONTENT_SCAN_REQUIRED=true keeps malware scanning mandatory. The checked-in environment example also leaves scanner and managed object-storage availability disabled until configured. If required storage or a scanner is unavailable, protected media uploads cannot complete or assets remain private/quarantined; no clean result is invented and scanning is not bypassed. The adapter speaks ClamAV clamd, which must stay on a private trusted network. See [content media storage and scanning](docs/CONTENT_MEDIA_STORAGE.md).
 
 ## Content CMS
 
-The CMS supports structured blog posts and public informational pages, revisions, scheduling, server-rendered metadata, sitemap/robots responses, previews, and quarantined local media uploads. `ADMIN` and `CONTENT_EDITOR` can draft; only `ADMIN` can publish, restore revisions, change indexing/navigation controls, or delete media. Local disk is development-only. Configure scanning and production object storage/CDN before staging; see `docs/CONTENT_CMS_ADMIN_GUIDE.md` and `docs/CONTENT_MEDIA_STORAGE.md`.
-
-CMS routes include `GET /api/content/blog`, `GET /api/content/blog/:slug`, `GET /api/content/pages/:slug`, `GET /api/content/navigation`, `/blog/:slug`, `/pages/:slug`, `/sitemap.xml`, and `/robots.txt`. Admin routes are under `/api/admin/content`. Published HTML is rendered by the API; production hosting must route these paths to the API or an equivalent server-rendering layer.
+The CMS supports structured blog posts and public informational pages, revisions, scheduling, server-rendered metadata, sitemap/robots responses, and previews. ADMIN and CONTENT_EDITOR can draft; only ADMIN can publish, restore revisions, change indexing/navigation controls, or delete media. New media requires configured private storage and a clean scan before approval; local defaults do not silently fall back to unscanned disk storage. Published HTML is rendered by the API, so hosting must route CMS page paths to the API or an equivalent server-rendering layer. See the [CMS guide](docs/CONTENT_CMS_ADMIN_GUIDE.md) and [media-storage guide](docs/CONTENT_MEDIA_STORAGE.md).
