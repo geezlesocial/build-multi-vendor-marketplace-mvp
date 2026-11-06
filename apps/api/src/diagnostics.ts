@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 type Diagnostics = {
   runWithRequestContext(correlationId: string, callback: () => void): void;
+  logHttpRequest(fields: {
+    method: string;
+    routeTemplate: string;
+    statusCode: number;
+    durationMs: number;
+  }): void;
   logOperationalError(event: string, error: unknown): void;
 };
 

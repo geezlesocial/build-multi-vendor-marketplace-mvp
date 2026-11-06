@@ -4,6 +4,33 @@ import { diagnostics } from "./diagnostics.js";
 describe("structured diagnostics", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("writes safe structured request records with the active correlation id", () => {
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+
+    diagnostics.runWithRequestContext("request-log-test-123", () => {
+      diagnostics.logHttpRequest({
+        method: "GET",
+        routeTemplate: "/api/products/:productId",
+        statusCode: 200,
+        durationMs: 18,
+      });
+    });
+
+    expect(write).toHaveBeenCalledOnce();
+    const record = JSON.parse(String(write.mock.calls[0]?.[0]));
+    expect(record).toMatchObject({
+      level: "info",
+      event: "HTTP_REQUEST_COMPLETED",
+      correlationId: "request-log-test-123",
+      method: "GET",
+      routeTemplate: "/api/products/:productId",
+      statusCode: 200,
+      durationMs: 18,
+    });
+  });
+
   it("writes a safe JSON error record with the active request correlation id", () => {
     const write = vi
       .spyOn(process.stderr, "write")
