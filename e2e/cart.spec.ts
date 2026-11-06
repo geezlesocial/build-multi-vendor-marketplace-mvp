@@ -204,7 +204,7 @@ test("buyer can update, remove, and empty the cart without CSRF errors", async (
   await expect(announcement).toContainText(
     "Demo Canvas Tote removed from your cart.",
   );
-  await expect(page.getByText("Your cart is empty.")).toBeVisible();
+  await expect(page.locator(".checkout .empty")).toBeVisible();
   await expect(page.getByRole("link", { name: /Cart/ })).toContainText("0");
   await expect(page.locator(".cartLine")).toHaveCount(0);
 });
