@@ -103,11 +103,19 @@ export default defineConfig({
   projects: [
     {
       name: "default",
-      testIgnore: ["**/site-chrome.spec.ts"],
+      testIgnore: [
+        "**/site-chrome.spec.ts",
+        "**/site-chrome-platform.spec.ts",
+        "**/site-chrome-platform-admin.spec.ts",
+      ],
     },
     {
       name: "site-chrome-extended",
-      testMatch: "**/site-chrome.spec.ts",
+      testMatch: [
+        "**/site-chrome.spec.ts",
+        "**/site-chrome-platform.spec.ts",
+        "**/site-chrome-platform-admin.spec.ts",
+      ],
       timeout: 120_000,
     },
   ],
