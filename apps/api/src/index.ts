@@ -1,6 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { diagnostics } from './diagnostics.js';
+import { attachHttpRequestLog } from './http-request-logging.js';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -99,7 +100,10 @@ app.use((req, res, next) => {
   const trustedProxyId = env.TRUST_PROXY_HOPS === 1 && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(providedId);
   const correlationId = trustedProxyId ? providedId : randomUUID();
   res.setHeader('x-request-id', correlationId);
-  diagnostics.runWithRequestContext(correlationId, next);
+  diagnostics.runWithRequestContext(correlationId, () => {
+    attachHttpRequestLog(req, res);
+    next();
+  });
 });
 app.use(helmet({ contentSecurityPolicy: { directives: { imgSrc: ["'self'", 'data:', 'https:', 'https://*.cjdropshipping.com', 'https://*.aliyuncs.com'], mediaSrc: ["'self'", 'https:'] } } }));
 app.use(cors({ origin: env.WEB_ORIGIN, credentials: true }));
