@@ -3,15 +3,16 @@ import "./Messages.css";
 import { announceHeaderActivityChange } from "./header-activity-events.js";
 import { request } from "./DashboardShared.js";
 import { DashboardMessageThread } from "./DashboardMessageThread.js";
-
-type MessageFileDraft = {
-  key: string;
-  file: File;
-  previewUrl: string;
-  attachmentId?: string;
-  assetId?: string;
-  scanStatus?: string;
-};
+import type {
+  MessageAttachment,
+  MessageAttachmentUploadResponse,
+  MessageConversationSummary,
+  MessageFileDraft,
+  MessageReactionKind,
+  MessageReactionResponse,
+  MessageScanRetryResponse,
+  MessageThreadItem,
+} from "./dashboard-message-types.js";
 
 const messageReactionOptions = [
   { kind: "LIKE", emoji: "👍", label: "Like" },
@@ -27,14 +28,14 @@ export function Messages({
   reload,
   currentUserId,
 }: {
-  conversations: any[];
+  conversations: MessageConversationSummary[];
   reload: () => void;
   currentUserId: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     new URLSearchParams(window.location.search).get("conversation"),
   );
-  const [thread, setThread] = useState<any[]>([]);
+  const [thread, setThread] = useState<MessageThreadItem[]>([]);
   const [body, setBody] = useState("");
   const [drafts, setDrafts] = useState<MessageFileDraft[]>([]);
   const [loading, setLoading] = useState(false);
@@ -51,7 +52,7 @@ export function Messages({
   const loadThread = useCallback(
     async (conversationId: string, signal?: AbortSignal) => {
       try {
-        const messages = await request<any[]>(
+        const messages = await request<MessageThreadItem[]>(
           `/api/conversations/${encodeURIComponent(conversationId)}/messages`,
           { signal },
         );
@@ -210,12 +211,9 @@ export function Messages({
         },
       },
     );
-    const result = (await response.json().catch(() => ({}))) as {
-      id?: string;
-      assetId?: string;
-      scanStatus?: string;
-      error?: string;
-    };
+    const result = (await response
+      .json()
+      .catch(() => ({}))) as MessageAttachmentUploadResponse;
     if (!response.ok || !result.id)
       throw new Error(result.error ?? "This attachment could not be uploaded.");
     return {
@@ -277,18 +275,15 @@ export function Messages({
   };
 
   const react = async (
-    message: any,
-    kind: (typeof messageReactionOptions)[number]["kind"],
+    message: MessageThreadItem,
+    kind: MessageReactionKind,
   ) => {
     if (!selectedId || reactionBusy) return;
     setReactionBusy(message.id);
     setError("");
     try {
       const reaction = message.myReaction === kind ? null : kind;
-      const result = await request<{
-        reactions: Record<string, number>;
-        myReaction: string | null;
-      }>(
+      const result = await request<MessageReactionResponse>(
         `/api/conversations/${encodeURIComponent(selectedId)}/messages/${encodeURIComponent(message.id)}/reaction`,
         { method: "PUT", body: JSON.stringify({ reaction }) },
       );
@@ -306,13 +301,16 @@ export function Messages({
     }
   };
 
-  const retryAttachmentScan = async (message: any, attachment: any) => {
+  const retryAttachmentScan = async (
+    message: MessageThreadItem,
+    attachment: MessageAttachment,
+  ) => {
     if (!selectedId || scanRetryBusy) return;
     setScanRetryBusy(attachment.id);
     setError("");
     setNotice("");
     try {
-      const result = await request<{ scanStatus: string; message?: string }>(
+      const result = await request<MessageScanRetryResponse>(
         `/api/conversations/${encodeURIComponent(selectedId)}/attachments/${encodeURIComponent(attachment.id)}/scan-retry`,
         { method: "POST", body: "{}" },
       );
@@ -350,7 +348,6 @@ export function Messages({
                   : conversation.directRecipient?.id !== currentUserId
                     ? conversation.directRecipient?.name
                     : (conversation.seller?.store?.name ??
-                      conversation.seller?.name ??
                       "Marketplace member");
               const preview =
                 conversation.messages?.[0]?.body ||

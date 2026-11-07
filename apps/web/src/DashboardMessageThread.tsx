@@ -1,36 +1,31 @@
 import React from "react";
 import { MessageVideoPreview } from "./MessageVideoPreview.js";
-
-type MessageFileDraft = {
-  key: string;
-  file: File;
-  previewUrl: string;
-  attachmentId?: string;
-  assetId?: string;
-  scanStatus?: string;
-};
-
-type ReactionOption = {
-  kind: "LIKE" | "LOVE" | "HAPPY";
-  emoji: string;
-  label: string;
-};
+import type {
+  MessageAttachment,
+  MessageConversationSummary,
+  MessageFileDraft,
+  MessageReactionOption,
+  MessageThreadItem,
+} from "./dashboard-message-types.js";
 
 type MessageThreadProps = {
-  activeConversation: any;
+  activeConversation: MessageConversationSummary | undefined;
   currentUserId: string;
   loading: boolean;
-  thread: any[];
+  thread: MessageThreadItem[];
   drafts: MessageFileDraft[];
   scanRetryBusy: string;
   reactionBusy: string;
   busy: boolean;
   body: string;
   mediaAccept: string;
-  reactionOptions: readonly ReactionOption[];
+  reactionOptions: readonly MessageReactionOption[];
   setBody: React.Dispatch<React.SetStateAction<string>>;
-  onRetryAttachmentScan: (message: any, attachment: any) => void;
-  onReact: (message: any, kind: ReactionOption["kind"]) => void;
+  onRetryAttachmentScan: (
+    message: MessageThreadItem,
+    attachment: MessageAttachment,
+  ) => void;
+  onReact: (message: MessageThreadItem, kind: MessageReactionOption["kind"]) => void;
   onRemoveDraft: (draft: MessageFileDraft) => void;
   onSendMessage: (event: React.FormEvent<HTMLFormElement>) => void;
   onAddFiles: (files: File[]) => void;
@@ -113,7 +108,7 @@ export function DashboardMessageThread({
             {message.body && <p>{message.body}</p>}
             {!!message.attachments?.length && (
               <div className="messageAttachments">
-                {message.attachments.map((attachment: any) => (
+                {message.attachments.map((attachment) => (
                   <div className="messageAttachment" key={attachment.id}>
                     {attachment.scanStatus === "APPROVED" && attachment.url ? (
                       attachment.kind === "IMAGE" ? (
