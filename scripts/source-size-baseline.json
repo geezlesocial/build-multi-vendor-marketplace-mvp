@@ -7,7 +7,6 @@
     "apps/api/src/payment-webhook-reconciliation.ts": 523,
     "apps/api/src/platform-routes.ts": 580,
     "apps/api/src/store-growth-routes.ts": 840,
-    "apps/api/src/store-theme-domain.ts": 556,
     "apps/api/src/store-theme-routes.ts": 562,
     "apps/api/src/wallet-funding.ts": 839,
     "apps/api/src/wallet-routes.ts": 677,

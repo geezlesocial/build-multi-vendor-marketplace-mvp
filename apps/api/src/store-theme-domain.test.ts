@@ -11,6 +11,8 @@ import {
   themePreviewAssetMatchesPreset,
   themeCatalogConfigSchema,
 } from "./store-theme-domain.js";
+import * as themeCatalog from "./store-theme-catalog.js";
+import * as themeDomain from "./store-theme-domain.js";
 
 const now = new Date("2026-11-01T00:00:00.000Z");
 const activeSubscription = {
@@ -135,6 +137,38 @@ describe("storefront theme entitlement policy", () => {
     expect(ALL_THEME_PRESETS).toContain(StoreThemePreset.TECH_ELECTRONICS);
     expect(ALL_THEME_PRESETS).toContain(StoreThemePreset.GROCERIES);
     expect(ALL_THEME_PRESETS).toContain(StoreThemePreset.ECOMMERCE_MARKETPLACE);
+  });
+
+  it("preserves the legacy domain exports and applies configured display order", () => {
+    expect(themeDomain.ALL_THEME_PRESETS).toBe(themeCatalog.ALL_THEME_PRESETS);
+    expect(themeDomain.DEFAULT_THEME_PREVIEW_IMAGES).toBe(
+      themeCatalog.DEFAULT_THEME_PREVIEW_IMAGES,
+    );
+    expect(themeDomain.FREE_THEME_PRESETS).toBe(themeCatalog.FREE_THEME_PRESETS);
+    expect(themeDomain.PAID_THEME_PRESETS).toBe(themeCatalog.PAID_THEME_PRESETS);
+    expect(themeDomain.STORE_THEME_CATALOG).toBe(themeCatalog.STORE_THEME_CATALOG);
+    expect(themeDomain.contrastRatio).toBe(themeCatalog.contrastRatio);
+    expect(themeDomain.defaultThemeCatalogConfig).toBe(
+      themeCatalog.defaultThemeCatalogConfig,
+    );
+    expect(themeDomain.storeThemeCatalog).toBe(themeCatalog.storeThemeCatalog);
+    expect(themeDomain.themeCatalogConfigSchema).toBe(
+      themeCatalog.themeCatalogConfigSchema,
+    );
+    expect(themeDomain.themePreviewAssetMatchesPreset).toBe(
+      themeCatalog.themePreviewAssetMatchesPreset,
+    );
+
+    expect(
+      storeThemeCatalog(defaultThemeCatalogConfig).map((theme) => theme.id),
+    ).toEqual(ALL_THEME_PRESETS);
+    const reverseOrder = [...ALL_THEME_PRESETS].reverse();
+    expect(
+      storeThemeCatalog({
+        ...defaultThemeCatalogConfig,
+        displayOrder: reverseOrder,
+      }).map((theme) => theme.id),
+    ).toEqual(reverseOrder);
   });
 
   it("accepts a complete, accessible six-theme catalog config and keeps all implementations present", () => {
