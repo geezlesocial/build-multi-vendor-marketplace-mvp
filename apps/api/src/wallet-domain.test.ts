@@ -16,6 +16,34 @@ describe('wallet and Club Coins safety rules', () => {
     expect(() => assertBalancedPostings([{ direction: 'OTHER' as never, amountMinor: 100, currency: 'USD' }, { direction: 'DEBIT', amountMinor: 100, currency: 'USD' }])).toThrow('direction');
   });
 
+  it.each([
+    ['negative', -1],
+    ['unsafe', Number.MAX_SAFE_INTEGER + 1]
+  ])('rejects %s ledger posting amounts', (_label, amountMinor) => {
+    expect(() => assertBalancedPostings([
+      { direction: 'DEBIT', amountMinor, currency: 'USD' },
+      { direction: 'CREDIT', amountMinor, currency: 'USD' }
+    ])).toThrow('positive integer minor units');
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['above the supported maximum', 2_000_000_001],
+    ['unsafe', Number.MAX_SAFE_INTEGER + 1]
+  ])('rejects %s wallet transfer amounts', (_label, amountMinor) => {
+    expect(() => assertTransferAllowed({ senderId: 'u1', recipientId: 'u2', amountMinor, currency: 'USD' }, Number.MAX_SAFE_INTEGER, enabledSettings, false)).toThrow();
+  });
+
+  it.each(['usd', 'US', 'USDD'])('rejects malformed transfer currency %s', currency => {
+    expect(() => assertTransferAllowed({ senderId: 'u1', recipientId: 'u2', amountMinor: 100, currency }, 100, enabledSettings, false)).toThrow();
+  });
+
+  it('accepts a transfer at the configured positive minor-unit maximum', () => {
+    expect(() => assertTransferAllowed({ senderId: 'u1', recipientId: 'u2', amountMinor: 2_000_000_000, currency: 'USD' }, 2_000_000_000, enabledSettings, false)).not.toThrow();
+  });
+
   it('keeps all real-money actions disabled behind the hard gate', () => {
     expect(isWalletActionEnabled('walletTransfersEnabled', enabledSettings, true)).toBe(false);
     expect(isWalletActionEnabled('walletTransfersEnabled', { ...enabledSettings, walletEmergencyPause: true }, false)).toBe(false);
