@@ -106,6 +106,7 @@ test("buyer order history renders typed seller and shipment details", async ({
     .locator(".buyerOrderCard")
     .filter({ hasText: orderNumber });
   await expect(order).toBeVisible();
+  await order.locator("summary").click();
   await expect(order).toContainText("Confirmed");
   await expect(order).toContainText("PAYPAL");
   await expect(order).toContainText("Payment status: Pending");
