@@ -1,6 +1,8 @@
 import { formatMinor } from "./money.js";
 import { DashboardHomeAction } from "./WorkspaceNavigation.js";
 
+export type { BuyerData } from "./buyer-dashboard-types.js";
+
 export type User = {
   id: string;
   email: string;
@@ -19,16 +21,6 @@ export type Access = {
     reason?: string | null;
     store?: { name: string; slug: string } | null;
   } | null;
-};
-
-export type BuyerData = {
-  orders: any[];
-  cart: { items: any[] };
-  favorites: any[];
-  conversations: any[];
-  notifications: any[];
-  addresses: any[];
-  affiliate: any | null;
 };
 
 export type SellerData = {
@@ -114,7 +106,10 @@ export function Tabs({
           ))}
         </select>
       </label>
-      <nav className="dashboardTabs dashboardNav" aria-label="Dashboard sections">
+      <nav
+        className="dashboardTabs dashboardNav"
+        aria-label="Dashboard sections"
+      >
         {groups.map((group) => (
           <div
             className="dashboardNavGroup"

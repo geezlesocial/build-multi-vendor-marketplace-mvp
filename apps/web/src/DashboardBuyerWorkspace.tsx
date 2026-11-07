@@ -7,6 +7,7 @@ import { SupportDesk } from "./SupportDesk.js";
 import { announceHeaderActivityChange } from "./header-activity-events.js";
 import { OrderList } from "./BuyerOrderList.js";
 import { Messages } from "./DashboardMessages.js";
+import type { BuyerNotification } from "./buyer-dashboard-types.js";
 import {
   DashboardMetrics,
   Tabs,
@@ -81,86 +82,89 @@ export function BuyerDashboard({
         setActive={setTab}
       />
       <div className="dashboardWorkspaceContent">
-      {cartSyncError && (
-        <p className="notice" role="alert">
-          Cart summary refresh failed; showing the last saved count.{" "}
-          {cartSyncError}{" "}
-          <button
-            type="button"
-            onClick={() =>
-              window.dispatchEvent(new Event("marketplace:cart-changed"))
-            }
-          >
-            Retry cart summary
-          </button>
-        </p>
-      )}
-      {tab === "live" && <LiveShopping />}
-      {tab === "overview" && (
-        <>
-          <DashboardMetrics
-            label="Buyer account summary"
-            items={[
-              {
-                label: "Recent orders",
-                value: data.orders.length,
-                detail: "Track purchases and delivery",
-                href: "/dashboard?tab=orders",
-                action: "View orders",
-              },
-              {
-                label: "Items in cart",
-                value: cartCount,
-                detail: "Continue when you are ready",
-                href: "/dashboard?tab=cart",
-                action: "Review cart",
-              },
-              {
-                label: "Favorites",
-                value: data.favorites.length,
-                detail: "Products you saved",
-                href: "/dashboard?tab=favorites",
-                action: "View favorites",
-              },
-            ]}
-          />
-          <OrderList
-            orders={data.orders.slice(0, 5)}
+        {cartSyncError && (
+          <p className="notice" role="alert">
+            Cart summary refresh failed; showing the last saved count.{" "}
+            {cartSyncError}{" "}
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(new Event("marketplace:cart-changed"))
+              }
+            >
+              Retry cart summary
+            </button>
+          </p>
+        )}
+        {tab === "live" && <LiveShopping />}
+        {tab === "overview" && (
+          <>
+            <DashboardMetrics
+              label="Buyer account summary"
+              items={[
+                {
+                  label: "Recent orders",
+                  value: data.orders.length,
+                  detail: "Track purchases and delivery",
+                  href: "/dashboard?tab=orders",
+                  action: "View orders",
+                },
+                {
+                  label: "Items in cart",
+                  value: cartCount,
+                  detail: "Continue when you are ready",
+                  href: "/dashboard?tab=cart",
+                  action: "Review cart",
+                },
+                {
+                  label: "Favorites",
+                  value: data.favorites.length,
+                  detail: "Products you saved",
+                  href: "/dashboard?tab=favorites",
+                  action: "View favorites",
+                },
+              ]}
+            />
+            <OrderList
+              orders={data.orders.slice(0, 5)}
+              reload={reload}
+              compact
+              onViewAll={() => setTab("orders")}
+            />
+          </>
+        )}
+        {tab === "orders" && <OrderList orders={data.orders} reload={reload} />}
+        {tab === "cart" && <BuyerCart data={data} />}
+        {tab === "favorites" && <Favorites data={data} reload={reload} />}
+        {tab === "messages" && (
+          <>
+            <Messages
+              conversations={data.conversations}
+              reload={reload}
+              currentUserId={user.id}
+            />
+            <SupportDesk mode="buyer" orders={data.orders} />
+          </>
+        )}
+        {tab === "notifications" && (
+          <NotificationList
+            notifications={data.notifications}
             reload={reload}
-            compact
-            onViewAll={() => setTab("orders")}
           />
-        </>
-      )}
-      {tab === "orders" && <OrderList orders={data.orders} reload={reload} />}
-      {tab === "cart" && <BuyerCart data={data} />}
-      {tab === "favorites" && <Favorites data={data} reload={reload} />}
-      {tab === "messages" && (
-        <>
-          <Messages
-            conversations={data.conversations}
-            reload={reload}
-            currentUserId={user.id}
-          />
-          <SupportDesk mode="buyer" orders={data.orders} />
-        </>
-      )}
-      {tab === "notifications" && (
-        <NotificationList notifications={data.notifications} reload={reload} />
-      )}
-      {tab === "profile" && (
-        <Profile user={user} onUserUpdated={onUserUpdated} reload={reload} />
-      )}
-      {tab === "addresses" && <Addresses data={data} reload={reload} />}
-      {tab === "affiliate" && data.affiliate && (
-        <section className="setting">
-          <div>
-            <h2>Affiliate area</h2>
-            <p>Approved affiliate profile: {data.affiliate.referralCode}</p>
-          </div>
-          <a href="/affiliate">Open affiliate dashboard</a>
-        </section>
-      )}
+        )}
+        {tab === "profile" && (
+          <Profile user={user} onUserUpdated={onUserUpdated} reload={reload} />
+        )}
+        {tab === "addresses" && <Addresses data={data} reload={reload} />}
+        {tab === "affiliate" && data.affiliate && (
+          <section className="setting">
+            <div>
+              <h2>Affiliate area</h2>
+              <p>Approved affiliate profile: {data.affiliate.referralCode}</p>
+            </div>
+            <a href="/affiliate">Open affiliate dashboard</a>
+          </section>
+        )}
       </div>
     </div>
   );
@@ -170,7 +174,7 @@ function NotificationList({
   notifications,
   reload,
 }: {
-  notifications: any[];
+  notifications: BuyerNotification[];
   reload: () => void;
 }) {
   return (
@@ -233,7 +237,8 @@ function BuyerCart({ data }: { data: BuyerData }) {
           {data.cart.items.map((item) => (
             <div className="row" key={item.id}>
               <span>
-                {item.product.name}{item.variant ? ` — ${item.variant.name}` : ""} ·{" "}
+                {item.product.name}
+                {item.variant ? ` — ${item.variant.name}` : ""} ·{" "}
                 {money(
                   item.variant?.priceMinor ??
                     item.product.salePriceMinor ??
@@ -245,25 +250,19 @@ function BuyerCart({ data }: { data: BuyerData }) {
                 <button
                   aria-label={`Decrease ${item.product.name}`}
                   disabled={item.quantity <= 1}
-                  onClick={() =>
-                    void update(item.id, item.quantity - 1)
-                  }
+                  onClick={() => void update(item.id, item.quantity - 1)}
                 >
                   −
                 </button>{" "}
                 {item.quantity}{" "}
                 <button
                   aria-label={`Increase ${item.product.name}`}
-                  onClick={() =>
-                    void update(item.id, item.quantity + 1)
-                  }
+                  onClick={() => void update(item.id, item.quantity + 1)}
                 >
                   +
                 </button>
               </span>
-              <button onClick={() => void update(item.id, 0)}>
-                Remove
-              </button>
+              <button onClick={() => void update(item.id, 0)}>Remove</button>
             </div>
           ))}
         </div>

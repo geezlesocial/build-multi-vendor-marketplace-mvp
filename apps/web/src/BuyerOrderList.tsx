@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { BuyerOrder } from "./buyer-dashboard-types.js";
 import { OrderResolutionPanel } from "./OrderResolutionPanel.js";
 import { money, request } from "./DashboardShared.js";
 
@@ -8,7 +9,7 @@ export function OrderList({
   compact = false,
   onViewAll,
 }: {
-  orders: any[];
+  orders: BuyerOrder[];
   reload: () => void;
   compact?: boolean;
   onViewAll?: () => void;
@@ -59,7 +60,9 @@ export function OrderList({
     <section className={`buyerOrders${compact ? " buyerOrders--compact" : ""}`}>
       <header className="ordersSectionHeading">
         <div>
-          <p className="eyebrow">{compact ? "Your purchases" : "Order tracking"}</p>
+          <p className="eyebrow">
+            {compact ? "Your purchases" : "Order tracking"}
+          </p>
           <h2>{compact ? "Recent orders" : "Orders and delivery"}</h2>
           <p className="muted">
             {compact
@@ -124,7 +127,7 @@ export function OrderList({
                     {readableStatus(order.payment?.status ?? "PENDING")}
                   </strong>
                 </p>
-                {order.sellerOrders?.map((sellerOrder: any) => (
+                {order.sellerOrders?.map((sellerOrder) => (
                   <article className="buyerShipmentCard" key={sellerOrder.id}>
                     <header>
                       <div>
@@ -174,7 +177,7 @@ export function OrderList({
                       >
                         {[...sellerOrder.shipmentUpdates]
                           .reverse()
-                          .map((update: any) => (
+                          .map((update) => (
                             <li key={update.id}>
                               <span
                                 className="shipmentTimelineDot"
@@ -239,7 +242,7 @@ export function OrderList({
                         ledger.
                       </p>
                     )}
-                    {sellerOrder.items?.map((item: any) => (
+                    {sellerOrder.items?.map((item) => (
                       <p className="buyerOrderItem" key={item.id}>
                         {item.quantity} × {item.productName} ·{" "}
                         {money(
