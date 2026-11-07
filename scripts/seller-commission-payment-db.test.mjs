@@ -1,43 +1,56 @@
-import assert from 'node:assert/strict';
-import { once } from 'node:events';
-import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import test from 'node:test';
-import Stripe from 'stripe';
-import { validateE2EDatabaseURL } from './e2e-database-url.mjs';
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { validateE2EDatabaseURL } from "./e2e-database-url.mjs";
+import { createSellerCommissionPaymentHelpers } from "./seller-commission-payment-db-helpers.mjs";
 
 const databaseUrl = process.env.WALLET_FUNDING_TEST_DATABASE_URL;
-if (!databaseUrl) throw new Error('WALLET_FUNDING_TEST_DATABASE_URL is required for the guarded disposable commission regression.');
+if (!databaseUrl)
+  throw new Error(
+    "WALLET_FUNDING_TEST_DATABASE_URL is required for the guarded disposable commission regression.",
+  );
 const { databaseName } = validateE2EDatabaseURL(databaseUrl);
-const sandboxId = process.env.WALLET_FUNDING_SANDBOX_ID ?? '';
+const sandboxId = process.env.WALLET_FUNDING_SANDBOX_ID ?? "";
 const identity = /^wallet_funding_e2e_([a-f0-9]{32})$/.exec(databaseName)?.[1];
 if (!identity || identity !== sandboxId) {
-  throw new Error('Commission regression requires a wallet_funding_e2e_<id> database matching WALLET_FUNDING_SANDBOX_ID.');
+  throw new Error(
+    "Commission regression requires a wallet_funding_e2e_<id> database matching WALLET_FUNDING_SANDBOX_ID.",
+  );
 }
-const isolatedDotenvPath = path.join(os.tmpdir(), `marketplace-no-dotenv-${sandboxId}`);
-if (existsSync(isolatedDotenvPath)) throw new Error('The isolated dotenv path unexpectedly exists; refusing to load environment files.');
+const isolatedDotenvPath = path.join(
+  os.tmpdir(),
+  `marketplace-no-dotenv-${sandboxId}`,
+);
+if (existsSync(isolatedDotenvPath))
+  throw new Error(
+    "The isolated dotenv path unexpectedly exists; refusing to load environment files.",
+  );
 process.env.DOTENV_CONFIG_PATH = isolatedDotenvPath;
 
-const webhookSecret = 'whsec_synthetic_seller_commission_test_only';
+const webhookSecret = "whsec_synthetic_seller_commission_test_only";
 process.env.DATABASE_URL = databaseUrl;
 process.env.E2E_DATABASE_URL = databaseUrl;
-process.env.NODE_ENV = 'test';
-process.env.SESSION_COOKIE_NAME = 'marketplace_session';
-process.env.PASSWORD_PEPPER = 'synthetic-commission-test-pepper';
-process.env.CURRENCY = 'USD';
-process.env.STRIPE_SECRET_KEY = 'sk_test_synthetic_seller_commission_no_network';
+process.env.NODE_ENV = "test";
+process.env.SESSION_COOKIE_NAME = "marketplace_session";
+process.env.PASSWORD_PEPPER = "synthetic-commission-test-pepper";
+process.env.CURRENCY = "USD";
+process.env.STRIPE_SECRET_KEY =
+  "sk_test_synthetic_seller_commission_no_network";
 process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
-process.env.PAYPAL_CLIENT_ID = '';
-process.env.PAYPAL_CLIENT_SECRET = '';
-process.env.PAYPAL_WEBHOOK_ID = '';
-process.env.MONEY_MOVEMENT_HARD_DISABLED = 'true';
-process.env.WALLET_FUNDING_SANDBOX_MODE = 'false';
-process.env.WALLET_FUNDING_PROVIDER_READY = 'false';
-process.env.CLUB_COINS_HARD_DISABLED = 'true';
-process.env.LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE = 'false';
+process.env.PAYPAL_CLIENT_ID = "";
+process.env.PAYPAL_CLIENT_SECRET = "";
+process.env.PAYPAL_WEBHOOK_ID = "";
+process.env.MONEY_MOVEMENT_HARD_DISABLED = "true";
+process.env.WALLET_FUNDING_SANDBOX_MODE = "false";
+process.env.WALLET_FUNDING_PROVIDER_READY = "false";
+process.env.CLUB_COINS_HARD_DISABLED = "true";
+process.env.LIVE_PROVIDER_CONFIGURATIONS_AVAILABLE = "false";
 
+// prettier-ignore
 test('synthetic provider captures and refunds reconcile seller commissions once with durable ledger invariants', async () => {
   const [{ prisma, tokenHash }, { app }, { allocatePartialRefund }, { reconcileVerifiedPaymentEvent }, { paypalWebhookEventToVerifiedPaymentEvent }, safety] = await Promise.all([
     import('../apps/api/src/security.ts'),
@@ -55,261 +68,59 @@ test('synthetic provider captures and refunds reconcile seller commissions once 
   assert.ok(address && typeof address !== 'string');
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const suffix = randomUUID().replaceAll('-', '');
-  const createdOrderIds = [];
 
   try {
-    const admin = await prisma.user.create({ data: { email: `commission-admin-${suffix}@example.test`, name: 'Synthetic Commission Admin', role: 'ADMIN', passwordHash: 'synthetic-only' } });
+    const admin = await prisma.user.create({ data: { email: `commission-admin-${suffix}@example.test`, name: 'Synthetic Commission Admin', role: 'ADMIN', passwordHash: 'synthetic-only', onboardingCompletedAt: new Date() } });
     const sessionToken = randomUUID().replaceAll('-', '');
     const csrfToken = randomUUID().replaceAll('-', '');
     await prisma.session.create({ data: { userId: admin.id, tokenHash: tokenHash(sessionToken), expiresAt: new Date(Date.now() + 60_000) } });
-    const sellerUser = await prisma.user.create({ data: { email: `commission-seller-${suffix}@example.test`, name: 'Synthetic Commission Seller', role: 'SELLER', passwordHash: 'synthetic-only' } });
+    const sellerUser = await prisma.user.create({ data: { email: `commission-seller-${suffix}@example.test`, name: 'Synthetic Commission Seller', role: 'SELLER', passwordHash: 'synthetic-only', onboardingCompletedAt: new Date() } });
     const seller = await prisma.seller.create({ data: { userId: sellerUser.id, status: 'APPROVED' } });
     const sellerSessionToken = randomUUID().replaceAll('-', '');
     const sellerCsrfToken = randomUUID().replaceAll('-', '');
     await prisma.session.create({ data: { userId: sellerUser.id, tokenHash: tokenHash(sellerSessionToken), expiresAt: new Date(Date.now() + 60_000) } });
     const store = await prisma.store.create({ data: { sellerId: seller.id, name: `Synthetic Commission Store ${suffix}`, slug: `synthetic-commission-${suffix}` } });
-    const product = await prisma.product.create({ data: { sellerId: seller.id, name: 'Synthetic Commission Product', slug: `synthetic-commission-product-${suffix}`, description: 'Database-only commission regression fixture', priceMinor: 10_000, currency: 'USD', status: 'APPROVED' } });
+    const physicalProductType = await prisma.catalogProductType.findUniqueOrThrow({ where: { slug: 'physical-product' } });
+    const product = await prisma.product.create({ data: { sellerId: seller.id, productTypeId: physicalProductType.id, name: 'Synthetic Commission Product', slug: `synthetic-commission-product-${suffix}`, description: 'Database-only commission regression fixture', priceMinor: 10_000, currency: 'USD', status: 'APPROVED' } });
     const policy = await prisma.sellerCommissionPolicyVersion.create({ data: {
       version: 1, status: 'ACTIVE', storeId: store.id, type: 'PERCENTAGE', currency: 'USD', basisPoints: 1_000,
       reason: 'Synthetic database regression policy', createdById: admin.id, effectiveFrom: new Date(Date.now() - 60_000)
     } });
+    await prisma.sellerCommissionPolicyVersion.create({ data: {
+      version: 1, status: 'ACTIVE', freeStoreScopeKey: 'FREE_STORES', type: 'PERCENTAGE', currency: 'USD', basisPoints: 1_000,
+      reason: 'Synthetic POS database regression policy', createdById: admin.id, effectiveFrom: new Date(Date.now() - 60_000)
+    } });
     await prisma.marketplaceSettings.upsert({ where: { id: 'default' }, update: { affiliateEnabled: true }, create: { id: 'default', affiliateEnabled: true } });
-    const affiliateUser = await prisma.user.create({ data: { email: `commission-affiliate-${suffix}@example.test`, name: 'Synthetic Commission Affiliate', role: 'BUYER', passwordHash: 'synthetic-only' } });
+    const affiliateUser = await prisma.user.create({ data: { email: `commission-affiliate-${suffix}@example.test`, name: 'Synthetic Commission Affiliate', role: 'BUYER', passwordHash: 'synthetic-only', onboardingCompletedAt: new Date() } });
     const affiliate = await prisma.affiliateProfile.create({ data: { userId: affiliateUser.id, status: 'APPROVED', referralCode: `affiliate-${suffix}`, termsAcceptedAt: new Date() } });
     const affiliateLink = await prisma.affiliateLink.create({ data: { affiliateId: affiliate.id, targetPath: '/', code: `affiliate-link-${suffix}` } });
 
-    async function createOrder(label, { zeroCommission = false, knownPaymentIntentReference = false, unassociatedPaymentReference = false, affiliateClickId, method = 'STRIPE' } = {}) {
-      const sessionId = `cs_synthetic_${label}_${suffix}`;
-      const paymentIntentId = `pi_synthetic_${label}_${suffix}`;
-      const paypalOrderId = `paypal_synthetic_${label}_${suffix}`;
-      const commissionSnapshotJson = zeroCommission
-        ? { version: 1, policyVersionId: null, source: 'DEFAULT_ZERO', type: 'ZERO', fixedMinor: null, basisPoints: null, minimumMinor: null, capMinor: null, currency: 'USD', capturedAt: new Date().toISOString(), reason: 'No active policy; zero commission applies.' }
-        : { version: 1, policyVersionId: policy.id, policyVersion: 1, source: 'STORE', type: 'PERCENTAGE', fixedMinor: null, basisPoints: 1_000, minimumMinor: null, capMinor: null, currency: 'USD', capturedAt: new Date().toISOString(), reason: policy.reason };
-      const order = await prisma.parentOrder.create({ data: {
-        orderNumber: `MV-${suffix.slice(0, 12)}-${label}`,
-        buyerEmail: 'synthetic-buyer@example.test', buyerName: 'Synthetic Buyer', addressJson: { country: 'US' },
-        totalMinor: 10_000, currency: 'USD', affiliateClickId,
-        sellerOrders: { create: {
-          sellerId: seller.id, totalMinor: 10_000, status: 'PENDING', commissionPolicyVersionId: zeroCommission ? null : policy.id,
-          commissionSnapshotJson,
-          items: { create: { productId: product.id, productName: product.name, unitPriceMinor: 10_000, quantity: 1, currencySnapshot: 'USD' } }
-        } },
-        payment: { create: { method, status: 'PENDING', providerRef: method === 'PAYPAL' ? paypalOrderId : unassociatedPaymentReference ? `unassociated_${label}_${suffix}` : knownPaymentIntentReference ? paymentIntentId : sessionId } }
-      }, include: { sellerOrders: { include: { items: true } } } });
-      createdOrderIds.push(order.id);
-      return { order, sessionId, paymentIntentId, paypalOrderId };
-    }
-
-    async function createAffiliateOrder(label, options = {}) {
-      const click = await prisma.affiliateClick.create({ data: {
-        affiliateId: affiliate.id, linkId: affiliateLink.id, tokenHash: `affiliate-token-${label}-${suffix}`,
-        expiresAt: new Date(Date.now() + 60 * 60_000), consentGivenAt: new Date()
-      } });
-      return { ...(await createOrder(label, { ...options, affiliateClickId: click.id })), click };
-    }
-
-    async function deliverStripeEvent(event) {
-      const payload = JSON.stringify(event);
-      const signature = Stripe.webhooks.generateTestHeaderString({ payload, secret: webhookSecret });
-      const response = await fetch(`${baseUrl}/api/webhooks/stripe`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': signature }, body: payload
-      });
-      return { status: response.status, body: await response.text() };
-    }
-
-    async function sendStripeEvent(event) {
-      const response = await deliverStripeEvent(event);
-      assert.ok([200, 202].includes(response.status), `Synthetic Stripe webhook returned ${response.status}: ${response.body}`);
-      const body = JSON.parse(response.body);
-      assert.equal(body.received, true);
-      assert.equal(body.reconciliation, response.status === 202 ? 'REVIEW_REQUIRED' : 'COMPLETE');
-      return { status: response.status, body };
-    }
-
-    async function resolveRefund(review, orderItemId, refundMinor) {
-      const response = await fetch(`${baseUrl}/api/admin/seller-commission-reviews/${review.id}/resolve`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          cookie: `marketplace_session=${sessionToken}; marketplace_csrf=${csrfToken}`,
-          'x-csrf-token': csrfToken
-        },
-        body: JSON.stringify({ allocations: [{ orderItemId, refundMinor }], reason: 'Synthetic verified refund allocation' })
-      });
-      return { status: response.status, body: await response.json() };
-    }
-
-    async function retryWebhookReview(eventId, reason = 'Retry verified synthetic event') {
-      const response = await fetch(`${baseUrl}/api/admin/seller-commission-webhook-events/${eventId}/retry`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          cookie: `marketplace_session=${sessionToken}; marketplace_csrf=${csrfToken}`,
-          'x-csrf-token': csrfToken
-        },
-        body: JSON.stringify({ reason })
-      });
-      return { status: response.status, body: await response.json() };
-    }
-
-    async function cancelSellerOrder(sellerOrderId) {
-      const response = await fetch(`${baseUrl}/api/sellers/${seller.id}/orders/${sellerOrderId}/status`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          cookie: `marketplace_session=${sellerSessionToken}; marketplace_csrf=${sellerCsrfToken}`,
-          'x-csrf-token': sellerCsrfToken
-        },
-        body: JSON.stringify({ status: 'CANCELLED' })
-      });
-      return { status: response.status, body: await response.json() };
-    }
-
-    async function waitForParentOrderLockWaiters(expected, label) {
-      let observed = 0;
-      const deadline = Date.now() + 15_000;
-      while (Date.now() < deadline) {
-        const rows = await prisma.$queryRaw`SELECT count(*)::int AS count
-          FROM pg_stat_activity
-          WHERE datname = current_database()
-            AND wait_event_type = 'Lock'
-            AND query ILIKE '%FROM "ParentOrder"%'
-            AND query ILIKE '%FOR UPDATE%'`;
-        observed = rows[0]?.count ?? 0;
-        if (observed >= expected) return observed;
-        await new Promise(resolve => setTimeout(resolve, 20));
-      }
-      assert.fail(`${label}: expected ${expected} independent transaction(s) waiting on the parent-order lock, observed ${observed}`);
-    }
-
-    async function collectCodAs(orderId, token, csrfTokenValue) {
-      const response = await fetch(`${baseUrl}/api/orders/${orderId}/cod-collect`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          cookie: `marketplace_session=${token}; marketplace_csrf=${csrfTokenValue}`,
-          'x-csrf-token': csrfTokenValue
-        },
-        body: '{}'
-      });
-      return { status: response.status, body: await response.json() };
-    }
-
-    async function collectCod(orderId) {
-      return collectCodAs(orderId, sessionToken, csrfToken);
-    }
-
-    async function createPosSaleRequest(body) {
-      const response = await fetch(`${baseUrl}/api/pos/sales`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          cookie: `marketplace_session=${sellerSessionToken}; marketplace_csrf=${sellerCsrfToken}`,
-          'x-csrf-token': sellerCsrfToken
-        },
-        body: JSON.stringify(body)
-      });
-      const responseBody = await response.json();
-      return { status: response.status, body: responseBody };
-    }
-
-    function checkoutEvent(eventId, type, fixture, paymentStatus = 'paid', created = Math.floor(Date.now() / 1_000)) {
-      return {
-        id: eventId, object: 'event', type, created, livemode: false,
-        data: { object: {
-          id: fixture.sessionId, object: 'checkout.session', amount_total: 10_000, currency: 'usd', payment_status: paymentStatus,
-          payment_intent: fixture.paymentIntentId, metadata: { orderId: fixture.order.id }
-        } }
-      };
-    }
-
-    function refundEvent(eventId, fixture, cumulativeRefundMinor, created = Math.floor(Date.now() / 1_000)) {
-      return {
-        id: eventId, object: 'event', type: 'charge.refunded', created, livemode: false,
-        data: { object: {
-          id: `ch_synthetic_${fixture.order.id}`, object: 'charge', amount: 10_000, amount_refunded: cumulativeRefundMinor,
-          currency: 'usd', payment_intent: fixture.paymentIntentId
-        } }
-      };
-    }
-
-    function disputeEvent(eventId, fixture, amountMinor, created = Math.floor(Date.now() / 1_000)) {
-      return {
-        id: eventId, object: 'event', type: 'charge.dispute.created', created, livemode: false,
-        data: { object: {
-          id: `dp_synthetic_${fixture.order.id}`, object: 'dispute', amount: amountMinor,
-          currency: 'usd', payment_intent: fixture.paymentIntentId, metadata: {}
-        } }
-      };
-    }
-
-    async function sendVerifiedPaypal(event) {
-      return prisma.$transaction(tx => reconcileVerifiedPaymentEvent(tx, event), { isolationLevel: 'ReadCommitted' });
-    }
-
-    async function sendPaypalPayload(payload) {
-      const event = await paypalWebhookEventToVerifiedPaymentEvent(payload, async currency => {
-        const entry = await prisma.currencyCatalogEntry.findUnique({ where: { code: currency }, select: { minorUnitExponent: true } });
-        return entry?.minorUnitExponent ?? null;
-      });
-      return { event, result: await sendVerifiedPaypal(event) };
-    }
-
-    function paypalOrderCompletedPayload(eventId, fixture, { captureId = `cap_synthetic_${fixture.order.id}`, captureStatus = 'COMPLETED', orderStatus = 'COMPLETED', amount = '100.00', currency = 'USD', customId = fixture.order.id, referenceId = fixture.order.id, captures = undefined } = {}) {
-      return {
-        id: eventId, event_type: 'CHECKOUT.ORDER.COMPLETED', create_time: new Date().toISOString(),
-        resource: {
-          id: fixture.paypalOrderId, status: orderStatus,
-          purchase_units: [{ custom_id: customId, reference_id: referenceId, payments: { captures: captures ?? [{ id: captureId, status: captureStatus, amount: { currency_code: currency, value: amount } }] } }]
-        }
-      };
-    }
-
-    function paypalCaptureCompletedPayload(eventId, fixture, { captureId = `cap_synthetic_${fixture.order.id}`, status = 'COMPLETED', amount = '100.00', currency = 'USD' } = {}) {
-      return {
-        id: eventId, event_type: 'PAYMENT.CAPTURE.COMPLETED', create_time: new Date().toISOString(),
-        resource: {
-          id: captureId, status, amount: { currency_code: currency, value: amount },
-          supplementary_data: { related_ids: { order_id: fixture.paypalOrderId } }
-        }
-      };
-    }
-
-    async function installAffiliateLedgerFailure() {
-      const functionName = `test_affiliate_failure_${suffix}`;
-      const triggerName = `${functionName}_trigger`;
-      await prisma.$executeRawUnsafe(`CREATE FUNCTION "${functionName}"() RETURNS trigger LANGUAGE plpgsql AS $function$
-        BEGIN
-          IF NEW."sourceEventId" LIKE 'evt_affiliate_atomicity_%' OR NEW."sourceEventId" LIKE 'cod-collection:%' THEN
-            RAISE EXCEPTION 'synthetic affiliate ledger failure';
-          END IF;
-          RETURN NEW;
-        END;
-      $function$`);
-      await prisma.$executeRawUnsafe(`CREATE TRIGGER "${triggerName}" BEFORE INSERT ON "CommissionLedger" FOR EACH ROW EXECUTE FUNCTION "${functionName}"()`);
-      return async () => {
-        await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "CommissionLedger"`);
-        await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
-      };
-    }
-
-    async function installPosCommissionFailure() {
-      const functionName = `test_pos_commission_failure_${suffix}`;
-      const triggerName = `${functionName}_trigger`;
-      await prisma.$executeRawUnsafe(`CREATE FUNCTION "${functionName}"() RETURNS trigger LANGUAGE plpgsql AS $function$
-        BEGIN
-          IF NEW."sourceEventId" LIKE 'pos:%' THEN
-            RAISE EXCEPTION 'synthetic POS commission failure';
-          END IF;
-          RETURN NEW;
-        END;
-      $function$`);
-      await prisma.$executeRawUnsafe(`CREATE TRIGGER "${triggerName}" BEFORE INSERT ON "SellerCommissionLedgerEntry" FOR EACH ROW EXECUTE FUNCTION "${functionName}"()`);
-      return async () => {
-        await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "SellerCommissionLedgerEntry"`);
-        await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
-      };
-    }
+    const {
+      createOrder,
+      createAffiliateOrder,
+      deliverStripeEvent,
+      sendStripeEvent,
+      resolveRefund,
+      retryWebhookReview,
+      cancelSellerOrder,
+      waitForParentOrderLockWaiters,
+      collectCodAs,
+      collectCod,
+      createPosSaleRequest,
+      checkoutEvent,
+      refundEvent,
+      disputeEvent,
+      sendVerifiedPaypal,
+      sendPaypalPayload,
+      paypalOrderCompletedPayload,
+      paypalCaptureCompletedPayload,
+      installAffiliateLedgerFailure,
+      installPosCommissionFailure
+    } = createSellerCommissionPaymentHelpers({
+      prisma, webhookSecret, baseUrl, sessionToken, csrfToken, seller, sellerSessionToken, sellerCsrfToken,
+      policy, product, affiliate, affiliateLink, suffix, reconcileVerifiedPaymentEvent,
+      paypalWebhookEventToVerifiedPaymentEvent
+    });
 
     // Rows written by the old marketplace webhook handler contained only the
     // provider and event ID. A verified redelivery may bind one safely from
@@ -391,8 +202,8 @@ test('synthetic provider captures and refunds reconcile seller commissions once 
     const legacyCollectedCod = await createAffiliateOrder('cod-legacy-collected-retry', { method: 'COD' });
     await prisma.payment.update({ where: { parentId: legacyCollectedCod.order.id }, data: { status: 'PAID', paidAt: new Date() } });
     await prisma.parentOrder.update({ where: { id: legacyCollectedCod.order.id }, data: { status: 'CONFIRMED' } });
-    await prisma.sellerOrder.update({ where: { id: legacyCollectedCod.order.sellerOrders[0].id }, data: { status: 'FULFILLED' } });
-    const otherSellerUser = await prisma.user.create({ data: { email: `commission-other-seller-${suffix}@example.test`, name: 'Synthetic Other Seller', role: 'SELLER', passwordHash: 'synthetic-only' } });
+    await prisma.sellerOrder.update({ where: { id: legacyCollectedCod.order.sellerOrders[0].id }, data: { status: 'FULFILLED', shipmentStatus: 'DELIVERED', deliveredAt: new Date() } });
+    const otherSellerUser = await prisma.user.create({ data: { email: `commission-other-seller-${suffix}@example.test`, name: 'Synthetic Other Seller', role: 'SELLER', passwordHash: 'synthetic-only', onboardingCompletedAt: new Date() } });
     const otherSeller = await prisma.seller.create({ data: { userId: otherSellerUser.id, status: 'APPROVED' } });
     const otherSellerToken = randomUUID().replaceAll('-', '');
     const otherSellerCsrf = randomUUID().replaceAll('-', '');
@@ -408,7 +219,7 @@ test('synthetic provider captures and refunds reconcile seller commissions once 
     assert.equal(await prisma.commissionLedger.count({ where: { orderItem: { sellerOrder: { parentId: legacyCollectedCod.order.id } }, entryType: 'EARNED' } }), 1);
 
     const codAffiliate = await createAffiliateOrder('cod-collection-atomicity', { method: 'COD' });
-    await prisma.sellerOrder.update({ where: { id: codAffiliate.order.sellerOrders[0].id }, data: { status: 'FULFILLED' } });
+    await prisma.sellerOrder.update({ where: { id: codAffiliate.order.sellerOrders[0].id }, data: { status: 'FULFILLED', shipmentStatus: 'DELIVERED', deliveredAt: new Date() } });
     const removeCodFailure = await installAffiliateLedgerFailure();
     try {
       const failedCollection = await collectCod(codAffiliate.order.id);
